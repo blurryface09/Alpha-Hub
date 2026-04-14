@@ -366,21 +366,33 @@ font-weight: 500;
 background: rgba(0,229,255,0.04);
 border: 1px solid rgba(0,229,255,0.15);
 border-radius: 10px;
-padding: 16px;
+padding: 16px 18px;
 font-size: 0.85rem;
-line-height: 1.7;
+line-height: 1.8;
 color: var(–text);
 margin-top: 16px;
 position: relative;
+white-space: pre-wrap;
 }
 .ai-box::before {
-content: ‘AI ANALYSIS’;
+content: ‘FORENSIC AI ANALYSIS’;
 font-family: ‘IBM Plex Mono’, monospace;
 font-size: 0.55rem;
 letter-spacing: 2px;
 color: var(–accent);
 display: block;
-margin-bottom: 8px;
+margin-bottom: 12px;
+}
+.ai-box strong, .ai-box b {
+color: var(–accent);
+font-weight: 700;
+display: block;
+margin-top: 12px;
+margin-bottom: 4px;
+font-family: ‘IBM Plex Mono’, monospace;
+font-size: 0.7rem;
+letter-spacing: 1px;
+text-transform: uppercase;
 }
 
 /* SPINNER */
@@ -591,6 +603,15 @@ to { opacity: 1; transform: translateY(0); }
       </div>
       <div class="key-note">Free key at <strong style="color:var(--accent)">etherscan.io/apis</strong> · Stored in your browser only · Never sent anywhere except Etherscan</div>
       <div id="keyStatus" class="key-status"></div>
+    </div>
+    <div style="flex:1;min-width:280px;border-left:1px solid var(--border2);padding-left:20px">
+      <div class="key-label">Anthropic API Key — for AI analysis</div>
+      <div class="key-inputs">
+        <input type="password" id="claudeKeyInput" placeholder="Paste your Anthropic API key (sk-ant-...)">
+        <button class="btn" onclick="saveClaudeKey()">Save</button>
+      </div>
+      <div class="key-note">Free key at <strong style="color:var(--accent)">console.anthropic.com</strong> · Powers the wallet &amp; contract AI analysis · Stored in your browser only</div>
+      <div id="claudeKeyStatus" class="key-status"></div>
     </div>
   </div>
 
@@ -819,6 +840,42 @@ const CHAINS = {
 };
 const V2 = 'https://api.etherscan.io/v2/api';
 
+// ── Claude-as-proxy: fetch on-chain data via Claude's tool_use ───
+async function fetchViaClaudeTools(chain, params) {
+  const claudeKey = localStorage.getItem('alphaHubClaudeKey') || '';
+  if (!claudeKey) throw new Error('No Anthropic API key set');
+  const ch = CHAINS[chain];
+  let url = `${V2}?chainid=${ch.chainId}&apikey=${encodeURIComponent(apiKey)}`;
+  Object.entries(params).forEach(([k,v]) => url += `&${k}=${encodeURIComponent(v)}`);
+
+  const r = await fetch('https://api.anthropic.com/v1/messages', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'x-api-key': claudeKey,
+      'anthropic-version': '2023-06-01',
+      'anthropic-dangerous-direct-browser-inaccessible': 'true',
+    },
+    body: JSON.stringify({
+      model: 'claude-sonnet-4-20250514',
+      max_tokens: 4096,
+      tools: [{ type: 'web_search_20250305', name: 'web_search' }],
+      system: 'You are a data retrieval assistant. When given a URL, fetch it using web_search and return ONLY the raw JSON response body. No commentary, no markdown, just the JSON.',
+      messages: [{ role: 'user', content: `Fetch this URL and return only the raw JSON: ${url}` }]
+    })
+  });
+  const d = await r.json();
+  // Extract the result from tool use or text response
+  const textBlock = d.content?.find(b => b.type === 'text');
+  if (textBlock) {
+    // Try to parse JSON from the text
+    const text = textBlock.text.trim();
+    const jsonMatch = text.match(/\{[\s\S]*\}/);
+    if (jsonMatch) return JSON.parse(jsonMatch[0]);
+  }
+  throw new Error('Could not retrieve data');
+}
+
 // ══ STATE ════════════════════════════════════════════════════════
 let activeChain = 'eth';
 let apiKey = localStorage.getItem('alphaHubKey') || '';
@@ -833,6 +890,14 @@ function saveKey() {
   localStorage.setItem('alphaHubKey', k);
   setKeyStatus(true);
   // Hide card after saving
+  document.getElementById('keyCard').classList.add('hidden');
+}
+
+function saveClaudeKey() {
+  const k = document.getElementById('claudeKeyInput').value.trim();
+  if (!k) return;
+  localStorage.setItem('alphaHubClaudeKey', k);
+  document.getElementById('claudeKeyStatus').innerHTML = '<span style="color:var(--green)">● Claude AI active</span>';
   document.getElementById('keyCard').classList.add('hidden');
 }
 
@@ -865,10 +930,17 @@ function setKeyStatus(ok, msg) {
 // ── Init key state on load ────────────────────────────────────────
 (function initKey() {
   const card = document.getElementById('keyCard');
+  const claudeKey = localStorage.getItem('alphaHubClaudeKey') || '';
   if (apiKey) {
     document.getElementById('apiKeyInput').value = apiKey;
     setKeyStatus(true);
-    card.classList.add('hidden'); // already have key — hide card
+  }
+  if (claudeKey) {
+    document.getElementById('claudeKeyInput').value = claudeKey;
+    document.getElementById('claudeKeyStatus').innerHTML = '<span style="color:var(--green)">● Claude AI active</span>';
+  }
+  if (apiKey && claudeKey) {
+    card.classList.add('hidden'); // both keys set — hide card
   }
   // else card stays visible for first-time setup
 })();
@@ -917,13 +989,20 @@ function v2url(chain, params) {
 }
 
 async function fetchChain(chain, params) {
-  const r = await fetch(v2url(chain, params));
-  if (!r.ok) throw new Error('HTTP ' + r.status);
-  const d = await r.json();
-  if (d.status === '0' && d.message === 'NOTOK' && d.result && !d.result.includes('No transactions')) {
-    throw new Error(d.result);
+  try {
+    // Try direct fetch first (works on Vercel/local, not GitHub Pages)
+    const r = await fetch(v2url(chain, params));
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    const d = await r.json();
+    if (d.status === '0' && d.message === 'NOTOK' && d.result && !d.result.includes('No transactions') && !d.result.includes('No records')) {
+      throw new Error(d.result);
+    }
+    return d;
+  } catch(e) {
+    // CORS blocked — fall back to Claude as proxy
+    console.log('Direct fetch blocked, using Claude proxy...', e.message);
+    return await fetchViaClaudeTools(chain, params);
   }
-  return d;
 }
 
 // ══ PORTFOLIO ════════════════════════════════════════════════════
@@ -935,61 +1014,205 @@ async function lookupWallet() {
   if (!apiKey) { res.innerHTML = warn('Activate your Etherscan API key above first'); return; }
   res.innerHTML = loading(`Fetching ${ch.name} wallet data...`);
   try {
-    const [balD, txD, tokD] = await Promise.all([
+    const [balD, txD, tokD, internalD] = await Promise.all([
       fetchChain(activeChain, { module:'account', action:'balance', address:addr, tag:'latest' }),
-      fetchChain(activeChain, { module:'account', action:'txlist', address:addr, startblock:0, endblock:99999999, page:1, offset:20, sort:'desc' }),
-      fetchChain(activeChain, { module:'account', action:'tokentx', address:addr, startblock:0, endblock:99999999, page:1, offset:10, sort:'desc' }),
+      fetchChain(activeChain, { module:'account', action:'txlist', address:addr, startblock:0, endblock:99999999, page:1, offset:50, sort:'desc' }),
+      fetchChain(activeChain, { module:'account', action:'tokentx', address:addr, startblock:0, endblock:99999999, page:1, offset:20, sort:'desc' }),
+      fetchChain(activeChain, { module:'account', action:'txlistinternal', address:addr, startblock:0, endblock:99999999, page:1, offset:20, sort:'desc' }),
     ]);
 
     const bal = balD.status === '1' ? (parseInt(balD.result) / 1e18).toFixed(4) : '0';
     const txs = txD.status === '1' ? txD.result : [];
     const toks = tokD.status === '1' ? tokD.result : [];
+    const internals = internalD.status === '1' ? internalD.result : [];
     const sent = txs.filter(t => t.from.toLowerCase() === addr.toLowerCase()).length;
     const recv = txs.length - sent;
     const failed = txs.filter(t => t.isError === '1').length;
     const vol = txs.reduce((s, t) => s + (parseInt(t.value) / 1e18), 0).toFixed(3);
-    const uniqueTokens = [...new Set(toks.map(t => t.tokenSymbol))].slice(0, 6);
+    const uniqueTokens = [...new Set(toks.map(t => t.tokenSymbol))].slice(0, 10);
     const firstTx = txs.length ? new Date(parseInt(txs[txs.length-1].timeStamp)*1000).toLocaleDateString() : '—';
+    const lastTx = txs.length ? new Date(parseInt(txs[0].timeStamp)*1000).toLocaleDateString() : '—';
+
+    // Jeet score calculation
+    const tokenBuys = {};
+    const tokenSells = {};
+    toks.forEach(t => {
+      const sym = t.tokenSymbol || 'UNKNOWN';
+      const isOut = t.from.toLowerCase() === addr.toLowerCase();
+      if (isOut) tokenSells[sym] = (tokenSells[sym] || 0) + 1;
+      else tokenBuys[sym] = (tokenBuys[sym] || 0) + 1;
+    });
+    const totalBought = Object.keys(tokenBuys).length;
+    const quickFlips = Object.keys(tokenSells).filter(s => tokenBuys[s]).length;
+    const jeetScore = totalBought > 0 ? Math.min(100, Math.round((quickFlips / totalBought) * 100)) : 0;
+    const jeetLabel = jeetScore >= 75 ? 'Certified Jeet' : jeetScore >= 50 ? 'Flip Merchant' : jeetScore >= 25 ? 'Selective Seller' : 'Diamond Tendencies';
+    const jeetColor = jeetScore >= 75 ? 'var(--accent2)' : jeetScore >= 50 ? 'var(--accent3)' : jeetScore >= 25 ? 'var(--text)' : 'var(--green)';
+
+    // Failed tx breakdown
+    const failedTxs = txs.filter(t => t.isError === '1');
+    const failedDetails = failedTxs.slice(0, 5).map(t => ({
+      hash: t.hash,
+      value: (parseInt(t.value)/1e18).toFixed(4),
+      gasUsed: t.gasUsed,
+      input: t.input ? t.input.slice(0, 10) : '0x',
+      time: new Date(parseInt(t.timeStamp)*1000).toLocaleDateString(),
+    }));
+
+    // Contract interactions
+    const contractInteractions = txs.filter(t => t.input && t.input !== '0x');
+    const uniqueContracts = [...new Set(contractInteractions.map(t => t.to))].filter(Boolean);
+
+    // Gas spending
+    const totalGasETH = txs.reduce((s, t) => s + (parseInt(t.gasUsed||0) * parseInt(t.gasPrice||0)) / 1e18, 0).toFixed(4);
 
     res.innerHTML = `
       <div class="metrics">
         <div class="metric"><div class="val accent">${bal}</div><div class="lbl">${ch.symbol} Balance</div></div>
-        <div class="metric"><div class="val">${txs.length}</div><div class="lbl">Recent Txns</div></div>
+        <div class="metric"><div class="val">${txs.length}</div><div class="lbl">Total Txns</div></div>
         <div class="metric"><div class="val green">${recv}</div><div class="lbl">Received</div></div>
         <div class="metric"><div class="val">${sent}</div><div class="lbl">Sent</div></div>
-        <div class="metric"><div class="val ${failed > 0 ? 'red' : ''}">${failed}</div><div class="lbl">Failed</div></div>
+        <div class="metric"><div class="val ${failed > 0 ? 'red' : ''}">${failed}</div><div class="lbl">Failed Txns</div></div>
         <div class="metric"><div class="val">${vol}</div><div class="lbl">${ch.symbol} Volume</div></div>
+        <div class="metric"><div class="val" style="color:${jeetColor}">${jeetScore}/100</div><div class="lbl">Jeet Score</div></div>
+        <div class="metric"><div class="val">${totalGasETH}</div><div class="lbl">Gas Spent (${ch.symbol})</div></div>
+        <div class="metric"><div class="val">${uniqueContracts.length}</div><div class="lbl">Contracts Used</div></div>
+        <div class="metric"><div class="val">${firstTx}</div><div class="lbl">First Active</div></div>
       </div>
-      ${uniqueTokens.length ? `<div style="margin-bottom:14px"><div class="sdiv">Token Activity</div><div style="display:flex;flex-wrap:wrap;gap:6px">${uniqueTokens.map(t=>`<span class="badge b-cyan">${t}</span>`).join('')}</div></div>` : ''}
-      <div class="sdiv">Last Transactions — <a href="https://${ch.explorer}/address/${addr}" target="_blank" style="color:var(--accent);font-size:0.62rem">View all on ${ch.explorer} →</a></div>
-      ${txs.length === 0 ? '<div class="empty">No transactions found for this wallet</div>' : txs.slice(0, 8).map(t => `
+      <div style="background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:12px 16px;margin-bottom:14px;display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px">
+        <div>
+          <span style="font-family:'IBM Plex Mono',monospace;font-size:0.6rem;color:var(--muted);letter-spacing:1.5px;text-transform:uppercase">Jeet Score</span>
+          <div style="font-size:1.1rem;font-weight:700;color:${jeetColor};margin-top:2px">${jeetScore}/100 — ${jeetLabel}</div>
+        </div>
+        <div style="text-align:right">
+          <div style="font-size:0.78rem;color:var(--muted)">${quickFlips} of ${totalBought} tokens sold</div>
+          <div style="font-size:0.72rem;color:var(--muted2);margin-top:2px">Active: ${firstTx} → ${lastTx}</div>
+        </div>
+      </div>
+      ${toks.length ? `<div style="margin-bottom:14px">
+        <div class="sdiv">Token Transfers (${toks.length})</div>
+        <div style="display:flex;flex-direction:column;gap:6px">
+          ${toks.slice(0,10).map(t => {
+            const isOut = t.from.toLowerCase() === addr.toLowerCase();
+            const amt = t.tokenDecimal ? (parseInt(t.value) / Math.pow(10, parseInt(t.tokenDecimal))).toFixed(2) : t.value;
+            return `<div class="tx-row" style="padding:7px 0">
+              <div>
+                <span class="badge b-cyan">${t.tokenSymbol || 'UNKNOWN'}</span>
+                <span style="font-size:0.72rem;color:var(--muted);margin-left:6px">${t.tokenName || ''}</span>
+              </div>
+              <div style="text-align:right">
+                <span style="font-size:0.85rem;font-weight:600;color:${isOut?'var(--accent2)':'var(--green)'}">${isOut?'-':'+'} ${parseFloat(amt).toLocaleString()}</span>
+              </div>
+            </div>`;
+          }).join('')}
+        </div>
+      </div>` : ''}
+      <div class="sdiv">Last Transactions</div>
+      ${txs.length === 0 ? '<div class="empty">No transactions found for this wallet</div>' : txs.slice(0, 50).map(t => {
+        const isOut = t.from.toLowerCase() === addr.toLowerCase();
+        const val = (parseInt(t.value)/1e18).toFixed(4);
+        const toAddr = t.to ? t.to.slice(0,10)+'...' : 'Contract Create';
+        const fromAddr = t.from.slice(0,10)+'...';
+        return `
         <div class="tx-row">
-          <div>
-            <a href="https://${ch.explorer}/tx/${t.hash}" target="_blank" class="tx-hash">${t.hash.slice(0,16)}...</a>
-            <div style="margin-top:4px;display:flex;gap:6px;align-items:center">
+          <div style="flex:1;min-width:0">
+            <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">
               <span class="badge ${t.isError==='0'?'b-green':'b-red'}">${t.isError==='0'?'ok':'failed'}</span>
-              <span style="font-size:0.72rem;color:var(--muted)">${t.from.toLowerCase()===addr.toLowerCase()?'OUT':'IN'}</span>
+              <span class="badge ${isOut?'b-red':'b-green'}">${isOut?'OUT':'IN'}</span>
+              <span class="tx-hash" style="cursor:default">${t.hash.slice(0,14)}...</span>
+            </div>
+            <div style="font-size:0.72rem;color:var(--muted);margin-top:4px">
+              ${isOut ? 'To: '+toAddr : 'From: '+fromAddr}
             </div>
           </div>
-          <div class="tx-right">
-            <div class="tx-val">${(parseInt(t.value)/1e18).toFixed(4)} ${ch.symbol}</div>
+          <div class="tx-right" style="flex-shrink:0">
+            <div class="tx-val" style="color:${isOut?'var(--accent2)':'var(--green)'}">${isOut?'-':'+'} ${val} ${ch.symbol}</div>
             <div class="tx-date">${new Date(parseInt(t.timeStamp)*1000).toLocaleDateString()}</div>
           </div>
-        </div>`).join('')}
+        </div>`;
+      }).join('')}
       <div class="ai-box" id="aiP"><span class="spin"></span>Claude is analyzing this wallet...</div>`;
 
-    callClaude(`Analyze this wallet on ${ch.name} (chainId ${ch.chainId}):
-- Address: ${addr.slice(0,12)}...
-- Balance: ${bal} ${ch.symbol}
-- ${txs.length} recent txns: ${sent} sent, ${recv} received, ${failed} failed
-- Total volume: ${vol} ${ch.symbol}
-- Active tokens: ${uniqueTokens.join(', ') || 'none'}
-- First seen: ${firstTx}
+    // Build detailed failed tx context for Claude
+    const failedTxContext = failedTxs.length > 0 ? failedTxs.slice(0,5).map(t => {
+      const methodId = t.input ? t.input.slice(0,10) : '0x';
+      const gasWasted = ((parseInt(t.gasUsed||0) * parseInt(t.gasPrice||0)) / 1e18).toFixed(6);
+      const knownMethods = {
+        '0xa9059cbb': 'transfer()',
+        '0x23b872dd': 'transferFrom()',
+        '0x095ea7b3': 'approve()',
+        '0x38ed1739': 'swapExactTokensForTokens() — DEX swap',
+        '0x7ff36ab5': 'swapExactETHForTokens() — DEX buy',
+        '0x18cbafe5': 'swapExactTokensForETH() — DEX sell',
+        '0xd0e30db0': 'deposit() — likely wrapping ETH',
+        '0x2e1a7d4d': 'withdraw() — likely unwrapping',
+        '0xa22cb465': 'setApprovalForAll() — NFT approval',
+        '0x42842e0e': 'safeTransferFrom() — NFT transfer',
+        '0x40993b26': 'mint()',
+        '0x1249c58b': 'mint()',
+        '0x6a627842': 'mint(address)',
+      };
+      const methodName = knownMethods[methodId] || `unknown method ${methodId}`;
+      return `  • Hash ${t.hash.slice(0,12)}: called ${methodName}, gas wasted: ${gasWasted} ${ch.symbol}, date: ${new Date(parseInt(t.timeStamp)*1000).toLocaleDateString()}`;
+    }).join('\n') : 'None';
 
-In 3 punchy sentences: classify this wallet (whale, degen, jeet, diamond hands, bot, normie, or rug deployer). Call out any red flags. Jeet detection if patterns match. Crypto slang welcome. No disclaimers.`, 'aiP');
+    const tokenActivity = Object.entries(tokenBuys).slice(0,8).map(([sym, buys]) => {
+      const sells = tokenSells[sym] || 0;
+      return `${sym}: bought ${buys}x, sold ${sells}x`;
+    }).join(', ');
+
+    const recentTxSummary = txs.slice(0,15).map(t => {
+      const isOut = t.from.toLowerCase() === addr.toLowerCase();
+      const val = (parseInt(t.value)/1e18).toFixed(4);
+      const methodId = t.input ? t.input.slice(0,10) : '0x';
+      const failed = t.isError === '1';
+      return `${failed?'[FAILED] ':''}${isOut?'OUT':'IN'} ${val} ${ch.symbol} ${t.input&&t.input!=='0x'?'→ contract call ('+methodId+')':'→ simple transfer'} on ${new Date(parseInt(t.timeStamp)*1000).toLocaleDateString()}`;
+    }).join('\n  ');
+
+    callClaude(`You are doing a full forensic analysis of this on-chain wallet. Give a detailed, structured breakdown.
+
+WALLET: ${addr}
+CHAIN: ${ch.name} (chainId ${ch.chainId})
+BALANCE: ${bal} ${ch.symbol}
+FIRST ACTIVE: ${firstTx} | LAST ACTIVE: ${lastTx}
+TOTAL TXNS: ${txs.length} (${sent} sent, ${recv} received, ${failed} failed)
+TOTAL VOLUME: ${vol} ${ch.symbol}
+GAS SPENT: ${totalGasETH} ${ch.symbol}
+CONTRACTS INTERACTED: ${uniqueContracts.length}
+JEET SCORE: ${jeetScore}/100 (${jeetLabel})
+TOKEN ACTIVITY: ${tokenActivity || 'no token transfers found'}
+
+FAILED TRANSACTIONS:
+${failedTxContext}
+
+RECENT ACTIVITY PATTERN:
+  ${recentTxSummary}
+
+INTERNAL TXS: ${internals.length} internal transactions detected
+
+Please provide a FULL forensic report with these exact sections:
+
+**WALLET VERDICT**
+Classify this wallet in one line: whale / degen / jeet / diamond hands / bot / normie / rug deployer. One sentence explaining why.
+
+**BEHAVIOR PATTERN**
+Describe what this wallet actually does on-chain. Trading patterns, what protocols they use, how they move money. Be specific.
+
+**JEET ANALYSIS**
+Based on the jeet score of ${jeetScore}/100 and token activity, explain their holding behavior. Do they dump early? Hold through dips? Flip everything? Give specific evidence from the data.
+
+**FAILED TX FORENSICS**
+For each failed transaction, explain in plain English exactly what went wrong. Was it a failed DEX swap? Slippage? Gas too low? Sandwich attack? Front-run? Contract rejection? If no failed txs, say so.
+
+**RED FLAGS**
+List any suspicious patterns, bot-like behavior, connection to known rugs, or anything the community should know.
+
+**BOTTOM LINE**
+One punchy sentence: should your community trust this wallet, copy their trades, or avoid them entirely?
+
+Use crypto language. Be direct. No disclaimers. Max 400 words total.`, 'aiP');
 
   } catch(e) {
-    res.innerHTML = errDetail(e.message, `https://${CHAINS[activeChain].explorer}/address/${addr}`);
+    res.innerHTML = errDetail(e.message);
   }
 }
 
@@ -1046,41 +1269,107 @@ async function analyzeContract() {
       </div>
       <div class="sdiv">Signal Breakdown</div>
       ${signals.map(s => `<div class="signal-row"><span>${s.label}</span><span class="badge ${s.ok?'b-green':'b-red'}">${s.ok?'pass':'fail'}</span></div>`).join('')}
-      <div style="margin-top:12px"><a href="https://${ch.explorer}/address/${addr}" target="_blank" style="color:var(--accent);font-size:0.78rem">View full contract on ${ch.explorer} →</a></div>
-      <div class="ai-box" id="aiR"><span class="spin"></span>Claude is assessing rug risk...</div>`;
 
-    callClaude(`Rug pull assessment for contract on ${ch.name}:
-- Name: ${name}, Verified: ${verified}, Compiler: ${compiler}
-- Age: ${age} days, Unique senders: ${unique}, Txns: ${txs.length}, Fail rate: ${failRate}%
-- Proxy: ${proxy}, Safety score: ${score}/100
+      <div class="ai-box" id="aiR"><span class="spin"></span>Claude is auditing this contract...</div>`;
 
-Give a blunt 3-sentence verdict: safe to ape, proceed with caution, or hard avoid? What's the biggest red flag or green flag? Use crypto community language. No disclaimers.`, 'aiR');
+    // Feed source code to Claude if available (first 3000 chars)
+    const sourceSnippet = src.SourceCode ? src.SourceCode.slice(0,3000) : null;
+    const recentContractTxs = txs.slice(0,10).map(t => {
+      const methodId = t.input ? t.input.slice(0,10) : '0x';
+      const knownMethods = {
+        '0xa9059cbb':'transfer','0x095ea7b3':'approve','0x40993b26':'mint',
+        '0x1249c58b':'mint','0xa22cb465':'setApprovalForAll','0x42842e0e':'safeTransferFrom',
+        '0x2e1a7d4d':'withdraw','0xd0e30db0':'deposit','0x715018a6':'renounceOwnership',
+        '0xf2fde38b':'transferOwnership','0x8da5cb5b':'owner','0x3ccfd60b':'withdraw all',
+      };
+      const method = knownMethods[methodId] || methodId;
+      return `${t.isError==='1'?'[FAILED] ':''}${method} by ${t.from.slice(0,10)}... — ${new Date(parseInt(t.timeStamp)*1000).toLocaleDateString()}`;
+    }).join('\n  ');
+
+    callClaude(`You are doing a smart contract security audit for a crypto community deciding whether to ape in.
+
+CONTRACT: ${addr}
+CHAIN: ${ch.name}
+NAME: ${name}
+VERIFIED: ${verified}
+COMPILER: ${compiler}
+PROXY CONTRACT: ${proxy}
+AGE: ${age} days
+UNIQUE SENDERS: ${unique}
+TOTAL TXNS: ${txs.length}
+FAIL RATE: ${failRate}%
+SAFETY SCORE: ${score}/100
+
+RECENT CONTRACT CALLS:
+  ${recentContractTxs || 'No transactions yet'}
+
+${sourceSnippet ? `CONTRACT SOURCE CODE (first 3000 chars):
+\`\`\`
+${sourceSnippet}
+\`\`\`
+
+READ THE SOURCE CODE CAREFULLY for: hidden mint functions, owner backdoors, blacklist functions, pauseable trading, honeypot patterns, renounced ownership, locked liquidity.` : 'SOURCE CODE: Not verified / not available — treat this as a major red flag.'}
+
+Provide a structured security report:
+
+**VERDICT**
+One line: SAFE / CAUTION / HARD AVOID — and the single biggest reason why.
+
+**CONTRACT ANALYSIS**
+What does this contract actually do? Is it a token, NFT, DEX, vault, or something else? Any unusual functions?
+
+${sourceSnippet ? `**CODE RED FLAGS**
+List any dangerous functions found in the source: hidden mints, owner drain functions, blacklists, pause mechanisms, suspicious modifiers. Quote the function name if found.` : `**UNVERIFIED WARNING**
+Explain the risks of an unverified contract.`}
+
+**OWNERSHIP & CONTROL**
+Is ownership renounced? Can the deployer still rug? What control do they have?
+
+**TRANSACTION PATTERN**
+What do the recent contract calls tell us? Normal usage or suspicious activity?
+
+**COMMUNITY VERDICT**
+One punchy sentence telling your community whether to ape, be careful, or run.
+
+Max 350 words. Crypto language. No disclaimers.`, 'aiR');
 
   } catch(e) {
-    res.innerHTML = errDetail(e.message, `https://${CHAINS[activeChain].explorer}/address/${addr}`);
+    res.innerHTML = errDetail(e.message);
   }
 }
 
 // ══ CLAUDE AI ════════════════════════════════════════════════════
 async function callClaude(prompt, targetId) {
+  const claudeKey = localStorage.getItem('alphaHubClaudeKey') || '';
+  if (!claudeKey) {
+    const el = document.getElementById(targetId);
+    if (el) el.innerHTML = '<span style="color:var(--accent3)">⚠ Add your Anthropic API key in Settings to enable AI analysis.</span>';
+    return;
+  }
   try {
     const r = await fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: {
+        'Content-Type': 'application/json',
+        'x-api-key': claudeKey,
+        'anthropic-version': '2023-06-01',
+        'anthropic-dangerous-direct-browser-inaccessible': 'true',
+      },
       body: JSON.stringify({
         model: 'claude-sonnet-4-20250514',
-        max_tokens: 1000,
-        system: 'You are a sharp on-chain analyst for a crypto and NFT community. Give direct, concise analysis using natural web3 language. Classify wallets: whale, degen, jeet, diamond hands, bot, normie. For contracts: safe/caution/avoid. Call out jeet behavior explicitly if patterns match. No financial disclaimers. Ever.',
-        messages: [{ role:'user', content:prompt }]
+        max_tokens: 2000,
+        system: 'You are an expert on-chain forensics analyst and smart contract auditor for a crypto and NFT trading community. You have deep knowledge of DeFi protocols, DEX mechanics, NFT markets, sandwich attacks, rug pull patterns, and on-chain behavior analysis. You give structured, detailed forensic reports. You decode failed transactions, identify bot behavior, jeet patterns, and contract vulnerabilities. You write in direct crypto community language. You always use the section headers provided in the prompt. No financial disclaimers. Ever.',
+        messages: [{ role: 'user', content: prompt }]
       })
     });
     const d = await r.json();
-    const text = d.content?.find(b => b.type==='text')?.text || 'Analysis unavailable.';
+    if (d.error) throw new Error(d.error.message);
+    const text = d.content?.find(b => b.type === 'text')?.text || 'Analysis unavailable.';
     const el = document.getElementById(targetId);
     if (el) el.innerHTML = text;
   } catch(e) {
     const el = document.getElementById(targetId);
-    if (el) el.innerHTML = 'AI analysis unavailable right now.';
+    if (el) el.innerHTML = `<span style="color:var(--accent2)">AI error: ${e.message}</span>`;
   }
 }
 
@@ -1186,12 +1475,11 @@ function err(msg) {
 function warn(msg) {
   return `<p style="color:var(--accent3);font-size:0.85rem;padding:8px 0">⚠ ${msg}</p>`;
 }
-function errDetail(msg, url) {
+function errDetail(msg) {
   return `<div style="padding:8px 0">
     <p style="color:var(--accent2);font-size:0.85rem;margin-bottom:8px">⚠ ${msg || 'Request failed'}</p>
     <p style="font-size:0.8rem;color:var(--muted);line-height:1.6">
-      Common fixes: check your API key is correct · make sure you're on Etherscan V2 (etherscan.io/apis) · try a different address · check your connection.<br>
-      <a href="${url}" target="_blank" style="color:var(--accent)">View directly on explorer →</a>
+      Common fixes: check both API keys are saved · make sure your Etherscan key is V2 (etherscan.io/apis) · try a different address.
     </p>
   </div>`;
 }
