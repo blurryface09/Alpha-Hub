@@ -107,6 +107,7 @@ gap: 16px;
 align-items: flex-start;
 flex-wrap: wrap;
 }
+.key-card.hidden { display: none; }
 .key-card .key-label {
 font-family: ‘IBM Plex Mono’, monospace;
 font-size: 0.65rem;
@@ -119,6 +120,29 @@ margin-bottom: 8px;
 .key-inputs input { flex: 1; }
 .key-note { font-size: 0.75rem; color: var(–muted); margin-top: 6px; line-height: 1.5; }
 .key-status { font-family: ‘IBM Plex Mono’, monospace; font-size: 0.7rem; margin-top: 6px; }
+.nav-key-status {
+font-family: ‘IBM Plex Mono’, monospace;
+font-size: 0.62rem;
+letter-spacing: 1px;
+display: flex;
+align-items: center;
+gap: 10px;
+}
+.nav-key-dot { width: 7px; height: 7px; border-radius: 50%; background: var(–green); display: inline-block; }
+.nav-key-dot.inactive { background: var(–accent2); }
+.change-key-btn {
+font-family: ‘IBM Plex Mono’, monospace;
+font-size: 0.6rem;
+letter-spacing: 1px;
+color: var(–muted);
+background: none;
+border: 1px solid var(–border2);
+border-radius: 4px;
+padding: 3px 8px;
+cursor: pointer;
+transition: all 0.2s;
+}
+.change-key-btn:hover { border-color: var(–accent); color: var(–accent); }
 
 /* CHAIN SELECTOR */
 .chain-bar { display: flex; gap: 8px; margin-bottom: 24px; flex-wrap: wrap; }
@@ -540,7 +564,13 @@ to { opacity: 1; transform: translateY(0); }
 <nav>
   <div class="wrap nav-inner">
     <div class="logo">Alpha<span>/</span>Hub</div>
-    <div class="nav-badge">ETH · BASE · BNB</div>
+    <div style="display:flex;align-items:center;gap:12px">
+      <div class="nav-key-status" id="navKeyStatus">
+        <span class="nav-key-dot inactive" id="navKeyDot"></span>
+        <span id="navKeyText" style="color:var(--muted)">No key set</span>
+      </div>
+      <button class="change-key-btn" onclick="toggleKeyCard()" id="changeKeyBtn">SET KEY</button>
+    </div>
   </div>
 </nav>
 
@@ -552,12 +582,12 @@ to { opacity: 1; transform: translateY(0); }
 
   <!-- API KEY -->
 
-  <div class="key-card">
+  <div class="key-card" id="keyCard">
     <div style="flex:1;min-width:280px">
       <div class="key-label">Etherscan API Key — covers ETH, Base &amp; BNB</div>
       <div class="key-inputs">
         <input type="password" id="apiKeyInput" placeholder="Paste your Etherscan V2 API key...">
-        <button class="btn" onclick="saveKey()">Activate</button>
+        <button class="btn" onclick="saveKey()">Save &amp; Hide</button>
       </div>
       <div class="key-note">Free key at <strong style="color:var(--accent)">etherscan.io/apis</strong> · Stored in your browser only · Never sent anywhere except Etherscan</div>
       <div id="keyStatus" class="key-status"></div>
@@ -795,16 +825,6 @@ let apiKey = localStorage.getItem('alphaHubKey') || '';
 let watchlist = JSON.parse(localStorage.getItem('alphaHubWL') || '[]');
 let tgConfig = JSON.parse(localStorage.getItem('alphaHubTG') || '{}');
 
-// Restore key on load
-if (apiKey) {
-  document.getElementById('apiKeyInput').value = apiKey;
-  setKeyStatus(true);
-}
-if (tgConfig.token) {
-  document.getElementById('tgToken').value = tgConfig.token || '';
-  document.getElementById('tgChat').value = tgConfig.chat || '';
-}
-
 // ══ KEY ══════════════════════════════════════════════════════════
 function saveKey() {
   const k = document.getElementById('apiKeyInput').value.trim();
@@ -812,12 +832,50 @@ function saveKey() {
   apiKey = k;
   localStorage.setItem('alphaHubKey', k);
   setKeyStatus(true);
+  // Hide card after saving
+  document.getElementById('keyCard').classList.add('hidden');
+}
+
+function toggleKeyCard() {
+  const card = document.getElementById('keyCard');
+  card.classList.toggle('hidden');
+  if (!card.classList.contains('hidden')) {
+    document.getElementById('apiKeyInput').focus();
+  }
 }
 
 function setKeyStatus(ok, msg) {
-  const el = document.getElementById('keyStatus');
-  if (ok) el.innerHTML = '<span style="color:var(--green)">● All three chains active — ETH (1) · Base (8453) · BNB (56)</span>';
-  else el.innerHTML = msg ? `<span style="color:var(--accent2)">${msg}</span>` : '';
+  const dot = document.getElementById('navKeyDot');
+  const txt = document.getElementById('navKeyText');
+  const btn = document.getElementById('changeKeyBtn');
+  const statusEl = document.getElementById('keyStatus');
+  if (ok) {
+    if (dot) { dot.className = 'nav-key-dot'; }
+    if (txt) txt.textContent = 'ETH · Base · BNB active';
+    if (btn) btn.textContent = 'CHANGE KEY';
+    if (statusEl) statusEl.innerHTML = '<span style="color:var(--green)">● Key saved</span>';
+  } else {
+    if (dot) { dot.className = 'nav-key-dot inactive'; }
+    if (txt) txt.textContent = 'No key set';
+    if (btn) btn.textContent = 'SET KEY';
+    if (statusEl && msg) statusEl.innerHTML = `<span style="color:var(--accent2)">${msg}</span>`;
+  }
+}
+
+// ── Init key state on load ────────────────────────────────────────
+(function initKey() {
+  const card = document.getElementById('keyCard');
+  if (apiKey) {
+    document.getElementById('apiKeyInput').value = apiKey;
+    setKeyStatus(true);
+    card.classList.add('hidden'); // already have key — hide card
+  }
+  // else card stays visible for first-time setup
+})();
+
+if (tgConfig.token) {
+  document.getElementById('tgToken').value = tgConfig.token || '';
+  document.getElementById('tgChat').value = tgConfig.chat || '';
 }
 
 // ══ CHAIN ════════════════════════════════════════════════════════
