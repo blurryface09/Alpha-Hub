@@ -602,12 +602,12 @@
       <div id="keyStatus" class="key-status"></div>
     </div>
     <div style="flex:1;min-width:280px;border-left:1px solid var(--border2);padding-left:20px">
-      <div class="key-label">Anthropic API Key — for AI analysis</div>
+      <div class="key-label">Gemini API Key — for AI analysis (free)</div>
       <div class="key-inputs">
-        <input type="password" id="claudeKeyInput" placeholder="Paste your Anthropic API key (sk-ant-...)">
+        <input type="password" id="claudeKeyInput" placeholder="Paste your Gemini API key (AIza...)">
         <button class="btn" onclick="saveClaudeKey()">Save</button>
       </div>
-      <div class="key-note">Free key at <strong style="color:var(--accent)">console.anthropic.com</strong> · Powers the wallet &amp; contract AI analysis · Stored in your browser only</div>
+      <div class="key-note">Free key at <strong style="color:var(--accent)">aistudio.google.com</strong> · Click "Get API key" · No card needed · Powers all AI analysis</div>
       <div id="claudeKeyStatus" class="key-status"></div>
     </div>
   </div>
@@ -825,39 +825,29 @@ const CHAINS = {
 const V2 = 'https://api.etherscan.io/v2/api';
 
 // ── Claude-as-proxy: fetch on-chain data via Claude's tool_use ───
-async function fetchViaClaudeTools(chain, params) {
-  const claudeKey = localStorage.getItem('alphaHubClaudeKey') || '';
-  if (!claudeKey) throw new Error('No Anthropic API key set');
+async function fetchViaGemini(chain, params) {
+  const geminiKey = localStorage.getItem('alphaHubClaudeKey') || '';
+  if (!geminiKey) throw new Error('No Gemini API key set');
   const ch = CHAINS[chain];
   let url = `${V2}?chainid=${ch.chainId}&apikey=${encodeURIComponent(apiKey)}`;
   Object.entries(params).forEach(([k,v]) => url += `&${k}=${encodeURIComponent(v)}`);
 
-  const r = await fetch('https://api.anthropic.com/v1/messages', {
+  const r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${geminiKey}`, {
     method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'x-api-key': claudeKey,
-      'anthropic-version': '2023-06-01',
-      'anthropic-dangerous-direct-browser-inaccessible': 'true',
-    },
+    headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
-      model: 'claude-sonnet-4-20250514',
-      max_tokens: 4096,
-      tools: [{ type: 'web_search_20250305', name: 'web_search' }],
-      system: 'You are a data retrieval assistant. When given a URL, fetch it using web_search and return ONLY the raw JSON response body. No commentary, no markdown, just the JSON.',
-      messages: [{ role: 'user', content: `Fetch this URL and return only the raw JSON: ${url}` }]
+      contents: [{ parts: [{ text: `Fetch this Etherscan API URL and return ONLY the raw JSON response, no commentary: ${url}` }] }],
+      tools: [{ google_search: {} }],
+      generationConfig: { temperature: 0, maxOutputTokens: 8192 }
     })
   });
   const d = await r.json();
-  // Extract the result from tool use or text response
-  const textBlock = d.content?.find(b => b.type === 'text');
-  if (textBlock) {
-    // Try to parse JSON from the text
-    const text = textBlock.text.trim();
-    const jsonMatch = text.match(/\{[\s\S]*\}/);
-    if (jsonMatch) return JSON.parse(jsonMatch[0]);
+  const text = d.candidates?.[0]?.content?.parts?.[0]?.text || '';
+  const jsonMatch = text.match(/\{[\s\S]*\}/);
+  if (jsonMatch) {
+    try { return JSON.parse(jsonMatch[0]); } catch(e) {}
   }
-  throw new Error('Could not retrieve data');
+  throw new Error('Gemini could not retrieve data');
 }
 
 // ══ STATE ════════════════════════════════════════════════════════
@@ -881,7 +871,7 @@ function saveClaudeKey() {
   const k = document.getElementById('claudeKeyInput').value.trim();
   if (!k) return;
   localStorage.setItem('alphaHubClaudeKey', k);
-  document.getElementById('claudeKeyStatus').innerHTML = '<span style="color:var(--green)">● Claude AI active</span>';
+  document.getElementById('claudeKeyStatus').innerHTML = '<span style="color:var(--green)">● Gemini AI active</span>';
   document.getElementById('keyCard').classList.add('hidden');
 }
 
@@ -921,7 +911,7 @@ function setKeyStatus(ok, msg) {
   }
   if (claudeKey) {
     document.getElementById('claudeKeyInput').value = claudeKey;
-    document.getElementById('claudeKeyStatus').innerHTML = '<span style="color:var(--green)">● Claude AI active</span>';
+    document.getElementById('claudeKeyStatus').innerHTML = '<span style="color:var(--green)">● Gemini AI active</span>';
   }
   if (apiKey && claudeKey) {
     card.classList.add('hidden'); // both keys set — hide card
@@ -985,7 +975,7 @@ async function fetchChain(chain, params) {
   } catch(e) {
     // CORS blocked — fall back to Claude as proxy
     console.log('Direct fetch blocked, using Claude proxy...', e.message);
-    return await fetchViaClaudeTools(chain, params);
+    return await fetchViaGemini(chain, params);
   }
 }
 
@@ -1324,31 +1314,30 @@ Max 350 words. Crypto language. No disclaimers.`, 'aiR');
 
 // ══ CLAUDE AI ════════════════════════════════════════════════════
 async function callClaude(prompt, targetId) {
-  const claudeKey = localStorage.getItem('alphaHubClaudeKey') || '';
-  if (!claudeKey) {
+  const geminiKey = localStorage.getItem('alphaHubClaudeKey') || '';
+  if (!geminiKey) {
     const el = document.getElementById(targetId);
-    if (el) el.innerHTML = '<span style="color:var(--accent3)">⚠ Add your Anthropic API key in Settings to enable AI analysis.</span>';
+    if (el) el.innerHTML = '<span style="color:var(--accent3)">⚠ Add your free Gemini API key to enable AI analysis — get it at aistudio.google.com</span>';
     return;
   }
   try {
-    const r = await fetch('https://api.anthropic.com/v1/messages', {
+    const systemContext = 'You are an expert on-chain forensics analyst and smart contract auditor for a crypto and NFT trading community. You have deep knowledge of DeFi protocols, DEX mechanics, NFT markets, sandwich attacks, rug pull patterns, and on-chain behavior analysis. You give structured, detailed forensic reports. You decode failed transactions, identify bot behavior, jeet patterns, and contract vulnerabilities. You write in direct crypto community language. You always use the section headers provided in the prompt. No financial disclaimers. Ever.';
+
+    const r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${geminiKey}`, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'x-api-key': claudeKey,
-        'anthropic-version': '2023-06-01',
-        'anthropic-dangerous-direct-browser-inaccessible': 'true',
-      },
+      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        model: 'claude-sonnet-4-20250514',
-        max_tokens: 2000,
-        system: 'You are an expert on-chain forensics analyst and smart contract auditor for a crypto and NFT trading community. You have deep knowledge of DeFi protocols, DEX mechanics, NFT markets, sandwich attacks, rug pull patterns, and on-chain behavior analysis. You give structured, detailed forensic reports. You decode failed transactions, identify bot behavior, jeet patterns, and contract vulnerabilities. You write in direct crypto community language. You always use the section headers provided in the prompt. No financial disclaimers. Ever.',
-        messages: [{ role: 'user', content: prompt }]
+        system_instruction: { parts: [{ text: systemContext }] },
+        contents: [{ parts: [{ text: prompt }] }],
+        generationConfig: {
+          temperature: 0.7,
+          maxOutputTokens: 2048,
+        }
       })
     });
     const d = await r.json();
     if (d.error) throw new Error(d.error.message);
-    const text = d.content?.find(b => b.type === 'text')?.text || 'Analysis unavailable.';
+    const text = d.candidates?.[0]?.content?.parts?.[0]?.text || 'Analysis unavailable.';
     const el = document.getElementById(targetId);
     if (el) el.innerHTML = text;
   } catch(e) {
