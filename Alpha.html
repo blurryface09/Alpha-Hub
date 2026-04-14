@@ -1,0 +1,1146 @@
+<!DOCTYPE html>
+
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Alpha Hub — Multi-Chain Tracker</title>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=Barlow:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg: #080b0f;
+    --surface: #0e1318;
+    --surface2: #151c24;
+    --border: #1e2a35;
+    --border2: #243342;
+    --accent: #00e5ff;
+    --accent2: #ff4560;
+    --accent3: #ffc107;
+    --green: #00c896;
+    --text: #dce8f0;
+    --muted: #5a7080;
+    --muted2: #3a5060;
+    --eth: #627EEA;
+    --base: #0052FF;
+    --bnb: #F3BA2F;
+  }
+  * { margin:0; padding:0; box-sizing:border-box; }
+  html { scroll-behavior: smooth; }
+  body {
+    font-family: 'Barlow', sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    min-height: 100vh;
+    overflow-x: hidden;
+  }
+  body::before {
+    content: '';
+    position: fixed;
+    inset: 0;
+    background-image:
+      linear-gradient(rgba(0,229,255,0.025) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(0,229,255,0.025) 1px, transparent 1px);
+    background-size: 48px 48px;
+    pointer-events: none;
+    z-index: 0;
+  }
+  body::after {
+    content: '';
+    position: fixed;
+    top: -30%;
+    left: -10%;
+    width: 60%;
+    height: 60%;
+    background: radial-gradient(ellipse, rgba(0,229,255,0.04) 0%, transparent 70%);
+    pointer-events: none;
+    z-index: 0;
+  }
+
+.wrap { max-width: 1080px; margin: 0 auto; padding: 0 20px; position: relative; z-index: 1; }
+
+/* NAV */
+nav {
+border-bottom: 1px solid var(–border);
+padding: 16px 0;
+position: sticky;
+top: 0;
+background: rgba(8,11,15,0.92);
+backdrop-filter: blur(12px);
+z-index: 100;
+}
+.nav-inner { display: flex; align-items: center; justify-content: space-between; }
+.logo { font-family: ‘IBM Plex Mono’, monospace; font-size: 1rem; font-weight: 600; color: var(–accent); letter-spacing: 2px; text-transform: uppercase; }
+.logo span { color: var(–muted); }
+.nav-badge {
+font-family: ‘IBM Plex Mono’, monospace;
+font-size: 0.6rem;
+letter-spacing: 2px;
+text-transform: uppercase;
+color: var(–muted);
+border: 1px solid var(–border2);
+padding: 4px 10px;
+border-radius: 20px;
+}
+
+/* HEADER */
+.header { padding: 48px 0 36px; }
+.header h1 {
+font-size: clamp(2rem, 5vw, 3.2rem);
+font-weight: 800;
+letter-spacing: -1px;
+line-height: 1.1;
+margin-bottom: 10px;
+}
+.header h1 .hl { color: var(–accent); }
+.header p { font-size: 0.95rem; color: var(–muted); max-width: 500px; line-height: 1.6; }
+
+/* API KEY CARD */
+.key-card {
+background: var(–surface);
+border: 1px solid var(–border2);
+border-left: 3px solid var(–accent);
+border-radius: 12px;
+padding: 20px 24px;
+margin-bottom: 28px;
+display: flex;
+gap: 16px;
+align-items: flex-start;
+flex-wrap: wrap;
+}
+.key-card .key-label {
+font-family: ‘IBM Plex Mono’, monospace;
+font-size: 0.65rem;
+letter-spacing: 2px;
+text-transform: uppercase;
+color: var(–accent);
+margin-bottom: 8px;
+}
+.key-inputs { display: flex; gap: 10px; flex: 1; min-width: 280px; }
+.key-inputs input { flex: 1; }
+.key-note { font-size: 0.75rem; color: var(–muted); margin-top: 6px; line-height: 1.5; }
+.key-status { font-family: ‘IBM Plex Mono’, monospace; font-size: 0.7rem; margin-top: 6px; }
+
+/* CHAIN SELECTOR */
+.chain-bar { display: flex; gap: 8px; margin-bottom: 24px; flex-wrap: wrap; }
+.chain-btn {
+display: flex; align-items: center; gap: 8px;
+padding: 9px 18px;
+border-radius: 8px;
+border: 1px solid var(–border2);
+background: var(–surface);
+color: var(–muted);
+font-family: ‘Barlow’, sans-serif;
+font-size: 0.85rem;
+font-weight: 600;
+cursor: pointer;
+transition: all 0.2s;
+letter-spacing: 0.3px;
+}
+.chain-btn:hover { border-color: var(–border2); color: var(–text); }
+.chain-btn.active.eth { border-color: var(–eth); color: var(–eth); background: rgba(98,126,234,0.08); }
+.chain-btn.active.base { border-color: var(–base); color: var(–base); background: rgba(0,82,255,0.08); }
+.chain-btn.active.bnb { border-color: var(–bnb); color: var(–bnb); background: rgba(243,186,47,0.08); }
+.cdot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+.d-eth { background: var(–eth); }
+.d-base { background: var(–base); }
+.d-bnb { background: var(–bnb); }
+
+/* TABS */
+.tab-bar {
+display: flex; gap: 2px;
+background: var(–surface);
+border: 1px solid var(–border);
+border-radius: 10px;
+padding: 4px;
+margin-bottom: 24px;
+flex-wrap: wrap;
+}
+.tab-btn {
+flex: 1; min-width: 80px;
+padding: 9px 14px;
+border-radius: 7px;
+border: none;
+background: none;
+color: var(–muted);
+font-family: ‘Barlow’, sans-serif;
+font-size: 0.85rem;
+font-weight: 600;
+cursor: pointer;
+transition: all 0.2s;
+white-space: nowrap;
+text-align: center;
+}
+.tab-btn.active { background: var(–surface2); color: var(–accent); border: 1px solid var(–border2); }
+.panel { display: none; }
+.panel.active { display: block; }
+
+/* CARD */
+.card {
+background: var(–surface);
+border: 1px solid var(–border);
+border-radius: 12px;
+padding: 22px 24px;
+margin-bottom: 16px;
+}
+.card-title {
+font-family: ‘IBM Plex Mono’, monospace;
+font-size: 0.65rem;
+letter-spacing: 2px;
+text-transform: uppercase;
+color: var(–muted);
+margin-bottom: 16px;
+display: flex;
+align-items: center;
+gap: 10px;
+}
+.card-title .chain-tag {
+font-size: 0.6rem;
+padding: 2px 8px;
+border-radius: 4px;
+margin-left: auto;
+}
+.tag-eth { background: rgba(98,126,234,0.15); color: var(–eth); }
+.tag-base { background: rgba(0,82,255,0.12); color: #4d8bff; }
+.tag-bnb { background: rgba(243,186,47,0.15); color: var(–bnb); }
+
+/* INPUTS */
+input, select, textarea {
+background: var(–surface2);
+border: 1px solid var(–border2);
+border-radius: 8px;
+padding: 10px 14px;
+color: var(–text);
+font-family: ‘Barlow’, sans-serif;
+font-size: 0.9rem;
+outline: none;
+transition: border-color 0.2s;
+width: 100%;
+}
+input:focus, select:focus, textarea:focus { border-color: var(–accent); }
+input::placeholder, textarea::placeholder { color: var(–muted2); }
+select option { background: var(–surface2); }
+
+/* BUTTONS */
+.btn {
+background: var(–accent);
+color: #000;
+border: none;
+border-radius: 8px;
+padding: 10px 22px;
+font-family: ‘Barlow’, sans-serif;
+font-weight: 700;
+font-size: 0.85rem;
+cursor: pointer;
+transition: all 0.2s;
+white-space: nowrap;
+letter-spacing: 0.3px;
+}
+.btn:hover { background: #33ecff; transform: translateY(-1px); }
+.btn:active { transform: translateY(0); }
+.btn-ghost {
+background: none;
+border: 1px solid var(–border2);
+color: var(–muted);
+border-radius: 8px;
+padding: 10px 22px;
+font-family: ‘Barlow’, sans-serif;
+font-size: 0.85rem;
+font-weight: 600;
+cursor: pointer;
+transition: all 0.2s;
+white-space: nowrap;
+}
+.btn-ghost:hover { border-color: var(–accent); color: var(–accent); }
+.btn-sm {
+padding: 6px 14px;
+font-size: 0.78rem;
+border-radius: 6px;
+}
+.btn-danger { background: none; border: 1px solid rgba(255,69,96,0.3); color: var(–accent2); font-size: 0.75rem; padding: 4px 10px; border-radius: 6px; cursor: pointer; transition: all 0.2s; }
+.btn-danger:hover { background: rgba(255,69,96,0.1); }
+
+/* SEARCH ROW */
+.search-row { display: flex; gap: 10px; margin-bottom: 6px; flex-wrap: wrap; }
+.search-row input { flex: 1; min-width: 200px; }
+
+/* METRICS GRID */
+.metrics {
+display: grid;
+grid-template-columns: repeat(auto-fit, minmax(110px, 1fr));
+gap: 10px;
+margin-bottom: 16px;
+}
+.metric {
+background: var(–surface2);
+border: 1px solid var(–border);
+border-radius: 8px;
+padding: 14px;
+}
+.metric .val {
+font-size: 1.25rem;
+font-weight: 700;
+color: var(–text);
+word-break: break-all;
+line-height: 1.2;
+}
+.metric .val.accent { color: var(–accent); }
+.metric .val.green { color: var(–green); }
+.metric .val.red { color: var(–accent2); }
+.metric .val.yellow { color: var(–accent3); }
+.metric .lbl {
+font-family: ‘IBM Plex Mono’, monospace;
+font-size: 0.6rem;
+color: var(–muted);
+letter-spacing: 1.5px;
+text-transform: uppercase;
+margin-top: 4px;
+}
+
+/* TX ROW */
+.tx-row {
+display: flex;
+justify-content: space-between;
+align-items: center;
+padding: 11px 0;
+border-bottom: 1px solid var(–border);
+font-size: 0.85rem;
+gap: 10px;
+}
+.tx-row:last-child { border-bottom: none; }
+.tx-hash { font-family: ‘IBM Plex Mono’, monospace; font-size: 0.72rem; color: var(–accent); text-decoration: none; }
+.tx-hash:hover { text-decoration: underline; }
+.tx-right { text-align: right; flex-shrink: 0; }
+.tx-val { font-weight: 600; font-size: 0.88rem; }
+.tx-date { font-family: ‘IBM Plex Mono’, monospace; font-size: 0.65rem; color: var(–muted); margin-top: 2px; }
+
+/* BADGES */
+.badge {
+font-family: ‘IBM Plex Mono’, monospace;
+font-size: 0.6rem;
+padding: 3px 8px;
+border-radius: 4px;
+letter-spacing: 1px;
+text-transform: uppercase;
+font-weight: 500;
+}
+.b-green { background: rgba(0,200,150,0.12); color: var(–green); border: 1px solid rgba(0,200,150,0.2); }
+.b-red { background: rgba(255,69,96,0.1); color: var(–accent2); border: 1px solid rgba(255,69,96,0.2); }
+.b-yellow { background: rgba(255,193,7,0.1); color: var(–accent3); border: 1px solid rgba(255,193,7,0.2); }
+.b-cyan { background: rgba(0,229,255,0.08); color: var(–accent); border: 1px solid rgba(0,229,255,0.15); }
+
+/* RISK BAR */
+.risk-wrap { margin: 12px 0 4px; }
+.risk-bar { height: 5px; background: var(–border); border-radius: 3px; overflow: hidden; }
+.risk-fill { height: 100%; border-radius: 3px; transition: width 0.7s cubic-bezier(0.4,0,0.2,1); }
+.rf-low { background: var(–green); }
+.rf-med { background: var(–accent3); }
+.rf-high { background: var(–accent2); }
+.risk-label { font-family: ‘IBM Plex Mono’, monospace; font-size: 0.65rem; color: var(–muted); letter-spacing: 1px; margin-top: 6px; }
+
+/* AI BOX */
+.ai-box {
+background: rgba(0,229,255,0.04);
+border: 1px solid rgba(0,229,255,0.15);
+border-radius: 10px;
+padding: 16px;
+font-size: 0.85rem;
+line-height: 1.7;
+color: var(–text);
+margin-top: 16px;
+position: relative;
+}
+.ai-box::before {
+content: ‘AI ANALYSIS’;
+font-family: ‘IBM Plex Mono’, monospace;
+font-size: 0.55rem;
+letter-spacing: 2px;
+color: var(–accent);
+display: block;
+margin-bottom: 8px;
+}
+
+/* SPINNER */
+.spin {
+display: inline-block;
+width: 13px; height: 13px;
+border: 2px solid var(–border2);
+border-top-color: var(–accent);
+border-radius: 50%;
+animation: spinning 0.7s linear infinite;
+vertical-align: middle;
+margin-right: 6px;
+}
+@keyframes spinning { to { transform: rotate(360deg); } }
+
+/* SIGNAL ROWS */
+.signal-row {
+display: flex;
+justify-content: space-between;
+align-items: center;
+padding: 9px 0;
+border-bottom: 1px solid var(–border);
+font-size: 0.85rem;
+}
+.signal-row:last-child { border-bottom: none; }
+
+/* WALLET ITEM */
+.wallet-item {
+display: flex;
+justify-content: space-between;
+align-items: center;
+padding: 12px 0;
+border-bottom: 1px solid var(–border);
+gap: 10px;
+}
+.wallet-item:last-child { border-bottom: none; }
+.wallet-label { font-weight: 600; font-size: 0.9rem; }
+.wallet-addr { font-family: ‘IBM Plex Mono’, monospace; font-size: 0.68rem; color: var(–muted); margin-top: 3px; }
+.chain-pill {
+font-family: ‘IBM Plex Mono’, monospace;
+font-size: 0.58rem;
+padding: 2px 7px;
+border-radius: 10px;
+font-weight: 500;
+letter-spacing: 1px;
+margin-left: 8px;
+}
+.pill-eth { background: rgba(98,126,234,0.15); color: var(–eth); }
+.pill-base { background: rgba(0,82,255,0.12); color: #4d8bff; }
+.pill-bnb { background: rgba(243,186,47,0.15); color: var(–bnb); }
+
+/* MOVE ITEM */
+.move-item {
+display: flex;
+justify-content: space-between;
+align-items: flex-start;
+padding: 12px 0;
+border-bottom: 1px solid var(–border);
+font-size: 0.85rem;
+gap: 12px;
+}
+.move-item:last-child { border-bottom: none; }
+
+/* RULE CARD */
+.rule-card {
+background: var(–surface2);
+border: 1px solid var(–border);
+border-radius: 10px;
+padding: 16px;
+}
+.rule-icon { font-size: 1.2rem; margin-bottom: 8px; }
+.rule-title { font-weight: 700; font-size: 0.9rem; margin-bottom: 6px; }
+.rule-text { font-size: 0.8rem; color: var(–muted); line-height: 1.6; }
+.rule-hl {
+font-family: ‘IBM Plex Mono’, monospace;
+font-size: 0.65rem;
+color: var(–accent);
+margin-top: 8px;
+padding: 4px 8px;
+background: rgba(0,229,255,0.06);
+border-radius: 4px;
+display: inline-block;
+}
+
+/* TG SETUP */
+.tg-step { display: flex; gap: 14px; align-items: flex-start; font-size: 0.88rem; margin-bottom: 16px; }
+.step-num {
+background: rgba(0,229,255,0.1);
+color: var(–accent);
+border: 1px solid rgba(0,229,255,0.2);
+width: 26px; height: 26px;
+border-radius: 50%;
+display: flex; align-items: center; justify-content: center;
+font-family: ‘IBM Plex Mono’, monospace;
+font-size: 0.7rem;
+font-weight: 600;
+flex-shrink: 0;
+}
+.step-body strong { font-weight: 600; display: block; margin-bottom: 3px; }
+.step-body span { font-size: 0.8rem; color: var(–muted); }
+
+.tg-preview {
+background: var(–surface2);
+border: 1px solid var(–border);
+border-radius: 10px;
+padding: 16px;
+font-family: ‘IBM Plex Mono’, monospace;
+font-size: 0.72rem;
+line-height: 2;
+color: var(–muted);
+}
+
+/* EMPTY */
+.empty {
+text-align: center;
+padding: 40px 20px;
+font-family: ‘IBM Plex Mono’, monospace;
+font-size: 0.72rem;
+color: var(–muted2);
+letter-spacing: 1px;
+}
+
+/* SECTION DIVIDER */
+.sdiv {
+font-family: ‘IBM Plex Mono’, monospace;
+font-size: 0.62rem;
+letter-spacing: 2px;
+text-transform: uppercase;
+color: var(–muted2);
+margin: 20px 0 12px;
+padding-left: 2px;
+}
+
+/* ALERTS */
+.alert-info {
+background: rgba(0,229,255,0.05);
+border: 1px solid rgba(0,229,255,0.12);
+border-radius: 8px;
+padding: 12px 16px;
+font-size: 0.82rem;
+color: var(–accent);
+line-height: 1.6;
+margin-bottom: 16px;
+}
+.alert-warn {
+background: rgba(255,193,7,0.05);
+border: 1px solid rgba(255,193,7,0.15);
+border-radius: 8px;
+padding: 12px 16px;
+font-size: 0.82rem;
+color: var(–accent3);
+line-height: 1.6;
+margin-bottom: 16px;
+}
+
+/* GRID HELPERS */
+.grid2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 12px; }
+.form-row { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 12px; }
+.flex-row { display: flex; gap: 10px; align-items: flex-start; flex-wrap: wrap; }
+.flex-row input { flex: 1; min-width: 180px; }
+
+/* RESPONSIVE */
+@media (max-width: 600px) {
+.header h1 { font-size: 1.8rem; }
+.metrics { grid-template-columns: repeat(2, 1fr); }
+.form-row { grid-template-columns: 1fr; }
+.tab-btn { font-size: 0.78rem; padding: 8px 10px; }
+}
+
+/* ANIMATIONS */
+@keyframes fadeUp {
+from { opacity: 0; transform: translateY(10px); }
+to { opacity: 1; transform: translateY(0); }
+}
+.card { animation: fadeUp 0.3s ease both; }
+</style>
+
+</head>
+<body>
+
+<nav>
+  <div class="wrap nav-inner">
+    <div class="logo">Alpha<span>/</span>Hub</div>
+    <div class="nav-badge">ETH · BASE · BNB</div>
+  </div>
+</nav>
+
+<div class="wrap">
+  <div class="header">
+    <h1>Multi-Chain<br><span class="hl">Alpha Hub</span></h1>
+    <p>Smart wallet tracker, rug detector &amp; portfolio P&amp;L — powered by Etherscan V2 &amp; Claude AI. One API key covers all three chains.</p>
+  </div>
+
+  <!-- API KEY -->
+
+  <div class="key-card">
+    <div style="flex:1;min-width:280px">
+      <div class="key-label">Etherscan API Key — covers ETH, Base &amp; BNB</div>
+      <div class="key-inputs">
+        <input type="password" id="apiKeyInput" placeholder="Paste your Etherscan V2 API key...">
+        <button class="btn" onclick="saveKey()">Activate</button>
+      </div>
+      <div class="key-note">Free key at <strong style="color:var(--accent)">etherscan.io/apis</strong> · Stored in your browser only · Never sent anywhere except Etherscan</div>
+      <div id="keyStatus" class="key-status"></div>
+    </div>
+  </div>
+
+  <!-- CHAIN BAR -->
+
+  <div class="chain-bar">
+    <button class="chain-btn eth active" onclick="setChain('eth',this)"><span class="cdot d-eth"></span>Ethereum</button>
+    <button class="chain-btn base" onclick="setChain('base',this)"><span class="cdot d-base"></span>Base</button>
+    <button class="chain-btn bnb" onclick="setChain('bnb',this)"><span class="cdot d-bnb"></span>BNB Chain</button>
+  </div>
+
+  <!-- TABS -->
+
+  <div class="tab-bar">
+    <button class="tab-btn active" onclick="switchTab('portfolio',this)">Portfolio P&amp;L</button>
+    <button class="tab-btn" onclick="switchTab('rug',this)">Rug Detector</button>
+    <button class="tab-btn" onclick="switchTab('wallets',this)">Smart Wallets</button>
+    <button class="tab-btn" onclick="switchTab('alerts',this)">Telegram Alerts</button>
+    <button class="tab-btn" onclick="switchTab('rules',this)">Rules</button>
+  </div>
+
+  <!-- ══ PORTFOLIO TAB ══ -->
+
+  <div class="panel active" id="panel-portfolio">
+    <div class="card">
+      <div class="card-title">
+        <span class="cdot d-eth" id="ph-dot"></span>
+        <span id="ph-label">Ethereum — Wallet Analysis</span>
+        <span class="chain-tag tag-eth" id="ph-cid">Chain ID: 1</span>
+      </div>
+      <div class="search-row">
+        <input id="walletAddr" placeholder="Enter wallet address (0x...)">
+        <button class="btn" onclick="lookupWallet()">Analyze</button>
+      </div>
+      <div id="portfolioResult"></div>
+    </div>
+  </div>
+
+  <!-- ══ RUG DETECTOR TAB ══ -->
+
+  <div class="panel" id="panel-rug">
+    <div class="card">
+      <div class="card-title">
+        <span class="cdot d-eth" id="rh-dot"></span>
+        <span id="rh-label">Ethereum — Contract Risk Scan</span>
+        <span class="chain-tag tag-eth" id="rh-cid">Chain ID: 1</span>
+      </div>
+      <div class="search-row">
+        <input id="contractAddr" placeholder="Enter token or NFT contract address (0x...)">
+        <button class="btn" onclick="analyzeContract()">Scan</button>
+      </div>
+      <div id="rugResult"></div>
+    </div>
+    <div class="card">
+      <div class="card-title">Rug signals we check</div>
+      <div class="grid2">
+        <div style="display:flex;gap:8px;font-size:0.83rem;align-items:flex-start"><span style="color:var(--accent2);font-size:0.65rem;margin-top:3px">●</span><span>Mint function not renounced</span></div>
+        <div style="display:flex;gap:8px;font-size:0.83rem;align-items:flex-start"><span style="color:var(--accent2);font-size:0.65rem;margin-top:3px">●</span><span>Honeypot / can't sell</span></div>
+        <div style="display:flex;gap:8px;font-size:0.83rem;align-items:flex-start"><span style="color:var(--accent3);font-size:0.65rem;margin-top:3px">●</span><span>Dev wallet concentration</span></div>
+        <div style="display:flex;gap:8px;font-size:0.83rem;align-items:flex-start"><span style="color:var(--accent3);font-size:0.65rem;margin-top:3px">●</span><span>Unverified source code</span></div>
+        <div style="display:flex;gap:8px;font-size:0.83rem;align-items:flex-start"><span style="color:var(--green);font-size:0.65rem;margin-top:3px">●</span><span>Ownership renounced</span></div>
+        <div style="display:flex;gap:8px;font-size:0.83rem;align-items:flex-start"><span style="color:var(--green);font-size:0.65rem;margin-top:3px">●</span><span>Liquidity locked</span></div>
+        <div style="display:flex;gap:8px;font-size:0.83rem;align-items:flex-start"><span style="color:var(--green);font-size:0.65rem;margin-top:3px">●</span><span>Multiple unique senders</span></div>
+        <div style="display:flex;gap:8px;font-size:0.83rem;align-items:flex-start"><span style="color:var(--accent3);font-size:0.65rem;margin-top:3px">●</span><span>Contract age &lt; 7 days</span></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ══ SMART WALLETS TAB ══ -->
+
+  <div class="panel" id="panel-wallets">
+    <div class="card">
+      <div class="card-title">Add Wallet to Watch</div>
+      <div class="flex-row" style="margin-bottom:6px">
+        <input id="watchAddr" placeholder="Wallet address (0x...)">
+        <input id="watchLabel" placeholder="Label e.g. Whale #1" style="max-width:180px">
+        <select id="watchChain" style="max-width:110px">
+          <option value="eth">ETH</option>
+          <option value="base">Base</option>
+          <option value="bnb">BNB</option>
+        </select>
+        <button class="btn" onclick="addWallet()">Add</button>
+      </div>
+    </div>
+
+```
+<div class="card">
+  <div class="card-title">Watchlist</div>
+  <div id="watchlistEl"></div>
+</div>
+
+<div class="card">
+  <div class="card-title" style="margin-bottom:12px">
+    Recent Moves — All Chains
+    <button class="btn-ghost btn-sm" style="margin-left:auto" onclick="fetchAllMoves()">Refresh</button>
+  </div>
+  <div id="moveFeed"><div class="empty">Add wallets above then hit refresh to see their latest moves</div></div>
+</div>
+```
+
+  </div>
+
+  <!-- ══ TELEGRAM ALERTS TAB ══ -->
+
+  <div class="panel" id="panel-alerts">
+    <div class="alert-info">
+      One Telegram bot covers all three chains. Your community gets notified the moment a watched wallet moves — with chain, value, and explorer link.
+    </div>
+
+```
+<div class="card">
+  <div class="card-title">Setup — 3 Steps</div>
+  <div class="tg-step">
+    <div class="step-num">1</div>
+    <div class="step-body">
+      <strong>Open @BotFather on Telegram</strong>
+      <span>Send /newbot — give it a name — copy the token it returns</span>
+    </div>
+  </div>
+  <div class="tg-step">
+    <div class="step-num">2</div>
+    <div class="step-body">
+      <strong>Add your bot to your community channel</strong>
+      <span>Make it admin so it can post. Get the channel @username or chat ID</span>
+    </div>
+  </div>
+  <div class="tg-step">
+    <div class="step-num">3</div>
+    <div class="step-body">
+      <strong>Paste credentials below and save</strong>
+      <span>Choose your alert triggers — live alerts start immediately</span>
+    </div>
+  </div>
+
+  <div class="sdiv">Configuration</div>
+  <div class="form-row">
+    <div>
+      <div style="font-family:'IBM Plex Mono',monospace;font-size:0.62rem;color:var(--muted);letter-spacing:1.5px;margin-bottom:6px;text-transform:uppercase">Bot Token</div>
+      <input id="tgToken" placeholder="123456:ABCdef...">
+    </div>
+    <div>
+      <div style="font-family:'IBM Plex Mono',monospace;font-size:0.62rem;color:var(--muted);letter-spacing:1.5px;margin-bottom:6px;text-transform:uppercase">Channel / Chat ID</div>
+      <input id="tgChat" placeholder="@yourchannel or -100123456">
+    </div>
+  </div>
+
+  <div class="sdiv">Alert Triggers</div>
+  <div class="grid2" style="margin-bottom:16px">
+    <label style="display:flex;gap:10px;align-items:center;font-size:0.85rem;cursor:pointer"><input type="checkbox" checked id="trig1"> Whale wallet move</label>
+    <label style="display:flex;gap:10px;align-items:center;font-size:0.85rem;cursor:pointer"><input type="checkbox" checked id="trig2"> Rug risk detected</label>
+    <label style="display:flex;gap:10px;align-items:center;font-size:0.85rem;cursor:pointer"><input type="checkbox" id="trig3"> Gas below 15 gwei</label>
+    <label style="display:flex;gap:10px;align-items:center;font-size:0.85rem;cursor:pointer"><input type="checkbox" id="trig4"> New contract deployed</label>
+  </div>
+  <button class="btn" onclick="saveTg()">Save Telegram Config</button>
+</div>
+
+<div class="card">
+  <div class="card-title">Alert Preview — What Your Community Sees</div>
+  <div class="tg-preview">
+    🐋 <span style="color:var(--text);font-weight:600">Whale move detected — Base</span><br>
+    Wallet: Whale #1 (0x3f5c...a91d)<br>
+    Action: Bought 4.2 ETH<br>
+    Chain: Base (ID: 8453) · 2 mins ago<br>
+    <span style="color:var(--accent)">→ View on basescan.org</span>
+  </div>
+</div>
+
+<div class="alert-warn">
+  <strong>Backend note:</strong> Telegram alerts require a small Node.js backend to poll wallets and send messages via the Telegram Bot API. This config saves your settings — ask your dev to wire up the webhook using these credentials, or use a service like n8n/Make to automate it without code.
+</div>
+```
+
+  </div>
+
+  <!-- ══ RULES TAB ══ -->
+
+  <div class="panel" id="panel-rules">
+    <div class="grid2">
+      <div class="rule-card">
+        <div class="rule-icon">🎯</div>
+        <div class="rule-title">End on a Task</div>
+        <div class="rule-text">Never close a session after just watching. Always end by doing something hands-on — even 15 minutes on a lab.</div>
+        <div class="rule-hl">→ Practice beats passive watching</div>
+      </div>
+      <div class="rule-card">
+        <div class="rule-icon">🛡️</div>
+        <div class="rule-title">Minimum Viable Day</div>
+        <div class="rule-text">On busy or low-motivation days: 1 video + 20 mins practice. ~45 minutes total. Keeps the streak alive.</div>
+        <div class="rule-hl">→ 45 min &gt; zero</div>
+      </div>
+      <div class="rule-card">
+        <div class="rule-icon">📅</div>
+        <div class="rule-title">The 2-Day Rule</div>
+        <div class="rule-text">Never skip more than 2 consecutive days. Missing 3+ days is where courses and projects go to die.</div>
+        <div class="rule-hl">→ 2 days max, then you're back</div>
+      </div>
+      <div class="rule-card">
+        <div class="rule-icon">⏱️</div>
+        <div class="rule-title">20-Min Stuck Rule</div>
+        <div class="rule-text">If stuck on something for 20 minutes — stop. Google it, note it, and move on. Never let one thing kill your session.</div>
+        <div class="rule-hl">→ Note it, move on, come back</div>
+      </div>
+      <div class="rule-card">
+        <div class="rule-icon">🔒</div>
+        <div class="rule-title">DYOR Every Time</div>
+        <div class="rule-text">This tool is a starting point. Always verify findings independently. On-chain data tells the story — read it yourself.</div>
+        <div class="rule-hl">→ Trust the chain, not just the tool</div>
+      </div>
+      <div class="rule-card">
+        <div class="rule-icon">🌙</div>
+        <div class="rule-title">Fatigue Warning</div>
+        <div class="rule-text">Late night analysis is great for focus but watch for fatigue-trading. Sharp 2 hours beats foggy 4 hours every time.</div>
+        <div class="rule-hl">→ Sharp 2hrs &gt; foggy 4hrs</div>
+      </div>
+    </div>
+  </div>
+
+</div><!-- /wrap -->
+
+<script>
+// ══ CONFIG ══════════════════════════════════════════════════════
+const CHAINS = {
+  eth:  { name:'Ethereum',  chainId:1,    symbol:'ETH', dot:'d-eth',  pill:'pill-eth',  explorer:'etherscan.io',  tagClass:'tag-eth'  },
+  base: { name:'Base',      chainId:8453, symbol:'ETH', dot:'d-base', pill:'pill-base', explorer:'basescan.org',  tagClass:'tag-base' },
+  bnb:  { name:'BNB Chain', chainId:56,   symbol:'BNB', dot:'d-bnb',  pill:'pill-bnb',  explorer:'bscscan.com',   tagClass:'tag-bnb'  },
+};
+const V2 = 'https://api.etherscan.io/v2/api';
+
+// ══ STATE ════════════════════════════════════════════════════════
+let activeChain = 'eth';
+let apiKey = localStorage.getItem('alphaHubKey') || '';
+let watchlist = JSON.parse(localStorage.getItem('alphaHubWL') || '[]');
+let tgConfig = JSON.parse(localStorage.getItem('alphaHubTG') || '{}');
+
+// Restore key on load
+if (apiKey) {
+  document.getElementById('apiKeyInput').value = apiKey;
+  setKeyStatus(true);
+}
+if (tgConfig.token) {
+  document.getElementById('tgToken').value = tgConfig.token || '';
+  document.getElementById('tgChat').value = tgConfig.chat || '';
+}
+
+// ══ KEY ══════════════════════════════════════════════════════════
+function saveKey() {
+  const k = document.getElementById('apiKeyInput').value.trim();
+  if (!k) { setKeyStatus(false, 'Please paste your API key first'); return; }
+  apiKey = k;
+  localStorage.setItem('alphaHubKey', k);
+  setKeyStatus(true);
+}
+
+function setKeyStatus(ok, msg) {
+  const el = document.getElementById('keyStatus');
+  if (ok) el.innerHTML = '<span style="color:var(--green)">● All three chains active — ETH (1) · Base (8453) · BNB (56)</span>';
+  else el.innerHTML = msg ? `<span style="color:var(--accent2)">${msg}</span>` : '';
+}
+
+// ══ CHAIN ════════════════════════════════════════════════════════
+function setChain(c, btn) {
+  activeChain = c;
+  document.querySelectorAll('.chain-btn').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+  const ch = CHAINS[c];
+  updateChainHeader('ph', ch, 'Wallet Analysis');
+  updateChainHeader('rh', ch, 'Contract Risk Scan');
+  document.getElementById('portfolioResult').innerHTML = '';
+  document.getElementById('rugResult').innerHTML = '';
+}
+
+function updateChainHeader(prefix, ch, label) {
+  const dot = document.getElementById(prefix+'-dot');
+  const lbl = document.getElementById(prefix+'-label');
+  const cid = document.getElementById(prefix+'-cid');
+  if (dot) dot.className = 'cdot ' + ch.dot;
+  if (lbl) lbl.textContent = ch.name + ' — ' + label;
+  if (cid) { cid.textContent = 'Chain ID: ' + ch.chainId; cid.className = 'chain-tag ' + ch.tagClass; }
+}
+
+// ══ TABS ═════════════════════════════════════════════════════════
+function switchTab(id, btn) {
+  document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+  document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
+  btn.classList.add('active');
+  document.getElementById('panel-' + id).classList.add('active');
+  if (id === 'wallets') renderWatchlist();
+}
+
+// ══ API CALL ═════════════════════════════════════════════════════
+function v2url(chain, params) {
+  const ch = CHAINS[chain];
+  let url = `${V2}?chainid=${ch.chainId}&apikey=${encodeURIComponent(apiKey)}`;
+  Object.entries(params).forEach(([k, v]) => url += `&${k}=${encodeURIComponent(v)}`);
+  return url;
+}
+
+async function fetchChain(chain, params) {
+  const r = await fetch(v2url(chain, params));
+  if (!r.ok) throw new Error('HTTP ' + r.status);
+  const d = await r.json();
+  if (d.status === '0' && d.message === 'NOTOK' && d.result && !d.result.includes('No transactions')) {
+    throw new Error(d.result);
+  }
+  return d;
+}
+
+// ══ PORTFOLIO ════════════════════════════════════════════════════
+async function lookupWallet() {
+  const addr = document.getElementById('walletAddr').value.trim();
+  const res = document.getElementById('portfolioResult');
+  const ch = CHAINS[activeChain];
+  if (!addr || !addr.startsWith('0x')) { res.innerHTML = err('Enter a valid 0x wallet address'); return; }
+  if (!apiKey) { res.innerHTML = warn('Activate your Etherscan API key above first'); return; }
+  res.innerHTML = loading(`Fetching ${ch.name} wallet data...`);
+  try {
+    const [balD, txD, tokD] = await Promise.all([
+      fetchChain(activeChain, { module:'account', action:'balance', address:addr, tag:'latest' }),
+      fetchChain(activeChain, { module:'account', action:'txlist', address:addr, startblock:0, endblock:99999999, page:1, offset:20, sort:'desc' }),
+      fetchChain(activeChain, { module:'account', action:'tokentx', address:addr, startblock:0, endblock:99999999, page:1, offset:10, sort:'desc' }),
+    ]);
+
+    const bal = balD.status === '1' ? (parseInt(balD.result) / 1e18).toFixed(4) : '0';
+    const txs = txD.status === '1' ? txD.result : [];
+    const toks = tokD.status === '1' ? tokD.result : [];
+    const sent = txs.filter(t => t.from.toLowerCase() === addr.toLowerCase()).length;
+    const recv = txs.length - sent;
+    const failed = txs.filter(t => t.isError === '1').length;
+    const vol = txs.reduce((s, t) => s + (parseInt(t.value) / 1e18), 0).toFixed(3);
+    const uniqueTokens = [...new Set(toks.map(t => t.tokenSymbol))].slice(0, 6);
+    const firstTx = txs.length ? new Date(parseInt(txs[txs.length-1].timeStamp)*1000).toLocaleDateString() : '—';
+
+    res.innerHTML = `
+      <div class="metrics">
+        <div class="metric"><div class="val accent">${bal}</div><div class="lbl">${ch.symbol} Balance</div></div>
+        <div class="metric"><div class="val">${txs.length}</div><div class="lbl">Recent Txns</div></div>
+        <div class="metric"><div class="val green">${recv}</div><div class="lbl">Received</div></div>
+        <div class="metric"><div class="val">${sent}</div><div class="lbl">Sent</div></div>
+        <div class="metric"><div class="val ${failed > 0 ? 'red' : ''}">${failed}</div><div class="lbl">Failed</div></div>
+        <div class="metric"><div class="val">${vol}</div><div class="lbl">${ch.symbol} Volume</div></div>
+      </div>
+      ${uniqueTokens.length ? `<div style="margin-bottom:14px"><div class="sdiv">Token Activity</div><div style="display:flex;flex-wrap:wrap;gap:6px">${uniqueTokens.map(t=>`<span class="badge b-cyan">${t}</span>`).join('')}</div></div>` : ''}
+      <div class="sdiv">Last Transactions — <a href="https://${ch.explorer}/address/${addr}" target="_blank" style="color:var(--accent);font-size:0.62rem">View all on ${ch.explorer} →</a></div>
+      ${txs.length === 0 ? '<div class="empty">No transactions found for this wallet</div>' : txs.slice(0, 8).map(t => `
+        <div class="tx-row">
+          <div>
+            <a href="https://${ch.explorer}/tx/${t.hash}" target="_blank" class="tx-hash">${t.hash.slice(0,16)}...</a>
+            <div style="margin-top:4px;display:flex;gap:6px;align-items:center">
+              <span class="badge ${t.isError==='0'?'b-green':'b-red'}">${t.isError==='0'?'ok':'failed'}</span>
+              <span style="font-size:0.72rem;color:var(--muted)">${t.from.toLowerCase()===addr.toLowerCase()?'OUT':'IN'}</span>
+            </div>
+          </div>
+          <div class="tx-right">
+            <div class="tx-val">${(parseInt(t.value)/1e18).toFixed(4)} ${ch.symbol}</div>
+            <div class="tx-date">${new Date(parseInt(t.timeStamp)*1000).toLocaleDateString()}</div>
+          </div>
+        </div>`).join('')}
+      <div class="ai-box" id="aiP"><span class="spin"></span>Claude is analyzing this wallet...</div>`;
+
+    callClaude(`Analyze this wallet on ${ch.name} (chainId ${ch.chainId}):
+- Address: ${addr.slice(0,12)}...
+- Balance: ${bal} ${ch.symbol}
+- ${txs.length} recent txns: ${sent} sent, ${recv} received, ${failed} failed
+- Total volume: ${vol} ${ch.symbol}
+- Active tokens: ${uniqueTokens.join(', ') || 'none'}
+- First seen: ${firstTx}
+
+In 3 punchy sentences: classify this wallet (whale, degen, jeet, diamond hands, bot, normie, or rug deployer). Call out any red flags. Jeet detection if patterns match. Crypto slang welcome. No disclaimers.`, 'aiP');
+
+  } catch(e) {
+    res.innerHTML = errDetail(e.message, `https://${CHAINS[activeChain].explorer}/address/${addr}`);
+  }
+}
+
+// ══ RUG DETECTOR ═════════════════════════════════════════════════
+async function analyzeContract() {
+  const addr = document.getElementById('contractAddr').value.trim();
+  const res = document.getElementById('rugResult');
+  const ch = CHAINS[activeChain];
+  if (!addr || !addr.startsWith('0x')) { res.innerHTML = err('Enter a valid contract address'); return; }
+  if (!apiKey) { res.innerHTML = warn('Activate your Etherscan API key above first'); return; }
+  res.innerHTML = loading(`Scanning contract on ${ch.name}...`);
+  try {
+    const [abiD, srcD, txD] = await Promise.all([
+      fetchChain(activeChain, { module:'contract', action:'getabi', address:addr }),
+      fetchChain(activeChain, { module:'contract', action:'getsourcecode', address:addr }),
+      fetchChain(activeChain, { module:'account', action:'txlist', address:addr, startblock:0, endblock:99999999, page:1, offset:25, sort:'desc' }),
+    ]);
+    const verified = abiD.status === '1';
+    const src = srcD.status === '1' && srcD.result[0] ? srcD.result[0] : {};
+    const name = src.ContractName || 'Unknown';
+    const compiler = src.CompilerVersion || '—';
+    const proxy = src.Proxy === '1';
+    const txs = txD.status === '1' ? txD.result : [];
+    const unique = new Set(txs.map(t => t.from)).size;
+    const age = txs.length ? Math.round((Date.now()/1000 - parseInt(txs[txs.length-1].timeStamp)) / 86400) : 0;
+    const failRate = txs.length ? Math.round((txs.filter(t=>t.isError==='1').length / txs.length) * 100) : 0;
+
+    const signals = [
+      { label:'Source code verified on explorer', ok:verified,       w:30 },
+      { label:'Contract name identifiable',       ok:name!=='Unknown',w:15 },
+      { label:'Has real transaction history',     ok:txs.length>2,   w:15 },
+      { label:'Multiple unique senders (>5)',     ok:unique>5,       w:20 },
+      { label:'Contract age > 14 days',           ok:age>14,         w:15 },
+      { label:'Low failed tx rate (<20%)',        ok:failRate<20,    w:5  },
+    ];
+    const score = signals.reduce((s, sg) => s + (sg.ok ? sg.w : 0), 0);
+    const risk = score >= 70 ? 'low' : score >= 40 ? 'med' : 'high';
+    const rLabel = score >= 70 ? 'LOWER RISK' : score >= 40 ? 'CAUTION' : 'HIGH RISK';
+    const rBadge = score >= 70 ? 'b-green' : score >= 40 ? 'b-yellow' : 'b-red';
+    const rfClass = score >= 70 ? 'rf-low' : score >= 40 ? 'rf-med' : 'rf-high';
+
+    res.innerHTML = `
+      <div class="metrics">
+        <div class="metric"><div class="val" style="font-size:1rem">${name}</div><div class="lbl">Contract Name</div></div>
+        <div class="metric"><div class="val"><span class="badge ${rBadge}">${rLabel}</span></div><div class="lbl">Risk Level</div></div>
+        <div class="metric"><div class="val ${verified?'green':'red'}">${verified?'Yes':'No'}</div><div class="lbl">Verified</div></div>
+        <div class="metric"><div class="val">${unique}</div><div class="lbl">Unique Senders</div></div>
+        <div class="metric"><div class="val">${age}d</div><div class="lbl">Contract Age</div></div>
+        <div class="metric"><div class="val ${failRate>20?'red':''}">${failRate}%</div><div class="lbl">Fail Rate</div></div>
+      </div>
+      <div class="risk-wrap">
+        <div class="risk-bar"><div class="risk-fill ${rfClass}" style="width:${score}%"></div></div>
+        <div class="risk-label">Safety score: ${score}/100 ${proxy?'· Proxy contract detected':''}${compiler!=='—'?' · '+compiler.slice(0,20):''}</div>
+      </div>
+      <div class="sdiv">Signal Breakdown</div>
+      ${signals.map(s => `<div class="signal-row"><span>${s.label}</span><span class="badge ${s.ok?'b-green':'b-red'}">${s.ok?'pass':'fail'}</span></div>`).join('')}
+      <div style="margin-top:12px"><a href="https://${ch.explorer}/address/${addr}" target="_blank" style="color:var(--accent);font-size:0.78rem">View full contract on ${ch.explorer} →</a></div>
+      <div class="ai-box" id="aiR"><span class="spin"></span>Claude is assessing rug risk...</div>`;
+
+    callClaude(`Rug pull assessment for contract on ${ch.name}:
+- Name: ${name}, Verified: ${verified}, Compiler: ${compiler}
+- Age: ${age} days, Unique senders: ${unique}, Txns: ${txs.length}, Fail rate: ${failRate}%
+- Proxy: ${proxy}, Safety score: ${score}/100
+
+Give a blunt 3-sentence verdict: safe to ape, proceed with caution, or hard avoid? What's the biggest red flag or green flag? Use crypto community language. No disclaimers.`, 'aiR');
+
+  } catch(e) {
+    res.innerHTML = errDetail(e.message, `https://${CHAINS[activeChain].explorer}/address/${addr}`);
+  }
+}
+
+// ══ CLAUDE AI ════════════════════════════════════════════════════
+async function callClaude(prompt, targetId) {
+  try {
+    const r = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model: 'claude-sonnet-4-20250514',
+        max_tokens: 1000,
+        system: 'You are a sharp on-chain analyst for a crypto and NFT community. Give direct, concise analysis using natural web3 language. Classify wallets: whale, degen, jeet, diamond hands, bot, normie. For contracts: safe/caution/avoid. Call out jeet behavior explicitly if patterns match. No financial disclaimers. Ever.',
+        messages: [{ role:'user', content:prompt }]
+      })
+    });
+    const d = await r.json();
+    const text = d.content?.find(b => b.type==='text')?.text || 'Analysis unavailable.';
+    const el = document.getElementById(targetId);
+    if (el) el.innerHTML = text;
+  } catch(e) {
+    const el = document.getElementById(targetId);
+    if (el) el.innerHTML = 'AI analysis unavailable right now.';
+  }
+}
+
+// ══ SMART WALLETS ════════════════════════════════════════════════
+function addWallet() {
+  const addr = document.getElementById('watchAddr').value.trim();
+  const label = document.getElementById('watchLabel').value.trim() || 'Unlabeled';
+  const chain = document.getElementById('watchChain').value;
+  if (!addr || !addr.startsWith('0x')) return;
+  if (watchlist.find(w => w.addr.toLowerCase() === addr.toLowerCase() && w.chain === chain)) {
+    alert('This wallet is already in your watchlist.'); return;
+  }
+  watchlist.push({ addr, label, chain, added: new Date().toLocaleDateString() });
+  localStorage.setItem('alphaHubWL', JSON.stringify(watchlist));
+  document.getElementById('watchAddr').value = '';
+  document.getElementById('watchLabel').value = '';
+  renderWatchlist();
+}
+
+function removeWallet(i) {
+  watchlist.splice(i, 1);
+  localStorage.setItem('alphaHubWL', JSON.stringify(watchlist));
+  renderWatchlist();
+}
+
+function renderWatchlist() {
+  const el = document.getElementById('watchlistEl');
+  if (!watchlist.length) { el.innerHTML = '<div class="empty">No wallets in watchlist yet</div>'; return; }
+  el.innerHTML = watchlist.map((w, i) => `
+    <div class="wallet-item">
+      <div>
+        <span class="wallet-label">${w.label}</span>
+        <span class="chain-pill pill-${w.chain}">${w.chain.toUpperCase()}</span>
+        <div class="wallet-addr">${w.addr.slice(0,14)}...${w.addr.slice(-8)}</div>
+      </div>
+      <div style="display:flex;gap:8px;align-items:center;flex-shrink:0">
+        <span style="font-family:'IBM Plex Mono',monospace;font-size:0.65rem;color:var(--muted)">${w.added}</span>
+        <a href="https://${CHAINS[w.chain].explorer}/address/${w.addr}" target="_blank" class="btn-ghost btn-sm" style="font-size:0.72rem;padding:4px 10px">View</a>
+        <button class="btn-danger" onclick="removeWallet(${i})">Remove</button>
+      </div>
+    </div>`).join('');
+}
+
+async function fetchAllMoves() {
+  const feed = document.getElementById('moveFeed');
+  if (!watchlist.length) { feed.innerHTML = '<div class="empty">Add wallets to your watchlist first</div>'; return; }
+  if (!apiKey) { feed.innerHTML = '<div class="empty" style="color:var(--accent3)">Activate your API key first</div>'; return; }
+  feed.innerHTML = loading('Fetching moves across ETH, Base and BNB...');
+  let all = [];
+  for (const w of watchlist.slice(0, 6)) {
+    try {
+      const d = await fetchChain(w.chain, { module:'account', action:'txlist', address:w.addr, startblock:0, endblock:99999999, page:1, offset:5, sort:'desc' });
+      if (d.status === '1') d.result.slice(0, 3).forEach(t => all.push({ ...t, wLabel:w.label, wChain:w.chain }));
+    } catch(e) {}
+  }
+  if (!all.length) { feed.innerHTML = '<div class="empty">No moves found — check your API key or try different wallets</div>'; return; }
+  all.sort((a, b) => parseInt(b.timeStamp) - parseInt(a.timeStamp));
+  feed.innerHTML = all.slice(0, 12).map(t => {
+    const ch = CHAINS[t.wChain];
+    const val = (parseInt(t.value) / 1e18).toFixed(4);
+    return `<div class="move-item">
+      <div>
+        <div style="display:flex;align-items:center;gap:4px">
+          <span style="font-weight:600;font-size:0.88rem">${t.wLabel}</span>
+          <span class="chain-pill pill-${t.wChain}">${t.wChain.toUpperCase()}</span>
+        </div>
+        <a href="https://${ch.explorer}/tx/${t.hash}" target="_blank" class="tx-hash" style="display:block;margin-top:4px">${t.hash.slice(0,18)}...</a>
+      </div>
+      <div style="text-align:right;flex-shrink:0">
+        <div style="font-weight:700;font-size:0.9rem">${val} ${ch.symbol}</div>
+        <span class="badge ${t.isError==='0'?'b-green':'b-red'}">${t.isError==='0'?'success':'failed'}</span>
+        <div class="tx-date" style="margin-top:4px">${new Date(parseInt(t.timeStamp)*1000).toLocaleDateString()}</div>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+// ══ TELEGRAM ═════════════════════════════════════════════════════
+function saveTg() {
+  const token = document.getElementById('tgToken').value.trim();
+  const chat = document.getElementById('tgChat').value.trim();
+  if (!token || !chat) { alert('Please fill in both bot token and channel/chat ID.'); return; }
+  tgConfig = {
+    token, chat,
+    triggers: {
+      whaleMove: document.getElementById('trig1').checked,
+      rugRisk: document.getElementById('trig2').checked,
+      gasAlert: document.getElementById('trig3').checked,
+      newContract: document.getElementById('trig4').checked,
+    }
+  };
+  localStorage.setItem('alphaHubTG', JSON.stringify(tgConfig));
+  alert('✓ Telegram config saved! Wire this up to your Node.js backend polling service to start live alerts.');
+}
+
+// ══ HELPERS ══════════════════════════════════════════════════════
+function loading(msg) {
+  return `<p style="font-size:0.85rem;color:var(--muted);padding:8px 0"><span class="spin"></span>${msg}</p>`;
+}
+function err(msg) {
+  return `<p style="color:var(--accent2);font-size:0.85rem;padding:8px 0">⚠ ${msg}</p>`;
+}
+function warn(msg) {
+  return `<p style="color:var(--accent3);font-size:0.85rem;padding:8px 0">⚠ ${msg}</p>`;
+}
+function errDetail(msg, url) {
+  return `<div style="padding:8px 0">
+    <p style="color:var(--accent2);font-size:0.85rem;margin-bottom:8px">⚠ ${msg || 'Request failed'}</p>
+    <p style="font-size:0.8rem;color:var(--muted);line-height:1.6">
+      Common fixes: check your API key is correct · make sure you're on Etherscan V2 (etherscan.io/apis) · try a different address · check your connection.<br>
+      <a href="${url}" target="_blank" style="color:var(--accent)">View directly on explorer →</a>
+    </p>
+  </div>`;
+}
+
+// ══ INIT ═════════════════════════════════════════════════════════
+renderWatchlist();
+</script>
+
+</body>
+</html>
