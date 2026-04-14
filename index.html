@@ -587,7 +587,7 @@
 <div class="wrap">
   <div class="header">
     <h1>Multi-Chain<br><span class="hl">Alpha Hub</span></h1>
-    <p>Smart wallet tracker, rug detector &amp; portfolio P&amp;L — powered by Etherscan V2 &amp; Claude AI. One API key covers all three chains.</p>
+    <p>Smart wallet tracker, rug detector &amp; portfolio P&amp;L — powered by Etherscan V2 &amp; Gemini AI. One API key covers all three chains.</p>
   </div>
 
   <!-- API KEY -->
@@ -825,30 +825,7 @@ const CHAINS = {
 const V2 = 'https://api.etherscan.io/v2/api';
 
 // ── Claude-as-proxy: fetch on-chain data via Claude's tool_use ───
-async function fetchViaGemini(chain, params) {
-  const geminiKey = localStorage.getItem('alphaHubClaudeKey') || '';
-  if (!geminiKey) throw new Error('No Gemini API key set');
-  const ch = CHAINS[chain];
-  let url = `${V2}?chainid=${ch.chainId}&apikey=${encodeURIComponent(apiKey)}`;
-  Object.entries(params).forEach(([k,v]) => url += `&${k}=${encodeURIComponent(v)}`);
-
-  const r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${geminiKey}`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      contents: [{ parts: [{ text: `Fetch this Etherscan API URL and return ONLY the raw JSON response, no commentary: ${url}` }] }],
-      tools: [{ google_search: {} }],
-      generationConfig: { temperature: 0, maxOutputTokens: 8192 }
-    })
-  });
-  const d = await r.json();
-  const text = d.candidates?.[0]?.content?.parts?.[0]?.text || '';
-  const jsonMatch = text.match(/\{[\s\S]*\}/);
-  if (jsonMatch) {
-    try { return JSON.parse(jsonMatch[0]); } catch(e) {}
-  }
-  throw new Error('Gemini could not retrieve data');
-}
+// fetchViaGemini removed — corsproxy.io handles CORS directly
 
 // ══ STATE ════════════════════════════════════════════════════════
 let activeChain = 'eth';
@@ -962,21 +939,32 @@ function v2url(chain, params) {
   return url;
 }
 
+function proxiedUrl(chain, params) {
+  // corsproxy.io is a free CORS proxy — prepend to bypass GitHub Pages CORS block
+  return 'https://corsproxy.io/?' + encodeURIComponent(v2url(chain, params));
+}
+
 async function fetchChain(chain, params) {
-  try {
-    // Try direct fetch first (works on Vercel/local, not GitHub Pages)
-    const r = await fetch(v2url(chain, params));
-    if (!r.ok) throw new Error('HTTP ' + r.status);
-    const d = await r.json();
-    if (d.status === '0' && d.message === 'NOTOK' && d.result && !d.result.includes('No transactions') && !d.result.includes('No records')) {
-      throw new Error(d.result);
+  // Try direct first (works on Vercel), fall back to corsproxy.io (works on GitHub Pages)
+  const urls = [v2url(chain, params), proxiedUrl(chain, params)];
+  let lastErr = null;
+  for (const url of urls) {
+    try {
+      const r = await fetch(url);
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      const d = await r.json();
+      if (d.status === '0' && d.message === 'NOTOK' && d.result &&
+          !d.result.includes('No transactions') && !d.result.includes('No records') &&
+          !d.result.includes('No token')) {
+        throw new Error(d.result);
+      }
+      return d;
+    } catch(e) {
+      lastErr = e;
+      console.log('Fetch attempt failed, trying next...', e.message);
     }
-    return d;
-  } catch(e) {
-    // CORS blocked — fall back to Claude as proxy
-    console.log('Direct fetch blocked, using Claude proxy...', e.message);
-    return await fetchViaGemini(chain, params);
   }
+  throw new Error(lastErr?.message || 'Could not reach Etherscan');
 }
 
 // ══ PORTFOLIO ════════════════════════════════════════════════════
