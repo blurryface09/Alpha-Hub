@@ -1,0 +1,123 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  * { box-sizing: border-box; }
+  
+  body {
+    @apply bg-bg text-text font-sans antialiased;
+    background-image:
+      linear-gradient(rgba(0,212,255,0.02) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(0,212,255,0.02) 1px, transparent 1px);
+    background-size: 48px 48px;
+  }
+
+  ::-webkit-scrollbar { width: 4px; height: 4px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { @apply bg-border2 rounded-full; }
+  ::-webkit-scrollbar-thumb:hover { @apply bg-muted; }
+
+  ::selection { background: rgba(0,212,255,0.2); }
+}
+
+@layer components {
+  .card {
+    @apply bg-surface border border-border rounded-xl p-5;
+  }
+
+  .card-sm {
+    @apply bg-surface border border-border rounded-lg p-4;
+  }
+
+  .btn-primary {
+    @apply bg-accent text-bg font-semibold text-sm px-4 py-2.5 rounded-lg
+           hover:bg-cyan-300 active:scale-95 transition-all duration-150
+           disabled:opacity-40 disabled:cursor-not-allowed;
+  }
+
+  .btn-ghost {
+    @apply border border-border2 text-muted text-sm px-4 py-2.5 rounded-lg
+           hover:border-accent hover:text-accent transition-all duration-150
+           bg-transparent;
+  }
+
+  .btn-danger {
+    @apply border border-red-900 text-accent2 text-sm px-3 py-1.5 rounded-lg
+           hover:bg-red-950 transition-all duration-150 bg-transparent;
+  }
+
+  .input {
+    @apply bg-surface2 border border-border2 rounded-lg px-3 py-2.5 text-sm text-text
+           focus:outline-none focus:border-accent placeholder-muted transition-colors
+           w-full;
+  }
+
+  .select {
+    @apply bg-surface2 border border-border2 rounded-lg px-3 py-2.5 text-sm text-text
+           focus:outline-none focus:border-accent transition-colors w-full;
+  }
+
+  .badge {
+    @apply font-mono text-xs px-2 py-0.5 rounded font-medium;
+  }
+
+  .badge-green { @apply bg-green/10 text-green border border-green/20; }
+  .badge-red   { @apply bg-accent2/10 text-accent2 border border-accent2/20; }
+  .badge-yellow { @apply bg-accent3/10 text-accent3 border border-accent3/20; }
+  .badge-cyan  { @apply bg-accent/10 text-accent border border-accent/20; }
+  .badge-purple { @apply bg-purple/10 text-purple border border-purple/20; }
+
+  .metric-card {
+    @apply bg-surface2 border border-border rounded-lg p-3.5;
+  }
+
+  .section-label {
+    @apply font-mono text-xs text-muted uppercase tracking-widest mb-3;
+  }
+
+  .ai-result {
+    @apply bg-accent/5 border border-accent/15 rounded-xl p-4 text-sm leading-relaxed;
+  }
+
+  .ai-result strong {
+    @apply text-accent font-mono text-xs uppercase tracking-wider block mt-3 mb-1;
+  }
+
+  .nav-link {
+    @apply flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium
+           text-muted hover:text-text hover:bg-surface2 transition-all duration-150;
+  }
+
+  .nav-link.active {
+    @apply text-accent border border-accent/20;
+    background: rgba(0, 212, 255, 0.08);
+  }
+
+  .spinner {
+    @apply w-4 h-4 border-2 border-border2 border-t-accent rounded-full animate-spin;
+  }
+
+  .dot-live {
+    @apply w-2 h-2 bg-green rounded-full animate-pulse-slow;
+  }
+
+  .dot-warning {
+    @apply w-2 h-2 bg-accent3 rounded-full;
+  }
+
+  .dot-dead {
+    @apply w-2 h-2 bg-muted rounded-full;
+  }
+
+  .tx-row {
+    @apply flex items-center justify-between py-3 border-b border-border last:border-0 gap-3;
+  }
+
+  .chain-eth  { @apply text-[#627EEA]; }
+  .chain-base { @apply text-[#0052FF]; }
+
+  .glow-accent { box-shadow: 0 0 20px rgba(0,212,255,0.15); }
+  .glow-green  { box-shadow: 0 0 20px rgba(0,200,150,0.15); }
+  .glow-red    { box-shadow: 0 0 20px rgba(255,61,90,0.15); }
+}
