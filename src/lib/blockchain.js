@@ -19,21 +19,39 @@ export const viemClients = {
 // ─── Etherscan V2 fetch with CORS proxy fallback ─────────────────
 async function etherscanFetch(chainKey, params) {
   const chain = CHAINS[chainKey]
+  if (!chain) return { status: '0', message: 'NOTOK', result: 'Unknown chain' }
+  if (!ETHERSCAN_KEY || ETHERSCAN_KEY === 'your_etherscan_api_key') {
+    return { status: '0', message: 'NOTOK', result: 'No Etherscan API key set' }
+  }
+  
   let url = `${ETHERSCAN_V2}?chainid=${chain.id}&apikey=${ETHERSCAN_KEY}`
   Object.entries(params).forEach(([k, v]) => url += `&${k}=${encodeURIComponent(v)}`)
   
   const urls = [url, CORS_PROXY + encodeURIComponent(url)]
+  let lastError = null
+  
   for (const u of urls) {
     try {
-      const r = await fetch(u)
-      if (!r.ok) continue
+      const r = await fetch(u, { signal: AbortSignal.timeout(15000) })
+      if (!r.ok) { lastError = new Error('HTTP ' + r.status); continue }
       const d = await r.json()
-      if (d.status === '0' && d.message === 'NOTOK' && !d.result?.includes('No ')) throw new Error(d.result)
+      if (!d) { lastError = new Error('Empty response'); continue }
+      if (d.status === '0' && d.message === 'NOTOK' && d.result && 
+          !d.result.includes('No transactions') && 
+          !d.result.includes('No records') &&
+          !d.result.includes('No token')) {
+        lastError = new Error(d.result)
+        continue
+      }
       return d
     } catch (e) {
-      if (u === urls[urls.length - 1]) throw e
+      lastError = e
+      continue
     }
   }
+  // Always return a safe fallback — never return undefined
+  console.error('etherscanFetch failed:', lastError?.message)
+  return { status: '0', message: 'NOTOK', result: lastError?.message || 'Request failed' }
 }
 
 // ─── Wallet Analysis ─────────────────────────────────────────────
@@ -45,10 +63,18 @@ export async function getWalletData(address, chainKey = 'eth') {
     etherscanFetch(chainKey, { module: 'account', action: 'txlistinternal', address, startblock: 0, endblock: 99999999, page: 1, offset: 20, sort: 'desc' }),
   ])
 
-  const bal = balData.status === '1' ? (parseInt(balData.result) / 1e18).toFixed(4) : '0'
-  const txs = txData.status === '1' ? txData.result : []
-  const tokens = tokenData.status === '1' ? tokenData.result : []
-  const internals = internalData.status === '1' ? internalData.result : []
+  const bal = (balData?.status === '1' && balData.result) ? (parseInt(balData.result) / 1e18).toFixed(4) : '0'
+  const txs = (txData?.status === '1' && Array.isArray(txData.result)) ? txData.result : []
+  const tokens = (tokenData?.status === '1' && Array.isArray(tokenData.result)) ? tokenData.result : []
+  const internals = (internalData?.status === '1' && Array.isArray(internalData.result)) ? internalData.result : []
+  
+  // Check if we got any data at all
+  if (bal === '0' && txs.length === 0 && tokens.length === 0) {
+    const errMsg = txData?.result || balData?.result || 'No data returned'
+    if (typeof errMsg === 'string' && !errMsg.includes('No transactions')) {
+      throw new Error(errMsg)
+    }
+  }
 
   const sent = txs.filter(t => t.from.toLowerCase() === address.toLowerCase()).length
   const received = txs.length - sent
@@ -79,9 +105,9 @@ export async function getContractData(address, chainKey = 'eth') {
     etherscanFetch(chainKey, { module: 'account', action: 'txlist', address, startblock: 0, endblock: 99999999, page: 1, offset: 25, sort: 'desc' }),
   ])
 
-  const verified = abiData.status === '1'
-  const src = srcData.status === '1' && srcData.result[0] ? srcData.result[0] : {}
-  const txs = txData.status === '1' ? txData.result : []
+  const verified = abiData?.status === '1'
+  const src = (srcData?.status === '1' && Array.isArray(srcData.result) && srcData.result[0]) ? srcData.result[0] : {}
+  const txs = (txData?.status === '1' && Array.isArray(txData.result)) ? txData.result : []
   const unique = new Set(txs.map(t => t.from)).size
   const age = txs.length ? Math.round((Date.now() / 1000 - parseInt(txs[txs.length - 1].timeStamp)) / 86400) : 0
   const failRate = txs.length ? Math.round((txs.filter(t => t.isError === '1').length / txs.length) * 100) : 0
