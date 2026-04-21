@@ -7,10 +7,20 @@ export default function AddWalletModal({ onAdd, onClose }) {
   const [form, setForm] = useState({ address: '', label: '', chain: 'eth' })
 
   const handleSubmit = () => {
-    if (!form.address || !form.address.startsWith('0x') || form.address.length !== 42) {
-      toast.error('Enter a valid 0x wallet address (42 chars)')
+    console.log('handleSubmit called, form:', form)
+    if (!form.address) {
+      toast.error('Enter a wallet address')
       return
     }
+    if (!form.address.startsWith('0x')) {
+      toast.error('Address must start with 0x')
+      return
+    }
+    if (form.address.length !== 42) {
+      toast.error(`Address must be 42 chars, got ${form.address.length}`)
+      return
+    }
+    console.log('Calling onAdd with:', form)
     onAdd(form)
   }
 
@@ -93,7 +103,7 @@ export default function AddWalletModal({ onAdd, onClose }) {
               {PRESETS.map(p => (
                 <button
                   key={p.address}
-                  onClick={() => setForm({ address: p.address, label: p.label, chain: p.chain })}
+                  onClick={() => { console.log('Preset clicked:', p.label); setForm({ address: p.address, label: p.label, chain: p.chain }) }}
                   className="w-full flex items-center justify-between text-xs p-2.5 bg-surface2 border border-border rounded-lg hover:border-accent/40 transition-all text-left"
                 >
                   <span className="font-medium">{p.label}</span>
