@@ -5,7 +5,6 @@ import toast from 'react-hot-toast'
 import { supabase } from '../lib/supabase'
 import { useAuthStore, useWhaleStore } from '../store'
 import { getLatestActivity, decodeMethodName, CHAINS } from '../lib/blockchain'
-import { summarizeWhaleMove } from '../lib/ai'
 import AddWalletModal from '../components/whale/AddWalletModal'
 import ActivityFeed from '../components/whale/ActivityFeed'
 
@@ -54,20 +53,8 @@ export default function WhaleRadarPage() {
             const methodName = decodeMethodName(tx.methodId)
             const isMint = tx.isMint
 
-            // Get AI summary
+            // Get AI summary - completely optional, never blocks
             let aiSummary = null
-            try {
-              aiSummary = await summarizeWhaleMove({
-                label: whale.label,
-                address: whale.wallet_address,
-                chain: chainKey,
-                txHash: tx.hash,
-                value: tx.value,
-                methodName,
-                contractAddress: tx.to,
-                isMint,
-              })
-            } catch {}
 
             // Store in whale_activity
             await supabase.from('whale_activity').upsert({
@@ -166,7 +153,10 @@ export default function WhaleRadarPage() {
             Track smart money. Know what they're minting before everyone else.
           </p>
         </div>
-        <button onClick={() => setShowAddModal(true)} className="btn-primary flex items-center gap-2">
+        <button onClick={() => {
+          if (!user) { toast.error('Not authenticated - please sign out and back in'); return }
+          setShowAddModal(true)
+        }} className="btn-primary flex items-center gap-2">
           <Plus size={15} />
           Watch Wallet
         </button>
@@ -263,11 +253,9 @@ export default function WhaleRadarPage() {
         </div>
       </div>
 
-      <AnimatePresence>
-        {showAddModal && (
-          <AddWalletModal onAdd={addWallet} onClose={() => setShowAddModal(false)} />
-        )}
-      </AnimatePresence>
+      {showAddModal && (
+        <AddWalletModal onAdd={addWallet} onClose={() => setShowAddModal(false)} />
+      )}
     </div>
   )
 }
