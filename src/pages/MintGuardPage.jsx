@@ -4,8 +4,7 @@ import { Plus, Shield, Clock, Zap, AlertTriangle, Check, X, ExternalLink, Chevro
 import toast from 'react-hot-toast'
 import { supabase } from '../lib/supabase'
 import { useAuthStore } from '../store'
-import { extractProjectMetadata, auditContract } from '../lib/ai'
-import { buildMintTransaction, getContractData, CHAINS } from '../lib/blockchain'
+import { buildMintTransaction, CHAINS } from '../lib/blockchain'
 import AddProjectModal from '../components/mint/AddProjectModal'
 import MintConfirmModal from '../components/mint/MintConfirmModal'
 import ProjectCard from '../components/mint/ProjectCard'
@@ -13,7 +12,7 @@ import ProjectCard from '../components/mint/ProjectCard'
 const STATUS_TABS = ['all', 'upcoming', 'live', 'minted', 'missed']
 
 export default function MintGuardPage() {
-  const { user } = useAuthStore()
+  const { user, getValidSession } = useAuthStore()
   const [projects, setProjects] = useState([])
   const [loading, setLoading] = useState(true)
   const [activeTab, setActiveTab] = useState('all')
@@ -22,13 +21,18 @@ export default function MintGuardPage() {
   const [mintingId, setMintingId] = useState(null)
 
   const fetchProjects = useCallback(async () => {
-    if (!user) return
-    const { data } = await supabase
-      .from('wl_projects')
-      .select('*')
-      .eq('user_id', user.id)
-      .order('mint_date', { ascending: true, nullsFirst: false })
-    setProjects(data || [])
+    if (!user) { setLoading(false); return }
+    try {
+      const { data, error } = await supabase
+        .from('wl_projects')
+        .select('*')
+        .eq('user_id', user.id)
+        .order('mint_date', { ascending: true, nullsFirst: false })
+      if (error) console.error('fetchProjects error:', error)
+      setProjects(data || [])
+    } catch(e) {
+      console.error('fetchProjects catch:', e)
+    }
     setLoading(false)
   }, [user])
 
@@ -68,18 +72,26 @@ export default function MintGuardPage() {
         user_id: user.id,
         status: 'upcoming',
       }
+      // Refresh session before insert
+      const session = await getValidSession()
+      if (!session) {
+        toast.error('Session expired — please sign out and sign back in')
+        return
+      }
+      console.log('Session valid, inserting...', session.user.id)
       const { data, error } = await supabase
         .from('wl_projects')
-        .insert(insertData)
+        .insert({ ...insertData, user_id: session.user.id })
         .select()
         .single()
       if (error) {
-        console.error('Supabase insert error:', error)
-        toast.error(`Error: ${error.message}`)
+        console.error('Supabase insert error:', JSON.stringify(error))
+        toast.error(`Save failed: ${error.message} (code: ${error.code})`)
         return
       }
+      console.log('Insert success:', data)
       setProjects(prev => [data, ...prev])
-      toast.success(`${data.name} added to MintGuard`)
+      toast.success(`${data.name} added to MintGuard! ✓`)
       setShowAddModal(false)
     } catch (err) {
       console.error('Unexpected error:', err)
@@ -214,7 +226,10 @@ export default function MintGuardPage() {
           </div>
           <p className="text-sm text-muted">Track your WL projects. Get alerted. Auto-mint when ready.</p>
         </div>
-        <button onClick={() => setShowAddModal(true)} className="btn-primary flex items-center gap-2">
+        <button onClick={() => {
+          if (!user) { toast.error('Not authenticated - please sign out and back in'); return }
+          setShowAddModal(true)
+        }} className="btn-primary flex items-center gap-2">
           <Plus size={15} />
           Add Project
         </button>
@@ -284,22 +299,20 @@ export default function MintGuardPage() {
         </div>
       )}
 
-      {/* Modals */}
-      <AnimatePresence>
-        {showAddModal && (
-          <AddProjectModal
-            onAdd={handleAddProject}
-            onClose={() => setShowAddModal(false)}
-          />
-        )}
-        {confirmMint && (
-          <MintConfirmModal
-            project={confirmMint}
-            onConfirm={() => executeMint(confirmMint)}
-            onCancel={() => setConfirmMint(null)}
-          />
-        )}
-      </AnimatePresence>
+      {/* Modals - direct render without AnimatePresence for reliability */}
+      {showAddModal && (
+        <AddProjectModal
+          onAdd={handleAddProject}
+          onClose={() => setShowAddModal(false)}
+        />
+      )}
+      {confirmMint && (
+        <MintConfirmModal
+          project={confirmMint}
+          onConfirm={() => executeMint(confirmMint)}
+          onCancel={() => setConfirmMint(null)}
+        />
+      )}
     </div>
   )
 }

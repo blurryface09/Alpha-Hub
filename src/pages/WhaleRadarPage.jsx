@@ -11,7 +11,7 @@ import ActivityFeed from '../components/whale/ActivityFeed'
 const POLL_INTERVAL = 30000 // 30 seconds
 
 export default function WhaleRadarPage() {
-  const { user } = useAuthStore()
+  const { user, getValidSession } = useAuthStore()
   const { activity, fetch: fetchActivity, subscribe } = useWhaleStore()
   const [watchlist, setWatchlist] = useState([])
   const [loading, setLoading] = useState(true)
