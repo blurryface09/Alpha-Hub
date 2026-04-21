@@ -1,7 +1,6 @@
 import React, { useState } from 'react'
 import { motion } from 'framer-motion'
 import { X, Link2, Calendar, Zap, Shield, Loader } from 'lucide-react'
-import { extractProjectMetadata } from '../../lib/ai'
 import toast from 'react-hot-toast'
 
 const WL_TYPES = ['GTD', 'FCFS', 'RAFFLE', 'UNKNOWN']
@@ -29,23 +28,23 @@ export default function AddProjectModal({ onAdd, onClose }) {
   const handleUrlSubmit = async () => {
     if (!url.trim()) { toast.error('Paste a URL first'); return }
     setLoading(true)
-    try {
-      const meta = await extractProjectMetadata(url)
-      setForm(f => ({
-        ...f,
-        source_url: url,
-        source_type: meta.source_type || 'website',
-        name: meta.name || '',
-        chain: meta.chain || 'eth',
-        notes: meta.notes || '',
-      }))
-      setStep(2)
-    } catch {
-      setForm(f => ({ ...f, source_url: url }))
-      setStep(2)
-    } finally {
-      setLoading(false)
-    }
+    // Detect source type from URL directly — no AI needed
+    let source_type = 'website'
+    let name = ''
+    if (url.includes('twitter.com') || url.includes('x.com')) source_type = 'twitter'
+    else if (url.includes('opensea.io')) source_type = 'opensea'
+    // Try to extract name from URL path
+    const urlParts = url.replace(/https?:\/\//, '').split('/')
+    if (urlParts.length > 1) name = urlParts[urlParts.length - 1].replace(/-/g, ' ').replace(/_/g, ' ')
+    setForm(f => ({
+      ...f,
+      source_url: url,
+      source_type,
+      name: name || '',
+      chain: 'eth',
+    }))
+    setLoading(false)
+    setStep(2)
   }
 
   const handleSubmit = () => {
