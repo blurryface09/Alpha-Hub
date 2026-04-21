@@ -9,26 +9,70 @@ export const useAuthStore = create((set, get) => ({
   loading: true,
 
   init: async () => {
-    const { data: { session } } = await supabase.auth.getSession()
-    if (session?.user) {
-      set({ user: session.user })
-      await get().fetchProfile(session.user.id)
-    }
-    set({ loading: false })
-
-    supabase.auth.onAuthStateChange(async (event, session) => {
+    try {
+      // Force refresh the session on init
+      const { data: { session }, error } = await supabase.auth.getSession()
+      if (error) {
+        console.error('Session error:', error)
+        set({ user: null, profile: null, loading: false })
+        return
+      }
       if (session?.user) {
         set({ user: session.user })
         await get().fetchProfile(session.user.id)
-      } else {
-        set({ user: null, profile: null })
       }
-    })
+      set({ loading: false })
+
+      supabase.auth.onAuthStateChange(async (event, session) => {
+        console.log('Auth event:', event, session?.user?.id)
+        if (event === 'SIGNED_IN' || event === 'TOKEN_REFRESHED') {
+          if (session?.user) {
+            set({ user: session.user })
+            await get().fetchProfile(session.user.id)
+          }
+        } else if (event === 'SIGNED_OUT') {
+          set({ user: null, profile: null })
+        }
+      })
+    } catch (err) {
+      console.error('Auth init error:', err)
+      set({ loading: false })
+    }
   },
 
   fetchProfile: async (userId) => {
-    const { data } = await supabase.from('profiles').select('*').eq('id', userId).single()
-    if (data) set({ profile: data })
+    try {
+      const { data, error } = await supabase
+        .from('profiles')
+        .select('*')
+        .eq('id', userId)
+        .single()
+      if (error && error.code !== 'PGRST116') {
+        console.error('fetchProfile error:', error)
+        // Create profile if missing
+        const { data: newProfile } = await supabase
+          .from('profiles')
+          .upsert({ id: userId, username: 'user_' + userId.slice(0,6) })
+          .select()
+          .single()
+        if (newProfile) set({ profile: newProfile })
+      } else if (data) {
+        set({ profile: data })
+      }
+    } catch (err) {
+      console.error('fetchProfile catch:', err)
+    }
+  },
+
+  // Get fresh session - call before any DB operation
+  getValidSession: async () => {
+    const { data: { session }, error } = await supabase.auth.getSession()
+    if (error || !session) {
+      // Try refresh
+      const { data: { session: refreshed } } = await supabase.auth.refreshSession()
+      return refreshed
+    }
+    return session
   },
 
   signOut: async () => {
