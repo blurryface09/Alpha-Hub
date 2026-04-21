@@ -50,15 +50,41 @@ export default function MintGuardPage() {
   const filtered = activeTab === 'all' ? projects : projects.filter(p => p.status === activeTab)
 
   const handleAddProject = async (projectData) => {
-    const { data, error } = await supabase
-      .from('wl_projects')
-      .insert({ ...projectData, user_id: user.id })
-      .select()
-      .single()
-    if (error) { toast.error('Failed to add project'); return }
-    setProjects(prev => [data, ...prev])
-    toast.success(`${data.name} added to MintGuard`)
-    setShowAddModal(false)
+    try {
+      if (!user?.id) { toast.error('Not logged in — please sign out and back in'); return }
+      const insertData = {
+        name: projectData.name || 'Unnamed',
+        source_url: projectData.source_url || 'https://unknown.com',
+        source_type: projectData.source_type || 'website',
+        chain: projectData.chain || 'eth',
+        contract_address: projectData.contract_address || null,
+        mint_date: projectData.mint_date || null,
+        mint_price: projectData.mint_price || null,
+        wl_type: projectData.wl_type || 'UNKNOWN',
+        mint_mode: projectData.mint_mode || 'confirm',
+        max_mint: projectData.max_mint || 1,
+        gas_limit: projectData.gas_limit || 200000,
+        notes: projectData.notes || null,
+        user_id: user.id,
+        status: 'upcoming',
+      }
+      const { data, error } = await supabase
+        .from('wl_projects')
+        .insert(insertData)
+        .select()
+        .single()
+      if (error) {
+        console.error('Supabase insert error:', error)
+        toast.error(`Error: ${error.message}`)
+        return
+      }
+      setProjects(prev => [data, ...prev])
+      toast.success(`${data.name} added to MintGuard`)
+      setShowAddModal(false)
+    } catch (err) {
+      console.error('Unexpected error:', err)
+      toast.error(`Unexpected error: ${err.message}`)
+    }
   }
 
   const handleDelete = async (id) => {

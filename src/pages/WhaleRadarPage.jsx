@@ -113,17 +113,30 @@ export default function WhaleRadarPage() {
   }, [watchlist, user])
 
   const addWallet = async ({ address, label, chain }) => {
-    if (watchlist.find(w => w.wallet_address.toLowerCase() === address.toLowerCase() && w.chain === chain)) {
-      toast.error('Already watching this wallet')
-      return
+    try {
+      if (!user?.id) { toast.error('Not logged in — please sign out and back in'); return }
+      if (!address || !address.startsWith('0x')) { toast.error('Invalid wallet address'); return }
+      if (watchlist.find(w => w.wallet_address.toLowerCase() === address.toLowerCase() && w.chain === chain)) {
+        toast.error('Already watching this wallet')
+        return
+      }
+      const { data, error } = await supabase
+        .from('whale_watchlist')
+        .insert({ user_id: user.id, wallet_address: address, label: label || 'Unlabeled', chain })
+        .select()
+        .single()
+      if (error) {
+        console.error('Supabase whale insert error:', error)
+        toast.error(`Error: ${error.message}`)
+        return
+      }
+      setWatchlist(prev => [...prev, data])
+      toast.success(`Now watching ${label || address.slice(0, 12)}...`)
+      setShowAddModal(false)
+    } catch (err) {
+      console.error('Unexpected error adding wallet:', err)
+      toast.error(`Unexpected error: ${err.message}`)
     }
-    const { data, error } = await supabase.from('whale_watchlist')
-      .insert({ user_id: user.id, wallet_address: address, label, chain })
-      .select().single()
-    if (error) { toast.error('Failed to add wallet'); return }
-    setWatchlist(prev => [...prev, data])
-    toast.success(`Now watching ${label || address.slice(0, 12)}...`)
-    setShowAddModal(false)
   }
 
   const removeWallet = async (id, label) => {
