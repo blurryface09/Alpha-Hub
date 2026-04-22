@@ -1,66 +1,52 @@
-import React, { useState } from "react"
-import { motion } from "framer-motion"
-import { Zap, Trash2, Clock, ChevronDown, ChevronUp, ToggleLeft, ToggleRight, ExternalLink, RefreshCw, AlertCircle, Gift, Bell } from "lucide-react"
-import toast from "react-hot-toast"
+import React, { useState } from 'react'
+import { motion } from 'framer-motion'
+import { Zap, Trash2, Clock, ChevronDown, ChevronUp, ToggleLeft, ToggleRight, ExternalLink, RefreshCw, Twitter, AlertCircle, Gift, Bell } from 'lucide-react'
+import toast from 'react-hot-toast'
 
-const GEMINI_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent"
-const GEMINI_FALLBACK_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-lite:generateContent"
-
-function getIntelKeyPool() {
-  return [
-    import.meta.env.VITE_GEMINI_API_KEY,
-    import.meta.env.VITE_GEMINI_KEY_2,
-    import.meta.env.VITE_GEMINI_KEY_3,
-    import.meta.env.VITE_GEMINI_KEY_4,
-  ].filter(function(k) { return k && k !== "your_gemini_api_key" && k.startsWith("AIza") })
-}
+const GROQ_URL = 'https://api.groq.com/openai/v1/chat/completions'
+const GROQ_KEY = import.meta.env.VITE_GROQ_API_KEY
 
 async function fetchProjectIntel(project) {
-  const keyPool = getIntelKeyPool()
-  if (!keyPool.length) {
-    return { error: "No Gemini API key found - add VITE_GEMINI_API_KEY to Vercel environment variables" }
-  }
+  if (!GROQ_KEY) return { error: 'No Groq API key. Add VITE_GROQ_API_KEY to Vercel.' }
+  const prompt = `You are a crypto/NFT project researcher. Research this NFT project.
 
-  const prompt = "You are a crypto/NFT project researcher. Research this NFT project and provide intelligence.\n\nProject: " + project.name + "\nSource URL: " + (project.source_url || "unknown") + "\nWL Type: " + project.wl_type + "\nChain: " + project.chain + "\nMint Date: " + (project.mint_date || "not set") + "\nNotes: " + (project.notes || "none") + "\n\nProvide a JSON response (no markdown, no backticks, just raw JSON) with:\n{\n  \"summary\": \"2 sentence description of what this NFT project is\",\n  \"wl_giveaway_likely\": false,\n  \"giveaway_note\": \"\",\n  \"red_flags\": [],\n  \"green_flags\": [],\n  \"hype_score\": 5,\n  \"hype_reason\": \"one sentence why this score\",\n  \"advice\": \"one sharp sentence - should they mint or skip?\",\n  \"discord_tip\": \"what channels/roles to check to confirm WL\",\n  \"twitter_tip\": \"exact search terms to find WL giveaways for this project on X\"\n}"
+Project: ${project.name}
+Source URL: ${project.source_url || 'unknown'}
+WL Type: ${project.wl_type}
+Chain: ${project.chain}
+Mint Date: ${project.mint_date || 'not set'}
+Notes: ${project.notes || 'none'}
 
-  let keyIndex = 0
-  const totalAttempts = keyPool.length * 3
+Respond with ONLY valid JSON, no markdown:
+{"summary":"2 sentence description","wl_giveaway_likely":false,"giveaway_note":"","red_flags":[],"green_flags":[],"hype_score":5,"hype_reason":"one sentence","advice":"one sharp sentence","discord_tip":"what to look for","twitter_tip":"search terms for X"}`
 
-  for (let attempt = 0; attempt < totalAttempts; attempt++) {
-    const key = keyPool[keyIndex % keyPool.length]
-    keyIndex++
-    try {
-      const r = await fetch(GEMINI_URL + "?key=" + key, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          contents: [{ parts: [{ text: prompt }] }],
-          generationConfig: { temperature: 0.7, maxOutputTokens: 1024 },
-        })
-      })
-      const d = await r.json()
-      if (d.error) {
-        if (d.error.code === 429 || d.error.status === "RESOURCE_EXHAUSTED") {
-          continue
-        }
-        return { error: d.error.message }
-      }
-      const text = d.candidates && d.candidates[0] && d.candidates[0].content && d.candidates[0].content.parts && d.candidates[0].content.parts[0] ? d.candidates[0].content.parts[0].text : ""
-      const clean = text.replace(/```json\n?/g, "").replace(/```\n?/g, "").trim()
-      const match = clean.match(/\{[\s\S]*\}/)
-      if (match) {
-        try { return JSON.parse(match[0]) } catch(e) { return { error: "Parse failed - try again" } }
-      }
-      return { error: "Invalid response - try again" }
-    } catch(e) {
-      if (attempt < totalAttempts - 1) {
-        await new Promise(function(res) { setTimeout(res, 1000) })
-        continue
-      }
-      return { error: e.message }
+  try {
+    const r = await fetch(GROQ_URL, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': 'Bearer ' + GROQ_KEY,
+      },
+      body: JSON.stringify({
+        model: 'llama-3.3-70b-versatile',
+        messages: [{ role: 'user', content: prompt }],
+        max_tokens: 1024,
+        temperature: 0.7,
+      }),
+    })
+    const d = await r.json()
+    if (d.error) return { error: d.error.message }
+    const text = d.choices?.[0]?.message?.content || ''
+    const clean = text.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim()
+    const jsonMatch = clean.match(/\{[\s\S]*\}/)
+    if (jsonMatch) {
+      try { return JSON.parse(jsonMatch[0]) }
+      catch { return { error: 'Could not parse response' } }
     }
+    return { error: 'Invalid response format' }
+  } catch(e) {
+    return { error: e.message }
   }
-  return { error: "All keys rate limited - wait 1 minute and try again" }
 }
 
 const STATUS_STYLES = {
