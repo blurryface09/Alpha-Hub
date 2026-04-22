@@ -4,6 +4,7 @@ import { Zap, Trash2, Clock, ChevronDown, ChevronUp, ToggleLeft, ToggleRight, Ex
 import toast from "react-hot-toast"
 
 const GEMINI_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent"
+const GEMINI_FALLBACK_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-lite:generateContent"
 
 function getIntelKeyPool() {
   return [
