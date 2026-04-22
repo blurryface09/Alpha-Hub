@@ -6,22 +6,19 @@ import toast from 'react-hot-toast'
 export default function AddWalletModal({ onAdd, onClose }) {
   const [form, setForm] = useState({ address: '', label: '', chain: 'eth' })
 
-  const handleSubmit = () => {
-    console.log('handleSubmit called, form:', form)
-    if (!form.address) {
-      toast.error('Enter a wallet address')
-      return
+  const [saving, setSaving] = React.useState(false)
+  const handleSubmit = async () => {
+    if (!form.address) { toast.error('Enter a wallet address'); return }
+    if (!form.address.startsWith('0x')) { toast.error('Address must start with 0x'); return }
+    if (form.address.length !== 42) { toast.error(`Address must be 42 chars, got ${form.address.length}`); return }
+    setSaving(true)
+    try {
+      await onAdd(form)
+    } catch(err) {
+      toast.error('Failed to add wallet: ' + err.message)
+    } finally {
+      setSaving(false)
     }
-    if (!form.address.startsWith('0x')) {
-      toast.error('Address must start with 0x')
-      return
-    }
-    if (form.address.length !== 42) {
-      toast.error(`Address must be 42 chars, got ${form.address.length}`)
-      return
-    }
-    console.log('Calling onAdd with:', form)
-    onAdd(form)
   }
 
   const set = (key, val) => setForm(f => ({ ...f, [key]: val }))
