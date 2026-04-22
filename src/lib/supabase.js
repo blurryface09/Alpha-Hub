@@ -8,9 +8,6 @@ export const supabase = createClient(supabaseUrl, supabaseKey, {
     persistSession: true,
     autoRefreshToken: true,
     detectSessionInUrl: false,
-    storage: window.localStorage,
-    storageKey: 'sb-tlhdprppgkaqfiwgambu-auth-token',
-    flowType: 'implicit',
   },
   realtime: { params: { eventsPerSecond: 10 } },
 })
