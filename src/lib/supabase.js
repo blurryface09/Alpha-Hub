@@ -7,13 +7,10 @@ export const supabase = createClient(supabaseUrl, supabaseKey, {
   auth: {
     persistSession: true,
     autoRefreshToken: true,
-    detectSessionInUrl: true,
-    storageKey: 'alphahub-auth',
+    detectSessionInUrl: false,
+    lock: false,
   },
   realtime: { params: { eventsPerSecond: 10 } },
-  global: {
-    headers: { 'x-client-info': 'alphahub/1.0' },
-  },
 })
 
 // --- DATABASE SCHEMA (run this in Supabase SQL editor) -----------
