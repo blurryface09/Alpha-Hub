@@ -164,7 +164,7 @@ export const useSettingsStore = create(
   persist(
     (set) => ({
       etherscanKey: '',
-      geminiKey: '',
+      groqKey: '',
       alchemyKey: '',
       walletConnectId: '',
       theme: 'dark',
