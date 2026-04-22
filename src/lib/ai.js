@@ -1,5 +1,6 @@
 const GEMINI_URL = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent`
 const GEMINI_FALLBACK_URL = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-lite:generateContent`
+const GEMINI_FALLBACK_URL2 = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash-latest:generateContent`
 
 const SYSTEM = `You are an expert on-chain forensics analyst and smart contract auditor for a professional crypto and NFT trading community. You have deep knowledge of DeFi protocols, DEX mechanics, NFT markets, MEV/sandwich attacks, rug pull patterns, and on-chain behavior analysis. You give structured forensic reports with clear section headers. You decode failed transactions precisely, identify bot behavior, jeet patterns, honeypots and contract backdoors. You write in direct crypto community language. No financial disclaimers. Ever.`
 
@@ -23,41 +24,41 @@ function getNextKey(pool) {
   return key
 }
 
-async function callGemini(prompt, retries = 2) {
+async function callGemini(prompt) {
   const pool = getKeyPool()
   if (!pool.length) {
-    return '⚠️ No Gemini API key set. Add VITE_GEMINI_API_KEY to your Vercel environment variables.'
+    return 'No Gemini API key set. Add VITE_GEMINI_API_KEY to your Vercel environment variables.'
   }
-
-  // Try each key in rotation, move to next on rate limit
-  const totalAttempts = pool.length * (retries + 1)
-  for (let attempt = 0; attempt < totalAttempts; attempt++) {
-    const key = getNextKey(pool)
-    try {
-      const r = await fetch(`${GEMINI_URL}?key=${key}`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          contents: [{ parts: [{ text: SYSTEM + '\n\n' + prompt }] }],
-          generationConfig: { temperature: 0.7, maxOutputTokens: 2048 },
-        }),
-      })
-      const d = await r.json()
-      if (d.error) {
-        if (d.error.code === 429 || d.error.status === 'RESOURCE_EXHAUSTED') {
-          // This key is rate limited — try next key immediately
-          console.log(`Key ${_keyIndex % pool.length} rate limited, rotating...`)
-          continue
+  const models = [GEMINI_URL, GEMINI_FALLBACK_URL, GEMINI_FALLBACK_URL2]
+  for (const modelUrl of models) {
+    for (const key of pool) {
+      try {
+        const r = await fetch(modelUrl + '?key=' + key, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            contents: [{ parts: [{ text: SYSTEM + '\n\n' + prompt }] }],
+            generationConfig: { temperature: 0.7, maxOutputTokens: 2048 },
+          }),
+        })
+        const d = await r.json()
+        if (!d.error) {
+          const text = d.candidates?.[0]?.content?.parts?.[0]?.text
+          if (text) return text
+        } else {
+          const code = d.error.code
+          const msg = d.error.message || ''
+          if (code === 429 || code === 503 || msg.includes('high demand') || msg.includes('RESOURCE_EXHAUSTED') || msg.includes('not found')) {
+            continue
+          }
+          console.error('Gemini error:', msg)
         }
-        throw new Error(d.error.message)
+      } catch(e) {
+        continue
       }
-      return d.candidates?.[0]?.content?.parts?.[0]?.text || 'Analysis unavailable.'
-    } catch(e) {
-      if (attempt === totalAttempts - 1) throw e
-      await new Promise(res => setTimeout(res, 1000))
     }
   }
-  return '⏳ All API keys are rate limited. Wait 1 minute and try again. Add more keys to VITE_GEMINI_KEY_2, _3, _4 in Vercel to increase capacity.'
+  return 'AI analysis unavailable right now. Wait 1 minute and try again.'
 }
 
 // --- Wallet Forensic Analysis ------------------------------------
