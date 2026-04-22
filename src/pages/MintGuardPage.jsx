@@ -20,26 +20,36 @@ export default function MintGuardPage() {
   const [confirmMint, setConfirmMint] = useState(null) // project to confirm mint for
   const [mintingId, setMintingId] = useState(null)
 
-  const fetchProjects = useCallback(async () => {
+  const fetchProjects = useCallback(async (showLoader = false) => {
     if (!user) { setLoading(false); return }
     try {
+      // Only show loading spinner on first load, not on interval refreshes
+      if (showLoader) setLoading(true)
       const { data, error } = await supabase
         .from('wl_projects')
         .select('*')
         .eq('user_id', user.id)
         .order('mint_date', { ascending: true, nullsFirst: false })
-      if (error) console.error('fetchProjects error:', error)
-      setProjects(data || [])
+      if (error) { console.error('fetchProjects error:', error); return }
+      // Only update if we actually got data — never clear existing projects on error
+      if (data) setProjects(data)
     } catch(e) {
       console.error('fetchProjects catch:', e)
+    } finally {
+      setLoading(false)
     }
-    setLoading(false)
   }, [user])
 
+  // First load with spinner, subsequent interval refreshes silent
+  const initialLoad = React.useRef(false)
+
   useEffect(() => {
-    fetchProjects()
-    // Poll for status updates every minute
-    const interval = setInterval(fetchProjects, 60000)
+    if (!initialLoad.current) {
+      initialLoad.current = true
+      fetchProjects(true) // show spinner on first load
+    }
+    // Silent background refresh every 60s — never clears projects
+    const interval = setInterval(() => fetchProjects(false), 60000)
     return () => clearInterval(interval)
   }, [fetchProjects])
 
@@ -72,16 +82,9 @@ export default function MintGuardPage() {
         user_id: user.id,
         status: 'upcoming',
       }
-      // Refresh session before insert
-      const session = await getValidSession()
-      if (!session) {
-        toast.error('Session expired — please sign out and sign back in')
-        return
-      }
-      console.log('Session valid, inserting...', session.user.id)
       const { data, error } = await supabase
         .from('wl_projects')
-        .insert({ ...insertData, user_id: session.user.id })
+        .insert(insertData)
         .select()
         .single()
       if (error) {
