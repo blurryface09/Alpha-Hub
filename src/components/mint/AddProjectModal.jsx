@@ -47,9 +47,24 @@ export default function AddProjectModal({ onAdd, onClose }) {
     setStep(2)
   }
 
-  const handleSubmit = () => {
+  const handleSubmit = async () => {
     if (!form.name.trim()) { toast.error('Project name is required'); return }
-    onAdd(form)
+    // Ensure numeric fields are valid
+    const cleanForm = {
+      ...form,
+      gas_limit: parseInt(form.gas_limit) || 200000,
+      max_mint: parseInt(form.max_mint) || 1,
+      contract_address: form.contract_address?.trim() || null,
+      mint_date: form.mint_date || null,
+      mint_price: form.mint_price?.trim() || null,
+      notes: form.notes?.trim() || null,
+    }
+    setLoading(true)
+    try {
+      await onAdd(cleanForm)
+    } finally {
+      setLoading(false)
+    }
   }
 
   const set = (key, val) => setForm(f => ({ ...f, [key]: val }))
@@ -189,11 +204,11 @@ export default function AddProjectModal({ onAdd, onClose }) {
               <div className="grid grid-cols-2 gap-3">
                 <div>
                   <label className="text-xs font-mono text-muted uppercase tracking-wider block mb-1.5">Max Mint</label>
-                  <input className="input" type="number" min="1" max="20" value={form.max_mint} onChange={e => set('max_mint', parseInt(e.target.value))} />
+                  <input className="input" type="number" min="1" max="20" value={form.max_mint} onChange={e => set('max_mint', parseInt(e.target.value) || 1)} />
                 </div>
                 <div>
                   <label className="text-xs font-mono text-muted uppercase tracking-wider block mb-1.5">Gas Limit</label>
-                  <input className="input" type="number" value={form.gas_limit} onChange={e => set('gas_limit', parseInt(e.target.value))} />
+                  <input className="input" type="number" value={form.gas_limit} onChange={e => set('gas_limit', parseInt(e.target.value) || 200000)} />
                 </div>
               </div>
 
@@ -205,8 +220,8 @@ export default function AddProjectModal({ onAdd, onClose }) {
 
               <div className="flex gap-2 pt-1">
                 <button onClick={() => setStep(1)} className="btn-ghost flex-1">Back</button>
-                <button onClick={handleSubmit} className="btn-primary flex-1 flex items-center justify-center gap-2">
-                  <Shield size={14} /> Add to MintGuard
+                <button onClick={handleSubmit} disabled={loading} className="btn-primary flex-1 flex items-center justify-center gap-2">
+                  {loading ? <><Loader size={14} className="animate-spin" /> Saving...</> : <><Shield size={14} /> Add to MintGuard</>}
                 </button>
               </div>
             </div>
