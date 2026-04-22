@@ -7,35 +7,36 @@ export const useAuthStore = create((set, get) => ({
   user: null,
   profile: null,
   loading: true,
+  _authSubscription: null,
 
   init: async () => {
     try {
-      // First set up the auth listener BEFORE checking session
-      // This ensures we never miss auth events
-      supabase.auth.onAuthStateChange(async (event, session) => {
-        console.log('Auth event:', event)
-        if (event === 'SIGNED_IN' || event === 'TOKEN_REFRESHED' || event === 'INITIAL_SESSION') {
-          if (session?.user) {
-            set({ user: session.user, loading: false })
-            await get().fetchProfile(session.user.id)
-          }
-        } else if (event === 'SIGNED_OUT') {
-          set({ user: null, profile: null, loading: false })
-        }
-      })
-
-      // Then check current session
-      const { data: { session }, error } = await supabase.auth.getSession()
-      if (error) {
-        console.error('Session error:', error)
-        set({ loading: false })
-        return
-      }
+      // Get session first
+      const { data: { session } } = await supabase.auth.getSession()
       if (session?.user) {
         set({ user: session.user })
         await get().fetchProfile(session.user.id)
       }
       set({ loading: false })
+
+      // Set up listener ONCE with proper cleanup stored
+      const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, session) => {
+        if (event === 'SIGNED_IN' || event === 'TOKEN_REFRESHED') {
+          if (session?.user) {
+            set({ user: session.user })
+            // Only fetch profile if we don't have it yet
+            if (!get().profile) {
+              await get().fetchProfile(session.user.id)
+            }
+          }
+        } else if (event === 'SIGNED_OUT') {
+          set({ user: null, profile: null })
+        }
+      })
+
+      // Store unsubscribe function to prevent duplicate listeners
+      get()._authSubscription?.unsubscribe()
+      set({ _authSubscription: subscription })
     } catch (err) {
       console.error('Auth init error:', err)
       set({ loading: false })
