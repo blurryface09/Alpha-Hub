@@ -7,11 +7,11 @@ import { supabase } from '../lib/supabase'
 
 export default function SettingsPage() {
   const { user, profile, fetchProfile } = useAuthStore()
-  const { etherscanKey, geminiKey, alchemyKey, walletConnectId, setKeys } = useSettingsStore()
+  const { etherscanKey, groqKey, alchemyKey, walletConnectId, setKeys } = useSettingsStore()
 
   const [form, setForm] = useState({
     etherscanKey: etherscanKey || '',
-    geminiKey: geminiKey || '',
+    groqKey: groqKey || '',
     alchemyKey: alchemyKey || '',
     walletConnectId: walletConnectId || '',
   })
@@ -62,12 +62,12 @@ export default function SettingsPage() {
       placeholder: 'Your Etherscan V2 API key',
     },
     {
-      key: 'geminiKey',
-      label: 'Gemini API Key',
+      key: 'groqKey',
+      label: 'Groq API Key',
       desc: 'Powers all AI forensic analysis — completely free tier available',
-      link: 'https://aistudio.google.com',
+      link: 'https://console.groq.com',
       linkLabel: 'Get free key',
-      placeholder: 'AIza...',
+      placeholder: 'gsk_...',
     },
     {
       key: 'alchemyKey',
