@@ -4,6 +4,7 @@ import { Zap, Trash2, Clock, ChevronDown, ChevronUp, ToggleLeft, ToggleRight, Ex
 import toast from 'react-hot-toast'
 
 const GEMINI_URL = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent'
+const GEMINI_KEY = import.meta.env.VITE_GEMINI_API_KEY
 
 const STATUS_STYLES = {
   upcoming:  { dot: 'dot-warning', badge: 'badge-yellow', label: 'UPCOMING' },
@@ -42,11 +43,17 @@ function Countdown({ mintDate }) {
 }
 
 async function fetchProjectIntel(project, retries = 3) {
-  const geminiKey = localStorage.getItem('alphahub-settings')
-    ? JSON.parse(localStorage.getItem('alphahub-settings'))?.state?.geminiKey
-    : ''
-
-  if (!geminiKey) return { error: 'No Gemini key set — go to Settings and add your key from aistudio.google.com' }
+  // Use Vercel env key first, fall back to user-entered key in Settings
+  let geminiKey = GEMINI_KEY
+  if (!geminiKey || geminiKey === 'your_gemini_api_key') {
+    try {
+      const stored = localStorage.getItem('alphahub-settings')
+      if (stored) geminiKey = JSON.parse(stored)?.state?.geminiKey
+    } catch {}
+  }
+  if (!geminiKey || geminiKey === 'your_gemini_api_key') {
+    return { error: 'No Gemini API key found — add VITE_GEMINI_API_KEY to Vercel environment variables' }
+  }
 
   const prompt = `You are a crypto/NFT project researcher. Research this NFT project and provide intelligence:
 
