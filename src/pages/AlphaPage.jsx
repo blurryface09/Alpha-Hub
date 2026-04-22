@@ -1,6 +1,6 @@
 import React, { useState } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
-import { Search, Shield } from 'lucide-react'
+import { Search, Shield, RefreshCw } from 'lucide-react'
 import toast from 'react-hot-toast'
 import { getWalletData, getContractData, CHAINS, decodeMethodName } from '../lib/blockchain'
 import { analyzeWallet, auditContract } from '../lib/ai'
@@ -17,6 +17,8 @@ export default function AlphaPage() {
   const [contractData, setContractData] = useState(null)
   const [aiAnalysis, setAiAnalysis] = useState('')
   const [error, setError] = useState('')
+  const [lastPrompt, setLastPrompt] = useState(null)
+  const [lastType, setLastType] = useState(null)
 
   const handleAnalyze = async () => {
     if (!address || !address.startsWith('0x')) {
@@ -35,9 +37,12 @@ export default function AlphaPage() {
         setWalletData(data)
         setLoading(false)
         setAiLoading(true)
+        setLastType('wallet')
         try {
           const jLabel = data.jeetScore >= 75 ? 'Certified Jeet' : data.jeetScore >= 50 ? 'Flip Merchant' : data.jeetScore >= 25 ? 'Selective Seller' : 'Diamond Tendencies'
-          const analysis = await analyzeWallet({ address, chain: CHAINS[chain], ...data, jeetLabel: jLabel })
+          const walletPayload = { address, chain: CHAINS[chain], ...data, jeetLabel: jLabel }
+          setLastPrompt(walletPayload)
+          const analysis = await analyzeWallet(walletPayload)
           setAiAnalysis(analysis)
         } catch (aiErr) {
           setAiAnalysis('AI analysis unavailable — ' + aiErr.message)
@@ -48,8 +53,11 @@ export default function AlphaPage() {
         setContractData(data)
         setLoading(false)
         setAiLoading(true)
+        setLastType('contract')
         try {
-          const analysis = await auditContract({ address, chain: CHAINS[chain], ...data })
+          const contractPayload = { address, chain: CHAINS[chain], ...data }
+          setLastPrompt(contractPayload)
+          const analysis = await auditContract(contractPayload)
           setAiAnalysis(analysis)
         } catch (aiErr) {
           setAiAnalysis('AI analysis unavailable — ' + aiErr.message)
@@ -226,7 +234,30 @@ export default function AlphaPage() {
 
           {/* AI */}
           <div className="card">
-            <div className="section-label">Forensic AI Analysis</div>
+            <div className="flex items-center justify-between mb-3">
+              <div className="section-label mb-0">Forensic AI Analysis</div>
+              {(aiAnalysis || aiLoading) && (
+                <button
+                  onClick={async () => {
+                    if (!lastPrompt || aiLoading) return
+                    setAiLoading(true)
+                    setAiAnalysis('')
+                    try {
+                      const result = lastType === 'wallet'
+                        ? await analyzeWallet(lastPrompt)
+                        : await auditContract(lastPrompt)
+                      setAiAnalysis(result)
+                    } catch(e) { setAiAnalysis('Retry failed: ' + e.message) }
+                    finally { setAiLoading(false) }
+                  }}
+                  disabled={aiLoading}
+                  className="btn-ghost text-xs px-2 py-1 flex items-center gap-1.5"
+                >
+                  <RefreshCw size={11} className={aiLoading ? 'animate-spin' : ''} />
+                  Retry AI
+                </button>
+              )}
+            </div>
             {aiLoading ? (
               <div className="flex items-center gap-3 py-4 text-muted text-sm">
                 <div className="spinner" />
@@ -289,7 +320,28 @@ export default function AlphaPage() {
           </div>
 
           <div className="card">
-            <div className="section-label">AI Security Audit</div>
+            <div className="flex items-center justify-between mb-3">
+              <div className="section-label mb-0">AI Security Audit</div>
+              {(aiAnalysis || aiLoading) && (
+                <button
+                  onClick={async () => {
+                    if (!lastPrompt || aiLoading) return
+                    setAiLoading(true)
+                    setAiAnalysis('')
+                    try {
+                      const result = await auditContract(lastPrompt)
+                      setAiAnalysis(result)
+                    } catch(e) { setAiAnalysis('Retry failed: ' + e.message) }
+                    finally { setAiLoading(false) }
+                  }}
+                  disabled={aiLoading}
+                  className="btn-ghost text-xs px-2 py-1 flex items-center gap-1.5"
+                >
+                  <RefreshCw size={11} className={aiLoading ? 'animate-spin' : ''} />
+                  Retry AI
+                </button>
+              )}
+            </div>
             {aiLoading ? (
               <div className="flex items-center gap-3 py-4 text-muted text-sm">
                 <div className="spinner" />
