@@ -37,13 +37,55 @@ Respond with ONLY valid JSON, no markdown:
     const d = await r.json()
     if (d.error) return { error: d.error.message }
     const text = d.choices?.[0]?.message?.content || ''
-    const clean = text.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim()
+    // Strip markdown, code blocks, and any text before/after JSON
+    const clean = text
+      .replace(/```json\n?/g, '')
+      .replace(/```\n?/g, '')
+      .replace(/^[^{]*/s, '')
+      .trim()
+    // Find the JSON object - be greedy to get the full object
     const jsonMatch = clean.match(/\{[\s\S]*\}/)
     if (jsonMatch) {
-      try { return JSON.parse(jsonMatch[0]) }
-      catch { return { error: 'Could not parse response' } }
+      try {
+        return JSON.parse(jsonMatch[0])
+      } catch {
+        // Try to fix common JSON issues
+        try {
+          const fixed = jsonMatch[0]
+            .replace(/,\s*}/g, '}')      // trailing commas
+            .replace(/,\s*]/g, ']')      // trailing commas in arrays
+            .replace(/([{,]\s*)(\w+):/g, '$1"$2":') // unquoted keys
+          return JSON.parse(fixed)
+        } catch {
+          // Last resort - return partial data from text
+          return {
+            summary: text.slice(0, 200),
+            hype_score: 5,
+            advice: 'AI response could not be fully parsed — try refreshing.',
+            red_flags: [],
+            green_flags: [],
+            wl_giveaway_likely: false,
+            giveaway_note: '',
+            hype_reason: '',
+            discord_tip: '',
+            twitter_tip: '',
+          }
+        }
+      }
     }
-    return { error: 'Invalid response format' }
+    // No JSON found — still return something useful
+    return {
+      summary: text.slice(0, 300),
+      hype_score: 5,
+      advice: text.slice(0, 150),
+      red_flags: [],
+      green_flags: [],
+      wl_giveaway_likely: false,
+      giveaway_note: '',
+      hype_reason: '',
+      discord_tip: '',
+      twitter_tip: '',
+    }
   } catch(e) {
     return { error: e.message }
   }
