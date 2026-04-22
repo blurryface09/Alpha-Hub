@@ -7,7 +7,7 @@ export const supabase = createClient(supabaseUrl, supabaseKey, {
   realtime: { params: { eventsPerSecond: 10 } },
 })
 
-// ─── DATABASE SCHEMA (run this in Supabase SQL editor) ───────────
+// --- DATABASE SCHEMA (run this in Supabase SQL editor) -----------
 // Copy and run this in your Supabase project → SQL Editor → New Query
 
 export const SCHEMA_SQL = `
