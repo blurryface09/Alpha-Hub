@@ -3,7 +3,7 @@ import { motion } from "framer-motion"
 import { Zap, Trash2, Clock, ChevronDown, ChevronUp, ToggleLeft, ToggleRight, ExternalLink, RefreshCw, AlertCircle, Gift, Bell } from "lucide-react"
 import toast from "react-hot-toast"
 
-const GEMINI_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent"
+const GEMINI_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent"
 
 function getIntelKeyPool() {
   return [
