@@ -33,7 +33,19 @@ function ProtectedRoute({ children }) {
 
 function App() {
   const init = useAuthStore(s => s.init)
-  useEffect(() => { init() }, [])
+  
+  useEffect(() => { 
+    init()
+    
+    // Re-init auth when tab becomes visible again (fixes stale session)
+    const handleVisibility = () => {
+      if (document.visibilityState === 'visible') {
+        init()
+      }
+    }
+    document.addEventListener('visibilitychange', handleVisibility)
+    return () => document.removeEventListener('visibilitychange', handleVisibility)
+  }, [])
 
   return (
     <QueryClientProvider client={queryClient}>
