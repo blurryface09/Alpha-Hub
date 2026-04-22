@@ -10,11 +10,25 @@ export const useAuthStore = create((set, get) => ({
 
   init: async () => {
     try {
-      // Force refresh the session on init
+      // First set up the auth listener BEFORE checking session
+      // This ensures we never miss auth events
+      supabase.auth.onAuthStateChange(async (event, session) => {
+        console.log('Auth event:', event)
+        if (event === 'SIGNED_IN' || event === 'TOKEN_REFRESHED' || event === 'INITIAL_SESSION') {
+          if (session?.user) {
+            set({ user: session.user, loading: false })
+            await get().fetchProfile(session.user.id)
+          }
+        } else if (event === 'SIGNED_OUT') {
+          set({ user: null, profile: null, loading: false })
+        }
+      })
+
+      // Then check current session
       const { data: { session }, error } = await supabase.auth.getSession()
       if (error) {
         console.error('Session error:', error)
-        set({ user: null, profile: null, loading: false })
+        set({ loading: false })
         return
       }
       if (session?.user) {
@@ -22,18 +36,6 @@ export const useAuthStore = create((set, get) => ({
         await get().fetchProfile(session.user.id)
       }
       set({ loading: false })
-
-      supabase.auth.onAuthStateChange(async (event, session) => {
-        console.log('Auth event:', event, session?.user?.id)
-        if (event === 'SIGNED_IN' || event === 'TOKEN_REFRESHED') {
-          if (session?.user) {
-            set({ user: session.user })
-            await get().fetchProfile(session.user.id)
-          }
-        } else if (event === 'SIGNED_OUT') {
-          set({ user: null, profile: null })
-        }
-      })
     } catch (err) {
       console.error('Auth init error:', err)
       set({ loading: false })
