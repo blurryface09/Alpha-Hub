@@ -1,67 +1,36 @@
-const GEMINI_URL = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent`
-const GEMINI_FALLBACK_URL = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-lite:generateContent`
-const GEMINI_FALLBACK_URL2 = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash-latest:generateContent`
+const GROQ_URL = 'https://api.groq.com/openai/v1/chat/completions'
+const GROQ_KEY = import.meta.env.VITE_GROQ_API_KEY
 
 const SYSTEM = `You are an expert on-chain forensics analyst and smart contract auditor for a professional crypto and NFT trading community. You have deep knowledge of DeFi protocols, DEX mechanics, NFT markets, MEV/sandwich attacks, rug pull patterns, and on-chain behavior analysis. You give structured forensic reports with clear section headers. You decode failed transactions precisely, identify bot behavior, jeet patterns, honeypots and contract backdoors. You write in direct crypto community language. No financial disclaimers. Ever.`
 
-// Key rotation pool
-// Collects all VITE_GEMINI_KEY_1 through _4 + fallback VITE_GEMINI_API_KEY
-function getKeyPool() {
-  const keys = [
-    import.meta.env.VITE_GEMINI_API_KEY,
-    import.meta.env.VITE_GEMINI_KEY_2,
-    import.meta.env.VITE_GEMINI_KEY_3,
-    import.meta.env.VITE_GEMINI_KEY_4,
-  ].filter(k => k && k !== 'your_gemini_api_key' && k.startsWith('AIza'))
-  return keys
-}
 
-let _keyIndex = 0
-function getNextKey(pool) {
-  if (!pool.length) return null
-  const key = pool[_keyIndex % pool.length]
-  _keyIndex++
-  return key
-}
-
-async function callGemini(prompt) {
-  const pool = getKeyPool()
-  if (!pool.length) {
-    return 'No Gemini API key set. Add VITE_GEMINI_API_KEY to your Vercel environment variables.'
+async function callGroq(prompt) {
+  if (!GROQ_KEY) return 'No Groq API key set. Add VITE_GROQ_API_KEY to Vercel environment variables.'
+  try {
+    const r = await fetch(GROQ_URL, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${GROQ_KEY}`,
+      },
+      body: JSON.stringify({
+        model: 'llama-3.3-70b-versatile',
+        messages: [
+          { role: 'system', content: SYSTEM },
+          { role: 'user', content: prompt }
+        ],
+        max_tokens: 2048,
+        temperature: 0.7,
+      }),
+    })
+    const d = await r.json()
+    if (d.error) return `AI error: ${d.error.message}`
+    return d.choices?.[0]?.message?.content || 'Analysis unavailable.'
+  } catch(e) {
+    return `AI unavailable: ${e.message}`
   }
-  const models = [GEMINI_URL, GEMINI_FALLBACK_URL, GEMINI_FALLBACK_URL2]
-  for (const modelUrl of models) {
-    for (const key of pool) {
-      try {
-        const r = await fetch(modelUrl + '?key=' + key, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            contents: [{ parts: [{ text: SYSTEM + '\n\n' + prompt }] }],
-            generationConfig: { temperature: 0.7, maxOutputTokens: 2048 },
-          }),
-        })
-        const d = await r.json()
-        if (!d.error) {
-          const text = d.candidates?.[0]?.content?.parts?.[0]?.text
-          if (text) return text
-        } else {
-          const code = d.error.code
-          const msg = d.error.message || ''
-          if (code === 429 || code === 503 || msg.includes('high demand') || msg.includes('RESOURCE_EXHAUSTED') || msg.includes('not found')) {
-            continue
-          }
-          console.error('Gemini error:', msg)
-        }
-      } catch(e) {
-        continue
-      }
-    }
-  }
-  return 'AI analysis unavailable right now. Wait 1 minute and try again.'
 }
 
-// --- Wallet Forensic Analysis ------------------------------------
 export async function analyzeWallet({ address, chain, bal, txs, tokens, internals, jeetScore, jeetLabel, volume, gasSpent, tokenBuys, tokenSells, quickFlips, totalBought }) {
   const failedTxs = txs.filter(t => t.isError === '1')
   const firstTx = txs.length ? new Date(parseInt(txs[txs.length - 1].timeStamp) * 1000).toLocaleDateString() : '—'
@@ -134,7 +103,7 @@ One punchy sentence: trust this wallet, copy their moves, or stay away?
 
 Max 400 words. Be direct. Crypto language.`
 
-  return callGemini(prompt)
+  return callGroq(prompt)
 }
 
 // --- Contract Security Audit -------------------------------------
@@ -198,7 +167,7 @@ One sentence: ape in, proceed careful, or hard avoid?
 
 Max 350 words. Direct. No fluff.`
 
-  return callGemini(prompt)
+  return callGroq(prompt)
 }
 
 // --- Whale Activity Summary --------------------------------------
@@ -217,7 +186,7 @@ If it's a mint, explain why this matters (new project, following smart money, et
 If it's a large trade, explain what it signals (bullish, bearish, accumulation, distribution).
 Keep it sharp, 2 sentences max. Crypto slang welcome.`
 
-  return callGemini(prompt)
+  return callGroq(prompt)
 }
 
 // --- Project Metadata from URL -----------------------------------
@@ -235,7 +204,7 @@ Based on the URL alone, extract and return ONLY a JSON object (no markdown, no e
 Return only valid JSON.`
 
   try {
-    const result = await callGemini(prompt)
+    const result = await callGroq(prompt)
     const jsonMatch = result.match(/\{[\s\S]*\}/)
     if (jsonMatch) return JSON.parse(jsonMatch[0])
   } catch {}
