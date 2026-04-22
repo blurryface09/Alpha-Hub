@@ -28,20 +28,58 @@ export default function AddProjectModal({ onAdd, onClose }) {
   const handleUrlSubmit = async () => {
     if (!url.trim()) { toast.error('Paste a URL first'); return }
     setLoading(true)
-    // Detect source type from URL directly — no AI needed
+
     let source_type = 'website'
-    let name = ''
-    if (url.includes('twitter.com') || url.includes('x.com')) source_type = 'twitter'
-    else if (url.includes('opensea.io')) source_type = 'opensea'
-    // Try to extract name from URL path
-    const urlParts = url.replace(/https?:\/\//, '').split('/')
-    if (urlParts.length > 1) name = urlParts[urlParts.length - 1].replace(/-/g, ' ').replace(/_/g, ' ')
+    let autoFill = {}
+
+    if (url.includes('twitter.com') || url.includes('x.com')) {
+      source_type = 'twitter'
+    } else if (url.includes('opensea.io')) {
+      source_type = 'opensea'
+      // Extract collection slug from OpenSea URL
+      // e.g. https://opensea.io/collection/chromaaforms/overview -> chromaaforms
+      const slugMatch = url.match(/opensea\.io\/collection\/([^/?#]+)/)
+      if (slugMatch) {
+        const slug = slugMatch[1]
+        try {
+          // Try OpenSea public API - no key needed for basic collection data
+          const proxyUrl = 'https://corsproxy.io/?' + encodeURIComponent(`https://api.opensea.io/api/v2/collections/${slug}`)
+          const res = await fetch(proxyUrl, {
+            headers: { 'X-API-KEY': '' }
+          })
+          if (res.ok) {
+            const data = await res.json()
+            autoFill = {
+              name: data.name || slug.replace(/-/g, ' '),
+              image_url: data.image_url || null,
+              chain: data.contracts?.[0]?.chain === 'base' ? 'base' : 'eth',
+              contract_address: data.contracts?.[0]?.address || '',
+              notes: data.description ? data.description.slice(0, 200) : '',
+            }
+          }
+        } catch(e) {
+          console.log('OpenSea API failed, using URL parsing:', e.message)
+        }
+      }
+      // Fallback: extract name from URL if API failed
+      if (!autoFill.name) {
+        const slugMatch2 = url.match(/opensea\.io\/collection\/([^/?#]+)/)
+        if (slugMatch2) autoFill.name = slugMatch2[1].replace(/-/g, ' ')
+      }
+    } else {
+      // For any URL extract name from path
+      const urlParts = url.replace(/https?:\/\//, '').split('/')
+      if (urlParts.length > 1) {
+        autoFill.name = urlParts[urlParts.length - 1].replace(/-/g, ' ').replace(/_/g, ' ')
+      }
+    }
+
     setForm(f => ({
       ...f,
       source_url: url,
       source_type,
-      name: name || '',
       chain: 'eth',
+      ...autoFill,
     }))
     setLoading(false)
     setStep(2)
