@@ -4,7 +4,16 @@ const supabaseUrl = import.meta.env.VITE_SUPABASE_URL
 const supabaseKey = import.meta.env.VITE_SUPABASE_ANON_KEY
 
 export const supabase = createClient(supabaseUrl, supabaseKey, {
+  auth: {
+    persistSession: true,
+    autoRefreshToken: true,
+    detectSessionInUrl: true,
+    storageKey: 'alphahub-auth',
+  },
   realtime: { params: { eventsPerSecond: 10 } },
+  global: {
+    headers: { 'x-client-info': 'alphahub/1.0' },
+  },
 })
 
 // --- DATABASE SCHEMA (run this in Supabase SQL editor) -----------
