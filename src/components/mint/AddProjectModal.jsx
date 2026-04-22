@@ -49,7 +49,6 @@ export default function AddProjectModal({ onAdd, onClose }) {
 
   const handleSubmit = async () => {
     if (!form.name.trim()) { toast.error('Project name is required'); return }
-    // Ensure numeric fields are valid
     const cleanForm = {
       ...form,
       gas_limit: parseInt(form.gas_limit) || 200000,
@@ -62,6 +61,9 @@ export default function AddProjectModal({ onAdd, onClose }) {
     setLoading(true)
     try {
       await onAdd(cleanForm)
+      // onAdd closes modal on success — if we get here it succeeded or failed
+    } catch(err) {
+      toast.error('Save failed: ' + err.message)
     } finally {
       setLoading(false)
     }
