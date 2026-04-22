@@ -2,7 +2,7 @@ import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
 import { supabase } from '../lib/supabase'
 
-// ─── Auth Store ──────────────────────────────────────────────────
+// --- Auth Store --------------------------------------------------
 export const useAuthStore = create((set, get) => ({
   user: null,
   profile: null,
@@ -81,7 +81,7 @@ export const useAuthStore = create((set, get) => ({
   },
 }))
 
-// ─── Notifications Store ─────────────────────────────────────────
+// --- Notifications Store -----------------------------------------
 export const useNotificationStore = create((set, get) => ({
   notifications: [],
   unreadCount: 0,
@@ -128,7 +128,7 @@ export const useNotificationStore = create((set, get) => ({
   },
 }))
 
-// ─── Whale Activity Store ─────────────────────────────────────────
+// --- Whale Activity Store -----------------------------------------
 export const useWhaleStore = create((set) => ({
   activity: [],
   loading: false,
@@ -156,7 +156,7 @@ export const useWhaleStore = create((set) => ({
   },
 }))
 
-// ─── Settings Store (persisted) ──────────────────────────────────
+// --- Settings Store (persisted) ----------------------------------
 export const useSettingsStore = create(
   persist(
     (set) => ({
