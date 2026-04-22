@@ -1,4 +1,4 @@
-import React, { useState } from 'react'
+import React, { useState, useEffect } from 'react'
 import { motion } from 'framer-motion'
 import { Settings, Key, Wallet, Save, Eye, EyeOff, Check, ExternalLink } from 'lucide-react'
 import toast from 'react-hot-toast'
@@ -17,6 +17,12 @@ export default function SettingsPage() {
   })
   const [username, setUsername] = useState(profile?.username || '')
   const [walletAddress, setWalletAddress] = useState(profile?.wallet_address || '')
+
+  // Sync form when profile loads/updates from Supabase
+  useEffect(() => {
+    if (profile?.username) setUsername(profile.username)
+    if (profile?.wallet_address) setWalletAddress(profile.wallet_address)
+  }, [profile])
   const [show, setShow] = useState({})
   const [saving, setSaving] = useState(false)
 
