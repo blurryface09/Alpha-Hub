@@ -16,7 +16,7 @@ export const viemClients = {
   base: createPublicClient({ chain: base,    transport: http(CHAINS.base.rpc) }),
 }
 
-// ─── Etherscan V2 fetch with CORS proxy fallback ─────────────────
+// --- Etherscan V2 fetch with CORS proxy fallback -----------------
 async function etherscanFetch(chainKey, params) {
   const chain = CHAINS[chainKey]
   if (!chain) return { status: '0', message: 'NOTOK', result: 'Unknown chain' }
@@ -54,7 +54,7 @@ async function etherscanFetch(chainKey, params) {
   return { status: '0', message: 'NOTOK', result: lastError?.message || 'Request failed' }
 }
 
-// ─── Wallet Analysis ─────────────────────────────────────────────
+// --- Wallet Analysis ---------------------------------------------
 export async function getWalletData(address, chainKey = 'eth') {
   const [balData, txData, tokenData, internalData] = await Promise.all([
     etherscanFetch(chainKey, { module: 'account', action: 'balance', address, tag: 'latest' }),
@@ -97,7 +97,7 @@ export async function getWalletData(address, chainKey = 'eth') {
   return { bal, txs, tokens, internals, sent, received, failed, volume, gasSpent, jeetScore, tokenBuys, tokenSells, totalBought, quickFlips }
 }
 
-// ─── Contract Analysis ───────────────────────────────────────────
+// --- Contract Analysis -------------------------------------------
 export async function getContractData(address, chainKey = 'eth') {
   const [abiData, srcData, txData] = await Promise.all([
     etherscanFetch(chainKey, { module: 'contract', action: 'getabi', address }),
@@ -125,7 +125,7 @@ export async function getContractData(address, chainKey = 'eth') {
   return { verified, src, txs, unique, age, failRate, signals, score, contractName: src.ContractName || 'Unknown', sourceCode: src.SourceCode }
 }
 
-// ─── Whale Activity Detection ────────────────────────────────────
+// --- Whale Activity Detection ------------------------------------
 export async function getLatestActivity(address, chainKey = 'eth', lastTxHash = null) {
   const data = await etherscanFetch(chainKey, {
     module: 'account', action: 'txlist',
@@ -152,7 +152,7 @@ export async function getLatestActivity(address, chainKey = 'eth', lastTxHash = 
   }))
 }
 
-// ─── Mint Detection ──────────────────────────────────────────────
+// --- Mint Detection ----------------------------------------------
 const MINT_METHOD_IDS = new Set([
   '0x40993b26', // mint()
   '0x1249c58b', // mint()
@@ -199,7 +199,7 @@ export function decodeMethodName(methodId) {
   return methods[methodId] || `Method ${methodId}`
 }
 
-// ─── Execute Mint Transaction ─────────────────────────────────────
+// --- Execute Mint Transaction -------------------------------------
 export async function buildMintTransaction({ contractAddress, chainKey, maxMint, gasLimit, walletClient }) {
   const chain = CHAINS[chainKey]
   if (!chain) throw new Error('Unsupported chain')
