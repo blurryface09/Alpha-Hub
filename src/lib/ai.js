@@ -2,7 +2,7 @@ const GEMINI_URL = `https://generativelanguage.googleapis.com/v1beta/models/gemi
 
 const SYSTEM = `You are an expert on-chain forensics analyst and smart contract auditor for a professional crypto and NFT trading community. You have deep knowledge of DeFi protocols, DEX mechanics, NFT markets, MEV/sandwich attacks, rug pull patterns, and on-chain behavior analysis. You give structured forensic reports with clear section headers. You decode failed transactions precisely, identify bot behavior, jeet patterns, honeypots and contract backdoors. You write in direct crypto community language. No financial disclaimers. Ever.`
 
-// ─── Key rotation pool ────────────────────────────────────────────
+// Key rotation pool
 // Collects all VITE_GEMINI_KEY_1 through _4 + fallback VITE_GEMINI_API_KEY
 function getKeyPool() {
 const keys = [
@@ -59,7 +59,7 @@ await new Promise(res => setTimeout(res, 1000))
 return ‘⏳ All API keys are rate limited. Wait 1 minute and try again. Add more keys to VITE_GEMINI_KEY_2, _3, _4 in Vercel to increase capacity.’
 }
 
-// ─── Wallet Forensic Analysis ────────────────────────────────────
+// — Wallet Forensic Analysis ————————————
 export async function analyzeWallet({ address, chain, bal, txs, tokens, internals, jeetScore, jeetLabel, volume, gasSpent, tokenBuys, tokenSells, quickFlips, totalBought }) {
 const failedTxs = txs.filter(t => t.isError === ‘1’)
 const firstTx = txs.length ? new Date(parseInt(txs[txs.length - 1].timeStamp) * 1000).toLocaleDateString() : ‘—’
@@ -135,7 +135,7 @@ Max 400 words. Be direct. Crypto language.`
 return callGemini(prompt)
 }
 
-// ─── Contract Security Audit ─────────────────────────────────────
+// — Contract Security Audit ———————————––
 export async function auditContract({ address, chain, contractName, verified, compiler, proxy, age, unique, txs, failRate, score, sourceCode }) {
 const recentCalls = txs.slice(0, 8).map(t => {
 const methodNames = {
@@ -198,7 +198,7 @@ Max 350 words. Direct. No fluff.`
 return callGemini(prompt)
 }
 
-// ─── Whale Activity Summary ──────────────────────────────────────
+// — Whale Activity Summary –––––––––––––––––––
 export async function summarizeWhaleMove({ label, address, chain, txHash, value, methodName, contractAddress, isMint }) {
 const prompt = `A whale wallet just moved on-chain. Give a 2-sentence sharp analysis for a crypto community feed.
 
@@ -217,7 +217,7 @@ Keep it sharp, 2 sentences max. Crypto slang welcome.`
 return callGemini(prompt)
 }
 
-// ─── Project Metadata from URL ───────────────────────────────────
+// — Project Metadata from URL ———————————–
 export async function extractProjectMetadata(url) {
 const prompt = `A user pasted this URL for an NFT/crypto project: ${url}
 
