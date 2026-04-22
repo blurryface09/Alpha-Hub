@@ -3,18 +3,39 @@ const GEMINI_URL = `https://generativelanguage.googleapis.com/v1beta/models/gemi
 
 const SYSTEM = `You are an expert on-chain forensics analyst and smart contract auditor for a professional crypto and NFT trading community. You have deep knowledge of DeFi protocols, DEX mechanics, NFT markets, MEV/sandwich attacks, rug pull patterns, and on-chain behavior analysis. You give structured forensic reports with clear section headers. You decode failed transactions precisely, identify bot behavior, jeet patterns, honeypots and contract backdoors. You write in direct crypto community language. No financial disclaimers. Ever.`
 
-async function callGemini(prompt) {
-  const r = await fetch(`${GEMINI_URL}?key=${GEMINI_KEY}`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      contents: [{ parts: [{ text: SYSTEM + '\n\n' + prompt }] }],
-      generationConfig: { temperature: 0.7, maxOutputTokens: 2048 },
-    }),
-  })
-  const d = await r.json()
-  if (d.error) throw new Error(d.error.message)
-  return d.candidates?.[0]?.content?.parts?.[0]?.text || 'Analysis unavailable.'
+async function callGemini(prompt, retries = 2) {
+  if (!GEMINI_KEY || GEMINI_KEY === 'your_gemini_api_key') {
+    return '⚠️ No Gemini API key set. Go to Settings and add your key from aistudio.google.com'
+  }
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    try {
+      const r = await fetch(`${GEMINI_URL}?key=${GEMINI_KEY}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          contents: [{ parts: [{ text: SYSTEM + '\n\n' + prompt }] }],
+          generationConfig: { temperature: 0.7, maxOutputTokens: 2048 },
+        }),
+      })
+      const d = await r.json()
+      if (d.error) {
+        // Rate limit — wait and retry
+        if (d.error.code === 429) {
+          if (attempt < retries) {
+            await new Promise(res => setTimeout(res, 3000 * (attempt + 1)))
+            continue
+          }
+          return '⏳ AI rate limit reached — free tier allows 15 requests/minute. Wait a moment and try again, or upgrade your Gemini plan at aistudio.google.com'
+        }
+        throw new Error(d.error.message)
+      }
+      return d.candidates?.[0]?.content?.parts?.[0]?.text || 'Analysis unavailable.'
+    } catch(e) {
+      if (attempt === retries) throw e
+      await new Promise(res => setTimeout(res, 2000))
+    }
+  }
+  return 'Analysis unavailable.'
 }
 
 // ─── Wallet Forensic Analysis ────────────────────────────────────
