@@ -107,18 +107,25 @@ export default function WhaleRadarPage() {
         toast.error('Already watching this wallet')
         return
       }
-      const { data, error } = await supabase
+      const insertPromise = supabase
         .from('whale_watchlist')
         .insert({ user_id: user.id, wallet_address: address, label: label || 'Unlabeled', chain })
         .select()
         .single()
+
+      const timeoutPromise = new Promise((_, reject) =>
+        setTimeout(() => reject(new Error('Request timed out after 10s')), 10000)
+      )
+
+      const { data, error } = await Promise.race([insertPromise, timeoutPromise])
+
       if (error) {
-        console.error('Supabase whale insert error:', error)
-        toast.error(`Error: ${error.message}`)
+        console.error('Supabase whale error:', error.code, error.message)
+        toast.error(`Failed: ${error.message}`, { duration: 6000 })
         return
       }
       setWatchlist(prev => [...prev, data])
-      toast.success(`Now watching ${label || address.slice(0, 12)}...`)
+      toast.success(`Watching ${label || address.slice(0, 12)}!`)
       setShowAddModal(false)
     } catch (err) {
       console.error('Unexpected error adding wallet:', err)
