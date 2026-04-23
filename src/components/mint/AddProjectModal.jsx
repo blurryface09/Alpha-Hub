@@ -41,30 +41,15 @@ export default function AddProjectModal({ onAdd, onClose }) {
       const slugMatch = url.match(/opensea\.io\/collection\/([^/?#]+)/)
       if (slugMatch) {
         const slug = slugMatch[1]
-        try {
-          // Try OpenSea public API - no key needed for basic collection data
-          const proxyUrl = 'https://corsproxy.io/?' + encodeURIComponent(`https://api.opensea.io/api/v2/collections/${slug}`)
-          const res = await fetch(proxyUrl, {
-            headers: { 'X-API-KEY': '' }
-          })
-          if (res.ok) {
-            const data = await res.json()
-            autoFill = {
-              name: data.name || slug.replace(/-/g, ' '),
-              image_url: data.image_url || null,
-              chain: data.contracts?.[0]?.chain === 'base' ? 'base' : 'eth',
-              contract_address: data.contracts?.[0]?.address || '',
-              notes: data.description ? data.description.slice(0, 200) : '',
-            }
-          }
-        } catch(e) {
-          console.log('OpenSea API failed, using URL parsing:', e.message)
+        // Clean name from slug — no external API needed
+        const cleanName = slug
+          .replace(/-/g, ' ')
+          .replace(/_/g, ' ')
+          .replace(/\b\w/g, c => c.toUpperCase()) // Title Case
+        autoFill = {
+          name: cleanName,
+          chain: 'eth', // default, user can change
         }
-      }
-      // Fallback: extract name from URL if API failed
-      if (!autoFill.name) {
-        const slugMatch2 = url.match(/opensea\.io\/collection\/([^/?#]+)/)
-        if (slugMatch2) autoFill.name = slugMatch2[1].replace(/-/g, ' ')
       }
     } else {
       // For any URL extract name from path
