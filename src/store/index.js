@@ -24,10 +24,7 @@ export const useAuthStore = create((set, get) => ({
         if (event === 'SIGNED_IN' || event === 'TOKEN_REFRESHED') {
           if (session?.user) {
             set({ user: session.user })
-            // Only fetch profile if we don't have it yet
-            if (!get().profile) {
-              await get().fetchProfile(session.user.id)
-            }
+            await get().fetchProfile(session.user.id)
           }
         } else if (event === 'SIGNED_OUT') {
           set({ user: null, profile: null })
@@ -50,9 +47,8 @@ export const useAuthStore = create((set, get) => ({
         .select('*')
         .eq('id', userId)
         .single()
-      if (error && error.code !== 'PGRST116') {
-        console.error('fetchProfile error:', error)
-        // Create profile if missing
+      if (error && error.code === 'PGRST116') {
+        // Profile missing — create it
         const { data: newProfile } = await supabase
           .from('profiles')
           .upsert({ id: userId, username: 'user_' + userId.slice(0,6) })
@@ -60,6 +56,7 @@ export const useAuthStore = create((set, get) => ({
           .single()
         if (newProfile) set({ profile: newProfile })
       } else if (data) {
+        // Always update profile with latest from DB
         set({ profile: data })
       }
     } catch (err) {
