@@ -74,7 +74,6 @@ setStep(2)
 }
 
 const handleSubmit = async () => {
-toast(‘Submitting…’, { icon: ‘⏳’, duration: 2000 })
 if (!form.name.trim()) { toast.error(‘Project name is required’); return }
 const cleanForm = {
 …form,
