@@ -33,18 +33,14 @@ function ProtectedRoute({ children }) {
 
 function App() {
   const init = useAuthStore(s => s.init)
+  const initialized = React.useRef(false)
   
-  useEffect(() => { 
-    init()
-    
-    // Re-init auth when tab becomes visible again (fixes stale session)
-    const handleVisibility = () => {
-      if (document.visibilityState === 'visible') {
-        init()
-      }
+  useEffect(() => {
+    // Only init once — prevents duplicate auth listeners
+    if (!initialized.current) {
+      initialized.current = true
+      init()
     }
-    document.addEventListener('visibilitychange', handleVisibility)
-    return () => document.removeEventListener('visibilitychange', handleVisibility)
   }, [])
 
   return (
