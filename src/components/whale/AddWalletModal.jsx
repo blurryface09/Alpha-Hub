@@ -68,7 +68,7 @@ export default function AddWalletModal({ onAdd, onClose }) {
             <label className="text-xs font-mono text-muted uppercase tracking-wider block mb-1.5">Label</label>
             <input
               className="input"
-              placeholder="e.g. Whale #1, Smart Money, My Friend"
+              placeholder="e.g. Whale #1, Smart Money (required)"
               value={form.label}
               onChange={e => set('label', e.target.value)}
             />
@@ -100,7 +100,7 @@ export default function AddWalletModal({ onAdd, onClose }) {
               {PRESETS.map(p => (
                 <button
                   key={p.address}
-                  onClick={() => { console.log('Preset clicked:', p.label); setForm({ address: p.address, label: p.label, chain: p.chain }) }}
+                  onClick={() => setForm({ address: p.address, label: p.label, chain: p.chain })}
                   className="w-full flex items-center justify-between text-xs p-2.5 bg-surface2 border border-border rounded-lg hover:border-accent/40 transition-all text-left"
                 >
                   <span className="font-medium">{p.label}</span>
