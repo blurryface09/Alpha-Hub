@@ -113,6 +113,14 @@ export default function MintGuardPage() {
     setProjects(prev => prev.map(p => p.id === id ? { ...p, status } : p))
   }
 
+  const handleEditProject = async (id, updates) => {
+    const { data, error } = await supabase
+      .from('wl_projects').update(updates).eq('id', id).select().single()
+    if (error) { toast.error('Update failed: ' + error.message); return }
+    setProjects(prev => prev.map(p => p.id === id ? data : p))
+    toast.success('Project updated!')
+  }
+
   const handleMintModeToggle = async (id, currentMode) => {
     const newMode = currentMode === 'confirm' ? 'auto' : 'confirm'
     await supabase.from('wl_projects').update({ mint_mode: newMode }).eq('id', id)
@@ -296,6 +304,7 @@ export default function MintGuardPage() {
                 onDelete={() => handleDelete(project.id)}
                 onStatusUpdate={(s) => handleStatusUpdate(project.id, s)}
                 onMintModeToggle={() => handleMintModeToggle(project.id, project.mint_mode)}
+                onEdit={(updates) => handleEditProject(project.id, updates)}
               />
             ))}
           </AnimatePresence>
