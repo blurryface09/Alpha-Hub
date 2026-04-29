@@ -324,6 +324,15 @@ export default function ProjectCard({ project, isMinting, onMint, onDelete, onSt
             )}
           </div>
 
+          {/* Live Mint Feed */}
+          <div className="border-t border-border pt-3 mt-1">
+            <LiveMintFeed project={project} />
+          </div>
+
+          <div className="border-t border-border pt-3 mt-1">
+            <LiveMintFeed project={project} />
+          </div>
+
           <div className="flex items-center gap-2 pt-1 flex-wrap border-t border-border">
             <span className="text-xs text-muted">Set status:</span>
             {["upcoming", "live", "minted", "missed", "cancelled"].map(function(s) {
