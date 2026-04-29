@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef, useCallback } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { Radar, Plus, Trash2, RefreshCw, Eye, TrendingUp, Activity } from 'lucide-react'
 import toast from 'react-hot-toast'
-import { supabase } from '../lib/supabase'
+import { supabase, withTimeout } from '../lib/supabase'
 import { useAuthStore, useWhaleStore } from '../store'
 import { getLatestActivity, decodeMethodName, CHAINS } from '../lib/blockchain'
 import AddWalletModal from '../components/whale/AddWalletModal'
@@ -76,7 +76,7 @@ export default function WhaleRadarPage() {
             await supabase.from('notifications').insert({
               user_id: user.id,
               type: isMint ? 'whale_mint' : 'whale_move',
-              title: `${isMint ? '🟢 WHALE MINTING' : '🐋 Whale Move'} — ${whale.label || whale.wallet_address.slice(0, 10)}...`,
+              title: `${isMint ? '🟢 WHALE MINTING' : '🐋 Whale Move'} -- ${whale.label || whale.wallet_address.slice(0, 10)}...`,
               message: `${methodName} · ${tx.value} ${CHAINS[chainKey]?.symbol || 'ETH'} · ${CHAINS[chainKey]?.name}${aiSummary ? '\n' + aiSummary : ''}`,
               data: { tx_hash: tx.hash, wallet: whale.wallet_address, chain: chainKey },
             })
@@ -101,7 +101,7 @@ export default function WhaleRadarPage() {
 
   const addWallet = async ({ address, label, chain }) => {
     try {
-      if (!user?.id) { toast.error('Not logged in — please sign out and back in'); return }
+      if (!user?.id) { toast.error('Not logged in -- please sign out and back in'); return }
       if (!address || !address.startsWith('0x')) { toast.error('Invalid wallet address'); return }
       if (watchlist.find(w => w.wallet_address.toLowerCase() === address.toLowerCase() && w.chain === chain)) {
         toast.error('Already watching this wallet')
