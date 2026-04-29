@@ -2,7 +2,7 @@ import React, { useState, useEffect, useCallback } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { Plus, Shield, Clock, Zap, AlertTriangle, Check, X, ExternalLink, ChevronDown, RefreshCw } from 'lucide-react'
 import toast from 'react-hot-toast'
-import { supabase } from '../lib/supabase'
+import { supabase, withTimeout } from '../lib/supabase'
 import { useAuthStore } from '../store'
 import { buildMintTransaction, CHAINS } from '../lib/blockchain'
 import AddProjectModal from '../components/mint/AddProjectModal'
@@ -31,7 +31,7 @@ export default function MintGuardPage() {
         .eq('user_id', user.id)
         .order('mint_date', { ascending: true, nullsFirst: false })
       if (error) { console.error('fetchProjects error:', error); return }
-      // Only update if we actually got data — never clear existing projects on error
+      // Only update if we actually got data -- never clear existing projects on error
       if (data) setProjects(data)
     } catch(e) {
       console.error('fetchProjects catch:', e)
@@ -48,7 +48,7 @@ export default function MintGuardPage() {
       initialLoad.current = true
       fetchProjects(true) // show spinner on first load
     }
-    // Silent background refresh every 60s — never clears projects
+    // Silent background refresh every 60s -- never clears projects
     const interval = setInterval(() => fetchProjects(false), 60000)
     return () => clearInterval(interval)
   }, [fetchProjects])
@@ -65,7 +65,7 @@ export default function MintGuardPage() {
 
   const handleAddProject = async (projectData) => {
     try {
-      if (!user?.id) { toast.error('Not logged in — please sign out and back in'); return }
+      if (!user?.id) { toast.error('Not logged in -- please sign out and back in'); return }
       const insertData = {
         name: projectData.name || 'Unnamed',
         source_url: projectData.source_url || 'https://unknown.com',
@@ -82,19 +82,16 @@ export default function MintGuardPage() {
         user_id: user.id,
         status: 'upcoming',
       }
-      const { data, error } = await supabase
-        .from('wl_projects')
-        .insert(insertData)
-        .select()
-        .single()
+      toast.loading('Saving...', { id: 'save-project' })
+      const { data, error } = await withTimeout(
+        supabase.from('wl_projects').insert(insertData).select().single()
+      )
       if (error) {
-        console.error('Supabase insert error:', JSON.stringify(error))
-        toast.error(`Save failed: ${error.message} (code: ${error.code})`)
+        toast.error(`Failed: ${error.message}`, { id: 'save-project' })
         return
       }
-      console.log('Insert success:', data)
       setProjects(prev => [data, ...prev])
-      toast.success(`${data.name} added to MintGuard! ✓`)
+      toast.success(`${data.name} added!`, { id: 'save-project' })
       setShowAddModal(false)
     } catch (err) {
       console.error('Unexpected error:', err)
@@ -114,11 +111,17 @@ export default function MintGuardPage() {
   }
 
   const handleEditProject = async (id, updates) => {
-    const { data, error } = await supabase
-      .from('wl_projects').update(updates).eq('id', id).select().single()
-    if (error) { toast.error('Update failed: ' + error.message); return }
-    setProjects(prev => prev.map(p => p.id === id ? data : p))
-    toast.success('Project updated!')
+    try {
+      toast.loading('Updating...', { id: 'edit-project' })
+      const { data, error } = await withTimeout(
+        supabase.from('wl_projects').update(updates).eq('id', id).select().single()
+      )
+      if (error) { toast.error('Update failed: ' + error.message, { id: 'edit-project' }); return }
+      setProjects(prev => prev.map(p => p.id === id ? data : p))
+      toast.success('Project updated!', { id: 'edit-project' })
+    } catch(e) {
+      toast.error(e.message, { id: 'edit-project' })
+    }
   }
 
   const handleMintModeToggle = async (id, currentMode) => {
@@ -192,7 +195,7 @@ export default function MintGuardPage() {
       await supabase.from('notifications').insert({
         user_id: user.id,
         type: 'mint_success',
-        title: `✅ Mint Success — ${project.name}`,
+        title: `✅ Mint Success -- ${project.name}`,
         message: `Transaction confirmed. Hash: ${hash.slice(0, 16)}...`,
         data: { tx_hash: hash, project_id: project.id },
       })
@@ -210,7 +213,7 @@ export default function MintGuardPage() {
       await supabase.from('notifications').insert({
         user_id: user.id,
         type: 'mint_failed',
-        title: `❌ Mint Failed — ${project.name}`,
+        title: `❌ Mint Failed -- ${project.name}`,
         message: err.message,
         data: { project_id: project.id },
       })
