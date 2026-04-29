@@ -342,9 +342,14 @@ export default function ProjectCard({ project, isMinting, onMint, onDelete, onSt
                 className: "text-xs px-2 py-0.5 rounded border transition-all " + (project.status === s ? "border-accent text-accent" : "border-border text-muted hover:border-border2")
               }, s)
             })}
-            <button onClick={onDelete} className="btn-danger ml-auto text-xs px-2 py-0.5">
-              {React.createElement(Trash2, { size: 11 })}
-            </button>
+            <div className="flex gap-2 ml-auto">
+              <button onClick={() => setShowEdit(true)} className="btn-ghost text-xs px-2 py-0.5" style={{borderColor:'rgba(0,255,136,0.4)',color:'var(--accent)'}}>
+                Edit
+              </button>
+              <button onClick={onDelete} className="btn-danger text-xs px-2 py-0.5">
+                {React.createElement(Trash2, { size: 11 })}
+              </button>
+            </div>
           </div>
         </div>
       )}
