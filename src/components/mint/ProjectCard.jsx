@@ -1,5 +1,6 @@
 import React, { useState } from 'react'
 import LiveMintFeed from './LiveMintFeed'
+import EditProjectModal from './EditProjectModal'
 import { motion } from 'framer-motion'
 import { Zap, Trash2, Clock, ChevronDown, ChevronUp, ToggleLeft, ToggleRight, ExternalLink, RefreshCw, Twitter, AlertCircle, Gift, Bell } from 'lucide-react'
 import toast from 'react-hot-toast'
@@ -130,6 +131,7 @@ function Countdown({ mintDate }) {
 
 export default function ProjectCard({ project, isMinting, onMint, onDelete, onStatusUpdate, onMintModeToggle }) {
   const [expanded, setExpanded] = useState(false)
+  const [showEdit, setShowEdit] = useState(false)
   const [intel, setIntel] = useState(null)
   const [intelLoading, setIntelLoading] = useState(false)
   const status = STATUS_STYLES[project.status] || STATUS_STYLES.upcoming
@@ -144,6 +146,7 @@ export default function ProjectCard({ project, isMinting, onMint, onDelete, onSt
   }
 
   return (
+    <>
     <motion.div
       layout
       initial={{ opacity: 0, y: 8 }}
@@ -329,9 +332,6 @@ export default function ProjectCard({ project, isMinting, onMint, onDelete, onSt
             <LiveMintFeed project={project} />
           </div>
 
-          <div className="border-t border-border pt-3 mt-1">
-            <LiveMintFeed project={project} />
-          </div>
 
           <div className="flex items-center gap-2 pt-1 flex-wrap border-t border-border">
             <span className="text-xs text-muted">Set status:</span>
@@ -349,5 +349,17 @@ export default function ProjectCard({ project, isMinting, onMint, onDelete, onSt
         </div>
       )}
     </motion.div>
+
+    {showEdit && (
+      <EditProjectModal
+        project={project}
+        onSave={async (updates) => {
+          await onEdit(updates)
+          setShowEdit(false)
+        }}
+        onClose={() => setShowEdit(false)}
+      />
+    )}
+  </>
   )
 }
