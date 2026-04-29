@@ -129,7 +129,7 @@ function Countdown({ mintDate }) {
   return React.createElement("span", { className: "font-mono text-xs text-accent3" }, timeLeft)
 }
 
-export default function ProjectCard({ project, isMinting, onMint, onDelete, onStatusUpdate, onMintModeToggle }) {
+export default function ProjectCard({ project, isMinting, onMint, onDelete, onStatusUpdate, onMintModeToggle, onEdit }) {
   const [expanded, setExpanded] = useState(false)
   const [showEdit, setShowEdit] = useState(false)
   const [intel, setIntel] = useState(null)
