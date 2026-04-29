@@ -1,4 +1,5 @@
 import React, { useState } from 'react'
+import LiveMintFeed from './LiveMintFeed'
 import { motion } from 'framer-motion'
 import { Zap, Trash2, Clock, ChevronDown, ChevronUp, ToggleLeft, ToggleRight, ExternalLink, RefreshCw, Twitter, AlertCircle, Gift, Bell } from 'lucide-react'
 import toast from 'react-hot-toast'
