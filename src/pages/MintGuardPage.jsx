@@ -2,7 +2,30 @@ import React, { useState, useEffect, useCallback } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { Plus, Shield, Clock, Zap, AlertTriangle, Check, X, ExternalLink, ChevronDown, RefreshCw } from 'lucide-react'
 import toast from 'react-hot-toast'
-import { supabase, withTimeout } from '../lib/supabase'
+import { supabase, directInsert, directUpdate, withTimeout } from '../lib/supabase'
+
+const SUPA_URL = import.meta.env.VITE_SUPABASE_URL
+const SUPA_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY
+
+// Direct REST insert - bypasses Supabase JS client lock issues
+async function directInsert(table, data, token) {
+  const res = await fetch(`${SUPA_URL}/rest/v1/${table}`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'apikey': SUPA_KEY,
+      'Authorization': `Bearer ${token}`,
+      'Prefer': 'return=representation',
+    },
+    body: JSON.stringify(data),
+  })
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ message: res.statusText }))
+    throw new Error(err.message || err.error || 'Insert failed')
+  }
+  const rows = await res.json()
+  return Array.isArray(rows) ? rows[0] : rows
+}
 import { useMint } from '../hooks/useMint'
 import { useAuthStore } from '../store'
 import { buildMintTransaction, CHAINS } from '../lib/blockchain'
@@ -84,13 +107,13 @@ export default function MintGuardPage() {
         status: 'upcoming',
       }
       toast.loading('Saving...', { id: 'save-project' })
-      const { data, error } = await withTimeout(
-        supabase.from('wl_projects').insert(insertData).select().single()
-      )
-      if (error) {
-        toast.error(`Failed: ${error.message}`, { id: 'save-project' })
+      // Get fresh token directly - no lock involved
+      const { data: { session } } = await supabase.auth.getSession()
+      if (!session?.access_token) {
+        toast.error('Session expired - please sign out and back in', { id: 'save-project' })
         return
       }
+      const data = await directInsert('wl_projects', insertData, session.access_token)
       setProjects(prev => [data, ...prev])
       toast.success(`${data.name} added!`, { id: 'save-project' })
       setShowAddModal(false)
@@ -114,11 +137,8 @@ export default function MintGuardPage() {
   const handleEditProject = async (id, updates) => {
     try {
       toast.loading('Updating...', { id: 'edit-project' })
-      const { data, error } = await withTimeout(
-        supabase.from('wl_projects').update(updates).eq('id', id).select().single()
-      )
-      if (error) { toast.error('Update failed: ' + error.message, { id: 'edit-project' }); return }
-      setProjects(prev => prev.map(p => p.id === id ? data : p))
+      const data = await directUpdate('wl_projects', updates, 'id', id)
+      setProjects(prev => prev.map(p => p.id === id ? { ...p, ...data } : p))
       toast.success('Project updated!', { id: 'edit-project' })
     } catch(e) {
       toast.error(e.message, { id: 'edit-project' })
