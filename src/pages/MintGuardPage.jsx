@@ -3,6 +3,7 @@ import { motion, AnimatePresence } from 'framer-motion'
 import { Plus, Shield, Clock, Zap, AlertTriangle, Check, X, ExternalLink, ChevronDown, RefreshCw } from 'lucide-react'
 import toast from 'react-hot-toast'
 import { supabase, withTimeout } from '../lib/supabase'
+import { useMint } from '../hooks/useMint'
 import { useAuthStore } from '../store'
 import { buildMintTransaction, CHAINS } from '../lib/blockchain'
 import AddProjectModal from '../components/mint/AddProjectModal'
@@ -132,6 +133,10 @@ export default function MintGuardPage() {
   }
 
   const handleMint = async (project, isAuto = false) => {
+    if (!isConnected) {
+      toast.error('Connect your wallet first — use the Connect Wallet button in the header')
+      return
+    }
     if (!project.contract_address) {
       toast.error('No contract address set for this project')
       return

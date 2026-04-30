@@ -69,7 +69,7 @@ export default function DashboardLayout() {
         {/* Status indicator */}
         <div className="mx-4 mt-3 mb-1 px-3 py-2 bg-surface2 rounded-lg border border-border flex items-center gap-2">
           <div className="dot-live" />
-          <span className="text-xs text-muted font-mono">ETH · BASE · LIVE</span>
+          <span className="text-xs text-muted font-mono">ETH ' BASE ' LIVE</span>
         </div>
 
         {/* Nav */}
