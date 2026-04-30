@@ -2,7 +2,29 @@ import React, { useState, useEffect, useRef, useCallback } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { Radar, Plus, Trash2, RefreshCw, Eye, TrendingUp, Activity } from 'lucide-react'
 import toast from 'react-hot-toast'
-import { supabase, withTimeout } from '../lib/supabase'
+import { supabase, directInsert, withTimeout } from '../lib/supabase'
+
+const SUPA_URL_W = import.meta.env.VITE_SUPABASE_URL
+const SUPA_KEY_W = import.meta.env.VITE_SUPABASE_ANON_KEY
+
+async function directInsertW(table, data, token) {
+  const res = await fetch(`${SUPA_URL_W}/rest/v1/${table}`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'apikey': SUPA_KEY_W,
+      'Authorization': `Bearer ${token}`,
+      'Prefer': 'return=representation',
+    },
+    body: JSON.stringify(data),
+  })
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ message: res.statusText }))
+    throw new Error(err.message || err.error || 'Insert failed')
+  }
+  const rows = await res.json()
+  return Array.isArray(rows) ? rows[0] : rows
+}
 import { useAuthStore, useWhaleStore } from '../store'
 import { getLatestActivity, decodeMethodName, CHAINS } from '../lib/blockchain'
 import AddWalletModal from '../components/whale/AddWalletModal'
