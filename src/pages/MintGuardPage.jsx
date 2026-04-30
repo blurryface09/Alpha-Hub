@@ -3,29 +3,6 @@ import { motion, AnimatePresence } from 'framer-motion'
 import { Plus, Shield, Clock, Zap, AlertTriangle, Check, X, ExternalLink, ChevronDown, RefreshCw } from 'lucide-react'
 import toast from 'react-hot-toast'
 import { supabase, directInsert, directUpdate, withTimeout } from '../lib/supabase'
-
-const SUPA_URL = import.meta.env.VITE_SUPABASE_URL
-const SUPA_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY
-
-// Direct REST insert - bypasses Supabase JS client lock issues
-async function directInsert(table, data, token) {
-  const res = await fetch(`${SUPA_URL}/rest/v1/${table}`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'apikey': SUPA_KEY,
-      'Authorization': `Bearer ${token}`,
-      'Prefer': 'return=representation',
-    },
-    body: JSON.stringify(data),
-  })
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({ message: res.statusText }))
-    throw new Error(err.message || err.error || 'Insert failed')
-  }
-  const rows = await res.json()
-  return Array.isArray(rows) ? rows[0] : rows
-}
 import { useMint } from '../hooks/useMint'
 import { useAuthStore } from '../store'
 import { buildMintTransaction, CHAINS } from '../lib/blockchain'
@@ -36,7 +13,7 @@ import ProjectCard from '../components/mint/ProjectCard'
 const STATUS_TABS = ['all', 'upcoming', 'live', 'minted', 'missed']
 
 export default function MintGuardPage() {
-  const { user, getValidSession } = useAuthStore()
+  const { user } = useAuthStore()
   const [projects, setProjects] = useState([])
   const [loading, setLoading] = useState(true)
   const [activeTab, setActiveTab] = useState('all')
@@ -113,7 +90,7 @@ export default function MintGuardPage() {
         toast.error('Session expired - please sign out and back in', { id: 'save-project' })
         return
       }
-      const data = await directInsert('wl_projects', insertData, session.access_token)
+      const data = await directInsert('wl_projects', insertData)
       setProjects(prev => [data, ...prev])
       toast.success(`${data.name} added!`, { id: 'save-project' })
       setShowAddModal(false)
