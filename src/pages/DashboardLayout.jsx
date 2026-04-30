@@ -6,6 +6,7 @@ import {
   Settings, Bell, LogOut, Menu, X, ChevronRight, Zap
 } from 'lucide-react'
 import { useAuthStore, useNotificationStore } from '../store'
+import ConnectWallet from '../components/shared/ConnectWallet'
 import NotificationPanel from '../components/shared/NotificationPanel'
 
 const NAV_ITEMS = [
@@ -123,6 +124,9 @@ export default function DashboardLayout() {
 
           <div className="flex-1" />
 
+          {/* Connect Wallet */}
+          <ConnectWallet />
+
           {/* Notification bell */}
           <div className="relative">
             <button
@@ -149,15 +153,7 @@ export default function DashboardLayout() {
             </AnimatePresence>
           </div>
 
-          {/* Wallet address display */}
-          {profile?.wallet_address && (
-            <div className="hidden sm:flex items-center gap-2 bg-surface2 border border-border rounded-lg px-3 py-1.5">
-              <Zap size={12} className="text-accent" />
-              <span className="font-mono text-xs text-muted">
-                {profile.wallet_address.slice(0, 6)}...{profile.wallet_address.slice(-4)}
-              </span>
-            </div>
-          )}
+
         </header>
 
         {/* Page content */}
