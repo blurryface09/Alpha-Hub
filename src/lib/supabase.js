@@ -3,10 +3,22 @@ import { createClient } from '@supabase/supabase-js'
 const supabaseUrl = import.meta.env.VITE_SUPABASE_URL
 const supabaseKey = import.meta.env.VITE_SUPABASE_ANON_KEY
 
-// Simple client - no custom auth config to avoid lock issues
-export const supabase = createClient(supabaseUrl, supabaseKey)
+// Custom lock that bypasses Web Locks API - fixes deadlock in React
+// Source: https://github.com/supabase/supabase-js/issues/1036
+const noopLock = async (name, acquireTimeout, fn) => {
+  return fn()
+}
 
-// Helper: wrap any supabase call with timeout
+export const supabase = createClient(supabaseUrl, supabaseKey, {
+  auth: {
+    persistSession: true,
+    autoRefreshToken: true,
+    detectSessionInUrl: false,
+    lock: noopLock,
+  },
+})
+
+// Timeout wrapper for all DB operations
 export async function withTimeout(promise, ms = 8000) {
   let timer
   const timeout = new Promise((_, reject) => {
