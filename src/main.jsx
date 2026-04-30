@@ -45,6 +45,7 @@ function App() {
   }, [])
 
   return (
+    <WalletProvider>
     <QueryClientProvider client={queryClient}>
       <BrowserRouter>
         <Routes>
@@ -67,6 +68,7 @@ function App() {
         }}
       />
     </QueryClientProvider>
+    </WalletProvider>
   )
 }
 
