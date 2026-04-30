@@ -84,12 +84,6 @@ export default function MintGuardPage() {
         status: 'upcoming',
       }
       toast.loading('Saving...', { id: 'save-project' })
-      // Get fresh token directly - no lock involved
-      const { data: { session } } = await supabase.auth.getSession()
-      if (!session?.access_token) {
-        toast.error('Session expired - please sign out and back in', { id: 'save-project' })
-        return
-      }
       const data = await directInsert('wl_projects', insertData)
       setProjects(prev => [data, ...prev])
       toast.success(`${data.name} added!`, { id: 'save-project' })
