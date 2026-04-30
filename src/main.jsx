@@ -4,6 +4,7 @@ import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { Toaster } from 'react-hot-toast'
 import './index.css'
+import WalletProvider from './components/shared/WalletProvider'
 
 import { useAuthStore } from './store'
 import AuthPage from './pages/AuthPage'
