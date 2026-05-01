@@ -108,12 +108,21 @@ const WL_BADGE = {
   UNKNOWN: "badge-cyan",
 }
 
-function Countdown({ mintDate }) {
+function Countdown({ mintDate, onLive, isAuto }) {
   const [timeLeft, setTimeLeft] = React.useState("")
+  const fired = React.useRef(false)
   React.useEffect(function() {
     function update() {
       const diff = new Date(mintDate) - new Date()
-      if (diff <= 0) { setTimeLeft("LIVE NOW"); return }
+      if (diff <= 0) {
+        setTimeLeft("LIVE NOW")
+        if (isAuto && !fired.current && onLive) {
+          fired.current = true
+          onLive()
+        }
+        return
+      }
+      fired.current = false
       const d = Math.floor(diff / 86400000)
       const h = Math.floor((diff % 86400000) / 3600000)
       const m = Math.floor((diff % 3600000) / 60000)
@@ -125,8 +134,10 @@ function Countdown({ mintDate }) {
     update()
     const interval = setInterval(update, 1000)
     return function() { clearInterval(interval) }
-  }, [mintDate])
-  return React.createElement("span", { className: "font-mono text-xs text-accent3" }, timeLeft)
+  }, [mintDate, isAuto, onLive])
+  return React.createElement("span", {
+    className: "font-mono text-xs " + (timeLeft === "LIVE NOW" ? "text-green animate-pulse" : "text-accent3")
+  }, timeLeft)
 }
 
 export default function ProjectCard({ project, isMinting, onMint, onDelete, onStatusUpdate, onMintModeToggle, onEdit }) {
@@ -177,7 +188,11 @@ export default function ProjectCard({ project, isMinting, onMint, onDelete, onSt
                   <div className="flex items-center gap-1.5">
                     <Clock size={11} className="text-muted" />
                     {project.status === "upcoming"
-                      ? <Countdown mintDate={project.mint_date} />
+                      ? <Countdown
+                    mintDate={project.mint_date}
+                    isAuto={project.mint_mode === 'auto' && project.status === 'upcoming'}
+                    onLive={onMint}
+                  />
                       : <span className="font-mono text-xs text-muted">{new Date(project.mint_date).toLocaleDateString()}</span>
                     }
                   </div>
