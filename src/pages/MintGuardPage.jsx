@@ -21,10 +21,46 @@ export default function MintGuardPage() {
   const [confirmMint, setConfirmMint] = useState(null) // project to confirm mint for
   const [mintingId, setMintingId] = useState(null)
 
+  // Auto-update project status based on mint date
+  const autoUpdateStatus = async (projects) => {
+    const now = new Date()
+    const updates = []
+    for (const p of projects) {
+      if (!p.mint_date || p.status === 'minted' || p.status === 'cancelled') continue
+      const mintDate = new Date(p.mint_date)
+      const diffMs = now - mintDate
+      const diffHours = diffMs / (1000 * 60 * 60)
+      let newStatus = p.status
+      if (diffMs < 0) {
+        // Before mint date
+        newStatus = 'upcoming'
+      } else if (diffHours >= 0 && diffHours < 2) {
+        // Within 2 hours of mint date = LIVE
+        newStatus = 'live'
+      } else if (diffHours >= 2) {
+        // More than 2 hours past = MISSED
+        newStatus = 'missed'
+      }
+      if (newStatus !== p.status) {
+        updates.push({ id: p.id, status: newStatus })
+      }
+    }
+    // Apply updates
+    for (const u of updates) {
+      await supabase.from('wl_projects').update({ status: u.status }).eq('id', u.id)
+    }
+    if (updates.length > 0) {
+      return projects.map(p => {
+        const update = updates.find(u => u.id === p.id)
+        return update ? { ...p, status: update.status } : p
+      })
+    }
+    return projects
+  }
+
   const fetchProjects = useCallback(async (showLoader = false) => {
     if (!user) { setLoading(false); return }
     try {
-      // Only show loading spinner on first load, not on interval refreshes
       if (showLoader) setLoading(true)
       const { data, error } = await supabase
         .from('wl_projects')
@@ -32,8 +68,11 @@ export default function MintGuardPage() {
         .eq('user_id', user.id)
         .order('mint_date', { ascending: true, nullsFirst: false })
       if (error) { console.error('fetchProjects error:', error); return }
-      // Only update if we actually got data -- never clear existing projects on error
-      if (data) setProjects(data)
+      if (data) {
+        // Auto-update statuses based on dates
+        const updated = await autoUpdateStatus(data)
+        setProjects(updated)
+      }
     } catch(e) {
       console.error('fetchProjects catch:', e)
     } finally {
