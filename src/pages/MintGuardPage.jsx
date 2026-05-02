@@ -138,21 +138,28 @@ export default function MintGuardPage() {
   }
 
   const handleDelete = async (id) => {
-    await supabase.from('wl_projects').delete().eq('id', id)
+    const snapshot = projects.find(p => p.id === id)
     setProjects(prev => prev.filter(p => p.id !== id))
+    const { error } = await supabase.from('wl_projects').delete().eq('id', id)
+    if (error) {
+      if (snapshot) setProjects(prev => [snapshot, ...prev.filter(p => p.id !== id)])
+      toast.error('Delete failed: ' + error.message)
+      return
+    }
     toast.success('Project removed')
   }
 
   const handleStatusUpdate = async (id, status) => {
-    await supabase.from('wl_projects').update({ status }).eq('id', id)
     setProjects(prev => prev.map(p => p.id === id ? { ...p, status } : p))
+    const { error } = await supabase.from('wl_projects').update({ status }).eq('id', id)
+    if (error) toast.error('Status update failed: ' + error.message)
   }
 
   const handleEditProject = async (id, updates) => {
     try {
       toast.loading('Updating...', { id: 'edit-project' })
-      const data = await directUpdate('wl_projects', updates, 'id', id)
-      setProjects(prev => prev.map(p => p.id === id ? { ...p, ...data } : p))
+      await directUpdate('wl_projects', updates, 'id', id)
+      setProjects(prev => prev.map(p => p.id === id ? { ...p, ...updates } : p))
       toast.success('Project updated!', { id: 'edit-project' })
     } catch(e) {
       toast.error(e.message, { id: 'edit-project' })

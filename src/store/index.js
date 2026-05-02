@@ -99,16 +99,18 @@ export const useNotificationStore = create((set, get) => ({
   },
 
   markRead: async (id) => {
-    await supabase.from('notifications').update({ read: true }).eq('id', id)
     set(s => ({
       notifications: s.notifications.map(n => n.id === id ? { ...n, read: true } : n),
       unreadCount: Math.max(0, s.unreadCount - 1),
     }))
+    const { error } = await supabase.from('notifications').update({ read: true }).eq('id', id)
+    if (error) console.error('markRead failed:', error.message)
   },
 
   markAllRead: async (userId) => {
-    await supabase.from('notifications').update({ read: true }).eq('user_id', userId)
     set(s => ({ notifications: s.notifications.map(n => ({ ...n, read: true })), unreadCount: 0 }))
+    const { error } = await supabase.from('notifications').update({ read: true }).eq('user_id', userId)
+    if (error) console.error('markAllRead failed:', error.message)
   },
 
   subscribe: (userId) => {
