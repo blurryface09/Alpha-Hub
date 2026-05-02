@@ -18,6 +18,12 @@ const EXPLORER = {
   bnb: 'bscscan.com',
 }
 
+const CHAIN_SYMBOL = {
+  eth: 'ETH',
+  base: 'ETH',
+  bnb: 'BNB',
+}
+
 export default function ActivityFeed({ activity }) {
   if (!activity || !activity.length) {
     return (
@@ -91,7 +97,7 @@ export default function ActivityFeed({ activity }) {
                 <div className={`text-sm font-mono font-semibold ${
                   isMint ? 'text-green' : isLarge ? 'text-accent' : 'text-text'
                 }`}>
-                  {val > 0 ? val.toFixed(4) : '—'} ETH
+                  {val > 0 ? val.toFixed(4) : '—'} {CHAIN_SYMBOL[a.chain] || 'ETH'}
                 </div>
                 <div className="text-[10px] text-muted mt-0.5">
                   {timeAgo(a.timestamp || a.created_at)}

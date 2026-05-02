@@ -1,5 +1,5 @@
 import { createPublicClient, http, parseAbi } from 'viem'
-import { mainnet, base } from 'viem/chains'
+import { mainnet, base, bsc } from 'viem/chains'
 
 const ALCHEMY_KEY = import.meta.env.VITE_ALCHEMY_API_KEY
 const ETHERSCAN_KEY = import.meta.env.VITE_ETHERSCAN_API_KEY
@@ -7,13 +7,15 @@ const CORS_PROXY = 'https://corsproxy.io/?'
 const ETHERSCAN_V2 = 'https://api.etherscan.io/v2/api'
 
 export const CHAINS = {
-  eth:  { id: 1,    name: 'Ethereum', symbol: 'ETH', rpc: `https://eth-mainnet.g.alchemy.com/v2/${ALCHEMY_KEY}`, explorer: 'etherscan.io' },
+  eth:  { id: 1,    name: 'Ethereum', symbol: 'ETH', rpc: `https://eth-mainnet.g.alchemy.com/v2/${ALCHEMY_KEY}`,  explorer: 'etherscan.io' },
   base: { id: 8453, name: 'Base',     symbol: 'ETH', rpc: `https://base-mainnet.g.alchemy.com/v2/${ALCHEMY_KEY}`, explorer: 'basescan.org' },
+  bnb:  { id: 56,   name: 'BNB Chain',symbol: 'BNB', rpc: `https://bnb-mainnet.g.alchemy.com/v2/${ALCHEMY_KEY}`,  explorer: 'bscscan.com' },
 }
 
 export const viemClients = {
   eth:  createPublicClient({ chain: mainnet, transport: http(CHAINS.eth.rpc) }),
   base: createPublicClient({ chain: base,    transport: http(CHAINS.base.rpc) }),
+  bnb:  createPublicClient({ chain: bsc,     transport: http(CHAINS.bnb.rpc) }),
 }
 
 // --- Etherscan V2 fetch with CORS proxy fallback -----------------
@@ -135,9 +137,10 @@ export async function getLatestActivity(address, chainKey = 'eth', lastTxHash = 
 
   const txs = data.status === '1' ? data.result : []
   if (!txs.length) return []
-  
-  // Only return new txs since last check
-  const newTxs = lastTxHash ? txs.filter(t => t.hash !== lastTxHash) : txs.slice(0, 1)
+
+  // txs are sorted desc (newest first). Slice everything before the last known hash.
+  const cutoffIdx = lastTxHash ? txs.findIndex(t => t.hash === lastTxHash) : -1
+  const newTxs = cutoffIdx > 0 ? txs.slice(0, cutoffIdx) : cutoffIdx === 0 ? [] : txs.slice(0, 1)
   
   return newTxs.map(t => ({
     hash: t.hash,

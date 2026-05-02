@@ -14,18 +14,18 @@ export const supabase = createClient(supabaseUrl, supabaseKey, {
   },
 })
 
-// Get auth token from localStorage directly - bypasses client lock
-function getAuthToken() {
-  try {
-    const stored = localStorage.getItem('sb-tlhdprppgkaqfiwgambu-auth-token')
-    if (stored) return JSON.parse(stored)?.access_token
-  } catch {}
-  return null
+// Get auth token from the supabase client (always fresh, auto-refreshed)
+async function getAuthToken() {
+  const { data: { session } } = await supabase.auth.getSession()
+  if (session?.access_token) return session.access_token
+  // Session missing — try a refresh before giving up
+  const { data: { session: refreshed } } = await supabase.auth.refreshSession()
+  return refreshed?.access_token || null
 }
 
 // Direct fetch for inserts - bypasses supabase-js lock completely
 export async function directInsert(table, data) {
-  const token = getAuthToken()
+  const token = await getAuthToken()
   if (!token) throw new Error('Not authenticated - please sign in again')
 
   const response = await fetch(`${supabaseUrl}/rest/v1/${table}`, {
@@ -48,7 +48,7 @@ export async function directInsert(table, data) {
 
 // Direct fetch for updates
 export async function directUpdate(table, data, column, value) {
-  const token = getAuthToken()
+  const token = await getAuthToken()
   if (!token) throw new Error('Not authenticated - please sign in again')
 
   const response = await fetch(`${supabaseUrl}/rest/v1/${table}?${column}=eq.${value}`, {
