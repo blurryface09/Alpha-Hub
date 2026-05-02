@@ -104,6 +104,7 @@ const STATUS_STYLES = {
 const WL_BADGE = {
   GTD:     "badge-green",
   FCFS:    "badge-yellow",
+  PUBLIC:  "badge-cyan",
   RAFFLE:  "badge-purple",
   UNKNOWN: "badge-cyan",
 }
@@ -197,7 +198,11 @@ export default function ProjectCard({ project, isMinting, onMint, onDelete, onSt
                     }
                   </div>
                 )}
-                {project.mint_price && <span className="text-xs text-muted">{project.mint_price}</span>}
+                {project.mint_price && (
+                  <span className="text-xs font-mono font-semibold text-green bg-green/10 border border-green/20 px-1.5 py-0.5 rounded">
+                    {project.mint_price} {project.chain === 'bnb' ? 'BNB' : 'ETH'}
+                  </span>
+                )}
                 {intel && intel.hype_score && (
                   <span className={"text-xs font-mono " + (intel.hype_score >= 7 ? "text-green" : intel.hype_score >= 4 ? "text-accent3" : "text-muted")}>
                     Hype: {intel.hype_score}/10
@@ -213,8 +218,19 @@ export default function ProjectCard({ project, isMinting, onMint, onDelete, onSt
                 {project.mint_mode === "auto" ? React.createElement(ToggleRight, { size: 12 }) : React.createElement(ToggleLeft, { size: 12 })}
                 {project.mint_mode === "auto" ? "Auto" : "Confirm"}
               </button>
+              {project.contract_address && project.mint_mode === 'auto' && project.status !== 'minted' && (
+                <button
+                  onClick={() => onMint(true)}
+                  disabled={isMinting}
+                  title="Test fire — triggers auto-mint regardless of status"
+                  className="text-xs px-2 py-1.5 rounded-md border border-accent3/40 text-accent3 hover:bg-accent3/10 transition-all flex items-center gap-1"
+                >
+                  {React.createElement(Zap, { size: 11 })}
+                  Test
+                </button>
+              )}
               {(project.status === "live" || project.status === "upcoming") && project.contract_address && (
-                <button onClick={onMint} disabled={isMinting} className="btn-primary text-xs px-3 py-1.5 flex items-center gap-1.5">
+                <button onClick={() => onMint(false)} disabled={isMinting} className="btn-primary text-xs px-3 py-1.5 flex items-center gap-1.5">
                   {isMinting ? React.createElement("div", { className: "spinner w-3 h-3" }) : React.createElement(Zap, { size: 12 })}
                   {isMinting ? "Minting..." : "Mint"}
                 </button>

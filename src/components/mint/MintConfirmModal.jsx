@@ -1,8 +1,15 @@
-import React from 'react'
+import React, { useState } from 'react'
 import { motion } from 'framer-motion'
-import { Zap, AlertTriangle, X } from 'lucide-react'
+import { Zap, AlertTriangle, X, Flame } from 'lucide-react'
 
 export default function MintConfirmModal({ project, onConfirm, onCancel }) {
+  const [gas, setGas] = useState(project.gas_limit || 200000)
+
+  const price = parseFloat(project.mint_price) || 0
+  const qty = parseInt(project.max_mint) || 1
+  const estimatedTotal = price > 0 ? (price * qty).toFixed(4) : null
+  const symbol = project.chain === 'bnb' ? 'BNB' : 'ETH'
+
   return (
     <motion.div
       initial={{ opacity: 0 }}
@@ -36,24 +43,51 @@ export default function MintConfirmModal({ project, onConfirm, onCancel }) {
             </div>
             {project.mint_price && (
               <div className="flex justify-between text-sm">
-                <span className="text-muted">Price</span>
-                <span className="font-mono text-accent">{project.mint_price}</span>
+                <span className="text-muted">Price per mint</span>
+                <span className="font-mono text-green font-semibold">{project.mint_price} {symbol}</span>
               </div>
             )}
             <div className="flex justify-between text-sm">
               <span className="text-muted">Quantity</span>
-              <span className="font-mono">{project.max_mint}</span>
+              <span className="font-mono">{qty}</span>
             </div>
-            <div className="flex justify-between text-sm">
-              <span className="text-muted">Gas limit</span>
-              <span className="font-mono">{project.gas_limit?.toLocaleString()}</span>
-            </div>
+            {estimatedTotal && (
+              <div className="flex justify-between text-sm border-t border-border pt-2 mt-1">
+                <span className="text-muted font-medium">Est. Total</span>
+                <span className="font-mono font-bold text-accent">{estimatedTotal} {symbol}</span>
+              </div>
+            )}
             <div className="flex justify-between text-sm">
               <span className="text-muted">Contract</span>
               <span className="font-mono text-xs text-accent">
-                {project.contract_address?.slice(0, 12)}...
+                {project.contract_address?.slice(0, 10)}...{project.contract_address?.slice(-6)}
               </span>
             </div>
+          </div>
+
+          {/* Editable gas limit */}
+          <div className="mb-4">
+            <label className="text-xs font-mono text-muted uppercase tracking-wider block mb-1.5 flex items-center gap-1.5">
+              <Flame size={11} className="text-accent3" />
+              Gas Limit
+            </label>
+            <div className="flex gap-2">
+              <input
+                type="number"
+                className="input flex-1 font-mono text-sm"
+                value={gas}
+                onChange={e => setGas(parseInt(e.target.value) || 200000)}
+                min={21000}
+                max={2000000}
+              />
+              <button
+                onClick={() => setGas(200000)}
+                className="btn-ghost text-xs px-3"
+              >
+                Reset
+              </button>
+            </div>
+            <p className="text-[10px] text-muted mt-1">Default: 200,000 — increase if tx fails with out-of-gas</p>
           </div>
 
           <div className="flex items-start gap-2 text-xs text-accent3 mb-4 bg-accent3/8 border border-accent3/20 rounded-lg p-3">
@@ -64,7 +98,7 @@ export default function MintConfirmModal({ project, onConfirm, onCancel }) {
           <div className="flex gap-2">
             <button onClick={onCancel} className="btn-ghost flex-1">Cancel</button>
             <button
-              onClick={onConfirm}
+              onClick={() => onConfirm(gas)}
               className="flex-1 bg-green text-bg font-semibold text-sm px-4 py-2.5 rounded-lg hover:bg-emerald-400 active:scale-95 transition-all flex items-center justify-center gap-2"
             >
               <Zap size={14} />

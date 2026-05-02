@@ -94,6 +94,28 @@ export default function MintGuardPage() {
     return () => clearInterval(interval)
   }, [fetchProjects])
 
+  // Real-time client-side status tick every 30s — no DB round-trip needed for UI updates
+  useEffect(() => {
+    const tick = () => {
+      const now = new Date()
+      setProjects(prev => {
+        let changed = false
+        const next = prev.map(p => {
+          if (!p.mint_date || p.status === 'minted' || p.status === 'cancelled') return p
+          const diffMs = now - new Date(p.mint_date)
+          const diffHours = diffMs / (1000 * 60 * 60)
+          const ns = diffMs < 0 ? 'upcoming' : diffHours < 2 ? 'live' : 'missed'
+          if (ns !== p.status) { changed = true; return { ...p, status: ns } }
+          return p
+        })
+        return changed ? next : prev
+      })
+    }
+    tick() // run immediately on mount
+    const interval = setInterval(tick, 30000)
+    return () => clearInterval(interval)
+  }, [])
+
   // Auto-check if any live mints need to fire (guard prevents double-trigger with Countdown)
   useEffect(() => {
     const autoProjects = projects.filter(p => p.status === 'live' && p.mint_mode === 'auto' && p.contract_address)
@@ -319,7 +341,7 @@ export default function MintGuardPage() {
       {confirmMint && (
         <MintConfirmModal
           project={confirmMint}
-          onConfirm={() => executeMint(confirmMint)}
+          onConfirm={(gasOverride) => executeMint({ ...confirmMint, gas_limit: gasOverride })}
           onCancel={() => setConfirmMint(null)}
         />
       )}

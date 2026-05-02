@@ -1,18 +1,20 @@
 import React, { useState } from 'react'
 import { motion } from 'framer-motion'
-import { X, Link2, Calendar, Zap, Shield, Loader } from 'lucide-react'
+import { X, Link2, Shield, Loader, Sparkles } from 'lucide-react'
 import toast from 'react-hot-toast'
+import { extractProjectMetadata } from '../../lib/ai'
 
 const WL_TYPES = [
-  { val: 'GTD', label: 'GTD', desc: 'Guaranteed spot' },
-  { val: 'FCFS', label: 'FCFS', desc: 'First come first served' },
-  { val: 'RAFFLE', label: 'Raffle', desc: 'Random selection' },
+  { val: 'GTD',     label: 'GTD',     desc: 'Guaranteed spot' },
+  { val: 'FCFS',    label: 'FCFS',    desc: 'First come first served' },
+  { val: 'PUBLIC',  label: 'Public',  desc: 'Open to everyone' },
+  { val: 'RAFFLE',  label: 'Raffle',  desc: 'Random selection' },
   { val: 'UNKNOWN', label: 'Unknown', desc: 'Not confirmed yet' },
 ]
 
 const MINT_MODES = [
   { val: 'confirm', label: 'Confirm', icon: '✓', desc: 'App asks you before minting' },
-  { val: 'auto', label: 'Auto', icon: '⚡', desc: 'Fires immediately when live' },
+  { val: 'auto',    label: 'Auto',    icon: '⚡', desc: 'Fires immediately when live' },
 ]
 
 export default function AddProjectModal({ onAdd, onClose }) {
@@ -39,25 +41,42 @@ export default function AddProjectModal({ onAdd, onClose }) {
   const handleUrlSubmit = async () => {
     if (!url.trim()) { toast.error('Paste a URL first'); return }
     setLoading(true)
-    let source_type = 'website'
-    let autoFill = {}
-    if (url.includes('twitter.com') || url.includes('x.com')) {
-      source_type = 'twitter'
-      const handle = url.match(/(?:twitter|x)\.com\/([^/?#]+)/)
-      if (handle) autoFill.name = handle[1]
-    } else if (url.includes('opensea.io')) {
-      source_type = 'opensea'
-      const slug = url.match(/opensea\.io\/collection\/([^/?#]+)/)
-      if (slug) {
-        autoFill.name = slug[1].replace(/-/g, ' ').replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase())
+    try {
+      // Try AI-powered extraction first
+      const meta = await extractProjectMetadata(url)
+      const autoFill = {
+        source_url: url,
+        source_type: meta.source_type || 'website',
+        chain: meta.chain !== 'unknown' ? (meta.chain || 'eth') : 'eth',
+        notes: meta.notes || '',
       }
-    } else {
-      const parts = url.replace(/https?:\/\//, '').split('/')
-      if (parts.length > 1) autoFill.name = parts[parts.length - 1].replace(/-/g, ' ')
+      if (meta.name) autoFill.name = meta.name
+
+      // Fallback string parsing if AI didn't get a name
+      if (!autoFill.name) {
+        if (url.includes('twitter.com') || url.includes('x.com')) {
+          const handle = url.match(/(?:twitter|x)\.com\/([^/?#]+)/)
+          if (handle) autoFill.name = handle[1]
+          autoFill.source_type = 'twitter'
+        } else if (url.includes('opensea.io')) {
+          const slug = url.match(/opensea\.io\/collection\/([^/?#]+)/)
+          if (slug) autoFill.name = slug[1].replace(/-/g, ' ').replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase())
+          autoFill.source_type = 'opensea'
+        } else {
+          const parts = url.replace(/https?:\/\//, '').split('/')
+          autoFill.name = parts[parts.length - 1]?.replace(/-/g, ' ') || parts[0]
+        }
+      }
+
+      setForm(f => ({ ...f, ...autoFill }))
+      setStep(2)
+    } catch (e) {
+      // Silent fallback
+      setForm(f => ({ ...f, source_url: url }))
+      setStep(2)
+    } finally {
+      setLoading(false)
     }
-    setForm(f => ({ ...f, source_url: url, source_type, chain: 'eth', ...autoFill }))
-    setLoading(false)
-    setStep(2)
   }
 
   const handleSubmit = async () => {
@@ -121,15 +140,15 @@ export default function AddProjectModal({ onAdd, onClose }) {
                     disabled={loading}
                     className="btn-primary px-4 flex items-center gap-2"
                   >
-                    {loading ? <Loader size={14} className="animate-spin" /> : <Link2 size={14} />}
+                    {loading ? <Loader size={14} className="animate-spin" /> : <Sparkles size={14} />}
                     {loading ? '' : 'Next'}
                   </button>
                 </div>
-                <p className="text-xs text-muted mt-2">Paste any link -- OpenSea, Twitter/X, or project website</p>
+                <p className="text-xs text-muted mt-2">AI will extract project name & chain from any URL</p>
               </div>
               <div className="flex justify-end">
                 <button onClick={() => setStep(2)} className="text-xs text-accent hover:underline">
-                  Skip -- enter manually
+                  Skip — enter manually
                 </button>
               </div>
             </div>
@@ -148,31 +167,31 @@ export default function AddProjectModal({ onAdd, onClose }) {
                   <select className="input" value={form.chain} onChange={e => set('chain', e.target.value)}>
                     <option value="eth">Ethereum</option>
                     <option value="base">Base</option>
-                    <option value="bnb">BNB</option>
+                    <option value="bnb">BNB Chain</option>
                   </select>
                 </div>
                 <div>
                   <label className="text-xs font-mono text-muted uppercase tracking-wider block mb-1.5">WL Type</label>
                   <select className="input" value={form.wl_type} onChange={e => set('wl_type', e.target.value)}>
-                    {WL_TYPES.map(t => <option key={t.val} value={t.val}>{t.label}</option>)}
+                    {WL_TYPES.map(t => <option key={t.val} value={t.val}>{t.label} — {t.desc}</option>)}
                   </select>
                 </div>
               </div>
 
               <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label className="text-xs font-mono text-muted uppercase tracking-wider block mb-1.5">Mint Date</label>
+                  <label className="text-xs font-mono text-muted uppercase tracking-wider block mb-1.5">Mint Date & Time</label>
                   <input className="input" type="datetime-local" value={form.mint_date} onChange={e => set('mint_date', e.target.value)} />
                 </div>
                 <div>
                   <label className="text-xs font-mono text-muted uppercase tracking-wider block mb-1.5">Mint Price</label>
-                  <input className="input" placeholder="e.g. 0.08 ETH" value={form.mint_price} onChange={e => set('mint_price', e.target.value)} />
+                  <input className="input" placeholder="e.g. 0.08" value={form.mint_price} onChange={e => set('mint_price', e.target.value)} />
                 </div>
               </div>
 
               <div>
-                <label className="text-xs font-mono text-muted uppercase tracking-wider block mb-1.5">Contract Address (Optional)</label>
-                <input className="input font-mono text-xs" placeholder="0x... (add when known for auto-mint)" value={form.contract_address} onChange={e => set('contract_address', e.target.value)} />
+                <label className="text-xs font-mono text-muted uppercase tracking-wider block mb-1.5">Contract Address <span className="text-muted2">(optional — needed for auto-mint)</span></label>
+                <input className="input font-mono text-xs" placeholder="0x..." value={form.contract_address} onChange={e => set('contract_address', e.target.value)} />
               </div>
 
               <div>
@@ -195,12 +214,12 @@ export default function AddProjectModal({ onAdd, onClose }) {
                 </div>
               </div>
 
-              <div className="grid grid-cols-2 gap-3">
+              <div className="grid grid-cols-3 gap-3">
                 <div>
                   <label className="text-xs font-mono text-muted uppercase tracking-wider block mb-1.5">Max Mint</label>
                   <input className="input" type="number" min="1" max="20" value={form.max_mint} onChange={e => set('max_mint', parseInt(e.target.value) || 1)} />
                 </div>
-                <div>
+                <div className="col-span-2">
                   <label className="text-xs font-mono text-muted uppercase tracking-wider block mb-1.5">Gas Limit</label>
                   <input className="input" type="number" value={form.gas_limit} onChange={e => set('gas_limit', parseInt(e.target.value) || 200000)} />
                 </div>
@@ -208,7 +227,7 @@ export default function AddProjectModal({ onAdd, onClose }) {
 
               <div>
                 <label className="text-xs font-mono text-muted uppercase tracking-wider block mb-1.5">Notes</label>
-                <textarea className="input resize-none" rows={2} placeholder="Any notes about this project..." value={form.notes} onChange={e => set('notes', e.target.value)} />
+                <textarea className="input resize-none" rows={2} placeholder="Discord role, contract notes, anything useful..." value={form.notes} onChange={e => set('notes', e.target.value)} />
               </div>
 
               <div className="flex gap-2 pt-1">

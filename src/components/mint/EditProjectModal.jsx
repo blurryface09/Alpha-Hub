@@ -3,10 +3,16 @@ import { motion } from 'framer-motion'
 import { X, Shield, Loader } from 'lucide-react'
 import toast from 'react-hot-toast'
 
-const WL_TYPES = ['GTD', 'FCFS', 'RAFFLE', 'UNKNOWN']
+const WL_TYPES = [
+  { val: 'GTD',     label: 'GTD — Guaranteed spot' },
+  { val: 'FCFS',    label: 'FCFS — First come first served' },
+  { val: 'PUBLIC',  label: 'Public — Open to everyone' },
+  { val: 'RAFFLE',  label: 'Raffle — Random selection' },
+  { val: 'UNKNOWN', label: 'Unknown — Not confirmed yet' },
+]
 const MINT_MODES = [
-  { val: 'confirm', label: 'Confirm', icon: 'checkmark', desc: 'App asks you before minting' },
-  { val: 'auto', label: 'Auto', icon: 'bolt', desc: 'Fires immediately when live' },
+  { val: 'confirm', label: 'Confirm', icon: '✓', desc: 'App asks you before minting' },
+  { val: 'auto', label: 'Auto', icon: '⚡', desc: 'Fires immediately when live' },
 ]
 
 export default function EditProjectModal({ project, onSave, onClose }) {
@@ -83,7 +89,7 @@ export default function EditProjectModal({ project, onSave, onClose }) {
             <div>
               <label className="text-xs font-mono text-muted uppercase tracking-wider block mb-1.5">WL Type</label>
               <select className="input" value={form.wl_type} onChange={e => set('wl_type', e.target.value)}>
-                {WL_TYPES.map(t => <option key={t} value={t}>{t}</option>)}
+                {WL_TYPES.map(t => <option key={t.val} value={t.val}>{t.label}</option>)}
               </select>
             </div>
           </div>
@@ -117,7 +123,7 @@ export default function EditProjectModal({ project, onSave, onClose }) {
                       : 'border-border2 text-muted hover:border-border'
                   )}
                 >
-                  <div className="text-sm font-bold">{m.label}</div>
+                  <div className="text-sm font-bold">{m.icon} {m.label}</div>
                   <div className="text-xs opacity-70 mt-0.5">{m.desc}</div>
                 </button>
               ))}
