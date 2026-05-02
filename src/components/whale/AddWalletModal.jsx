@@ -1,6 +1,6 @@
 import React, { useState } from 'react'
 import { motion } from 'framer-motion'
-import { X, Radar } from 'lucide-react'
+import { X, Radar, Loader } from 'lucide-react'
 import toast from 'react-hot-toast'
 
 export default function AddWalletModal({ onAdd, onClose }) {
@@ -112,8 +112,8 @@ export default function AddWalletModal({ onAdd, onClose }) {
 
           <div className="flex gap-2 pt-1">
             <button onClick={onClose} className="btn-ghost flex-1">Cancel</button>
-            <button onClick={handleSubmit} className="btn-primary flex-1 flex items-center justify-center gap-2">
-              <Radar size={14} /> Start Watching
+            <button onClick={handleSubmit} disabled={saving} className="btn-primary flex-1 flex items-center justify-center gap-2">
+              {saving ? <><Loader size={14} className="animate-spin" /> Saving...</> : <><Radar size={14} /> Start Watching</>}
             </button>
           </div>
         </div>

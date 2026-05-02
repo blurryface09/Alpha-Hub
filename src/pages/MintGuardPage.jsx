@@ -1,11 +1,10 @@
 import React, { useState, useEffect, useCallback } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
-import { Plus, Shield, Clock, Zap, AlertTriangle, Check, X, ExternalLink, ChevronDown, RefreshCw } from 'lucide-react'
+import { Plus, Shield } from 'lucide-react'
 import toast from 'react-hot-toast'
-import { supabase, directInsert, directUpdate, withTimeout } from '../lib/supabase'
+import { supabase, directInsert, directUpdate } from '../lib/supabase'
 import { useMint } from '../hooks/useMint'
 import { useAuthStore } from '../store'
-import { buildMintTransaction, CHAINS } from '../lib/blockchain'
 import AddProjectModal from '../components/mint/AddProjectModal'
 import MintConfirmModal from '../components/mint/MintConfirmModal'
 import ProjectCard from '../components/mint/ProjectCard'
@@ -14,12 +13,14 @@ const STATUS_TABS = ['all', 'upcoming', 'live', 'minted', 'missed']
 
 export default function MintGuardPage() {
   const { user } = useAuthStore()
+  const { executeMint: mintHook, isConnected } = useMint()
   const [projects, setProjects] = useState([])
   const [loading, setLoading] = useState(true)
   const [activeTab, setActiveTab] = useState('all')
   const [showAddModal, setShowAddModal] = useState(false)
   const [confirmMint, setConfirmMint] = useState(null) // project to confirm mint for
   const [mintingId, setMintingId] = useState(null)
+  const autoFired = React.useRef(new Set())
 
   // Auto-update project status based on mint date
   const autoUpdateStatus = async (projects) => {
@@ -93,11 +94,14 @@ export default function MintGuardPage() {
     return () => clearInterval(interval)
   }, [fetchProjects])
 
-  // Auto-check if any live mints need to fire
+  // Auto-check if any live mints need to fire (guard prevents double-trigger with Countdown)
   useEffect(() => {
-    const autoProjects = projects.filter(p => p.status === 'live' && p.mint_mode === 'auto')
+    const autoProjects = projects.filter(p => p.status === 'live' && p.mint_mode === 'auto' && p.contract_address)
     autoProjects.forEach(p => {
-      if (p.contract_address) handleMint(p, true)
+      if (!autoFired.current.has(p.id)) {
+        autoFired.current.add(p.id)
+        handleMint(p, true)
+      }
     })
   }, [projects])
 
@@ -129,7 +133,7 @@ export default function MintGuardPage() {
       setShowAddModal(false)
     } catch (err) {
       console.error('Unexpected error:', err)
-      toast.error(`Unexpected error: ${err.message}`)
+      toast.error(`Unexpected error: ${err.message}`, { id: 'save-project' })
     }
   }
 
@@ -181,77 +185,26 @@ export default function MintGuardPage() {
   const executeMint = async (project) => {
     setMintingId(project.id)
     try {
-      // Check if wallet is connected via wagmi
-      const { getAccount, writeContract } = await import('@wagmi/core')
-      const account = getAccount()
-      if (!account.address) {
-        toast.error('Connect your wallet first in Settings')
-        return
+      const result = await mintHook(project, user.id)
+      if (result?.success) {
+        await supabase.from('wl_projects').update({ status: 'minted' }).eq('id', project.id)
+        setProjects(prev => prev.map(p => p.id === project.id ? { ...p, status: 'minted' } : p))
+        await supabase.from('notifications').insert({
+          user_id: user.id,
+          type: 'mint_success',
+          title: `✅ Mint Success -- ${project.name}`,
+          message: `Transaction confirmed. Hash: ${result.txHash?.slice(0, 16)}...`,
+          data: { tx_hash: result.txHash, project_id: project.id },
+        })
+      } else if (result && !result.success) {
+        await supabase.from('notifications').insert({
+          user_id: user.id,
+          type: 'mint_failed',
+          title: `❌ Mint Failed -- ${project.name}`,
+          message: result.error,
+          data: { project_id: project.id },
+        })
       }
-
-      const chainKey = project.chain || 'eth'
-      const mintData = await buildMintTransaction({
-        contractAddress: project.contract_address,
-        chainKey,
-        maxMint: project.max_mint || 1,
-        gasLimit: project.gas_limit || 200000,
-      })
-
-      // Find mint function from ABI
-      const mintFn = mintData.abi?.find(fn => fn.name?.toLowerCase().includes('mint') && fn.type === 'function')
-      if (!mintFn) throw new Error('Could not find mint function in contract ABI')
-
-      toast.loading(`Executing mint on ${CHAINS[chainKey].name}...`, { id: 'mint' })
-
-      const hash = await writeContract({
-        address: project.contract_address,
-        abi: mintData.abi,
-        functionName: mintFn.name,
-        args: mintFn.inputs?.length > 0 ? [project.max_mint || 1] : [],
-        gas: BigInt(project.gas_limit || 200000),
-      })
-
-      // Log to Supabase
-      await supabase.from('mint_log').insert({
-        user_id: user.id,
-        project_id: project.id,
-        wallet_address: account.address,
-        chain: chainKey,
-        tx_hash: hash,
-        status: 'success',
-      })
-
-      await supabase.from('wl_projects').update({ status: 'minted' }).eq('id', project.id)
-      setProjects(prev => prev.map(p => p.id === project.id ? { ...p, status: 'minted' } : p))
-
-      toast.success(`Mint executed! TX: ${hash.slice(0, 12)}...`, { id: 'mint', duration: 8000 })
-
-      // Create notification
-      await supabase.from('notifications').insert({
-        user_id: user.id,
-        type: 'mint_success',
-        title: `✅ Mint Success -- ${project.name}`,
-        message: `Transaction confirmed. Hash: ${hash.slice(0, 16)}...`,
-        data: { tx_hash: hash, project_id: project.id },
-      })
-
-    } catch (err) {
-      toast.error(`Mint failed: ${err.message}`, { id: 'mint' })
-      await supabase.from('mint_log').insert({
-        user_id: user.id,
-        project_id: project.id,
-        wallet_address: 'unknown',
-        chain: project.chain || 'eth',
-        status: 'failed',
-        error_message: err.message,
-      })
-      await supabase.from('notifications').insert({
-        user_id: user.id,
-        type: 'mint_failed',
-        title: `❌ Mint Failed -- ${project.name}`,
-        message: err.message,
-        data: { project_id: project.id },
-      })
     } finally {
       setMintingId(null)
       setConfirmMint(null)
@@ -338,7 +291,7 @@ export default function MintGuardPage() {
                 key={project.id}
                 project={project}
                 isMinting={mintingId === project.id}
-                onMint={() => handleMint(project)}
+                onMint={(isAuto) => handleMint(project, isAuto)}
                 onDelete={() => handleDelete(project.id)}
                 onStatusUpdate={(s) => handleStatusUpdate(project.id, s)}
                 onMintModeToggle={() => handleMintModeToggle(project.id, project.mint_mode)}

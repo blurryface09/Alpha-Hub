@@ -191,7 +191,7 @@ export default function ProjectCard({ project, isMinting, onMint, onDelete, onSt
                       ? <Countdown
                     mintDate={project.mint_date}
                     isAuto={project.mint_mode === 'auto' && (project.status === 'upcoming' || project.status === 'live')}
-                    onLive={onMint}
+                    onLive={() => onMint(true)}
                   />
                       : <span className="font-mono text-xs text-muted">{new Date(project.mint_date).toLocaleDateString()}</span>
                     }

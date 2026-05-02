@@ -139,7 +139,7 @@ export default function OverviewPage() {
                     <div className="text-xs text-muted">{a.method_name} · {a.chain?.toUpperCase()}</div>
                   </div>
                   <div className="text-right">
-                    <div className="text-sm text-green font-mono">{a.value_eth?.toFixed(3)} ETH</div>
+                    <div className="text-sm text-green font-mono">{a.value_eth?.toFixed(3)} {a.chain === 'bnb' ? 'BNB' : 'ETH'}</div>
                     <div className="text-xs text-muted">{a.timestamp ? new Date(a.timestamp).toLocaleTimeString() : ''}</div>
                   </div>
                 </div>
