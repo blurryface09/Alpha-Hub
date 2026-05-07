@@ -41,7 +41,6 @@ async function handleStart(chatId, linkCode) {
     .from('telegram_link_tokens')
     .select('user_id')
     .eq('token', linkCode)
-    .gt('expires_at', new Date().toISOString())
     .single()
 
   if (!token) {

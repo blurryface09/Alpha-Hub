@@ -110,7 +110,17 @@ export default function MintGuardPage() {
     }
     // Silent background refresh every 60s -- never clears projects
     const interval = setInterval(() => fetchProjects(false), 60000)
-    return () => clearInterval(interval)
+
+    // Re-fetch immediately when tab becomes visible again (fixes stale state after tab switch)
+    const onVisibility = () => {
+      if (document.visibilityState === 'visible') fetchProjects(false)
+    }
+    document.addEventListener('visibilitychange', onVisibility)
+
+    return () => {
+      clearInterval(interval)
+      document.removeEventListener('visibilitychange', onVisibility)
+    }
   }, [fetchProjects])
 
   // Real-time client-side status tick every 30s — no DB round-trip needed for UI updates
