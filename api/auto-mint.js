@@ -274,11 +274,10 @@ export default async function handler(req, res) {
       const msg = e.shortMessage || e.message || 'Unknown error'
       console.error(`auto-mint failed for ${project.id}:`, msg)
 
-      // Unmark fired so it can retry (unless it was a hard revert)
-      const isRevert = msg.toLowerCase().includes('reverted')
-      if (!isRevert) {
-        await supabase.from('wl_projects').update({ auto_mint_fired: false }).eq('id', project.id)
-      }
+      // Always unmark fired so the cron can retry on next run.
+      // The project remains 'live' so it will be picked up again.
+      // Once it succeeds, status becomes 'minted' and it exits the queue permanently.
+      await supabase.from('wl_projects').update({ auto_mint_fired: false }).eq('id', project.id)
 
       await supabase.from('mint_log').insert({
         user_id: project.user_id,

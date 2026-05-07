@@ -39,12 +39,19 @@ async function handleStart(chatId, linkCode) {
 
   const { data: token } = await supabase
     .from('telegram_link_tokens')
-    .select('user_id')
+    .select('user_id, created_at')
     .eq('token', linkCode)
     .single()
 
   if (!token) {
     return sendMessage(chatId, '❌ Link code is invalid or expired. Generate a new one in Settings.')
+  }
+
+  // Enforce 15-minute TTL
+  const ageMs = Date.now() - new Date(token.created_at).getTime()
+  if (ageMs > 15 * 60 * 1000) {
+    await supabase.from('telegram_link_tokens').delete().eq('token', linkCode)
+    return sendMessage(chatId, '❌ Link code expired (15 min limit). Generate a new one in Settings.')
   }
 
   // Save chat ID to profile
@@ -154,13 +161,21 @@ async function handleUpcoming(chatId, userId) {
 async function handleCallback(queryId, data, chatId) {
   await answerCallback(queryId)
 
+  // Look up the user who owns this chat — all project mutations are scoped to them
+  const profile = await resolveProfile(chatId)
+  if (!profile) {
+    return sendMessage(chatId, '❌ Account not linked. Use /start <code> from Settings.')
+  }
+
   if (data.startsWith('confirm:')) {
     const projectId = data.replace('confirm:', '')
 
+    // Ownership check: only update if the project belongs to this chat's user
     const { error } = await supabase
       .from('wl_projects')
       .update({ telegram_mint_approved: true })
       .eq('id', projectId)
+      .eq('user_id', profile.id)
 
     if (error) {
       return sendMessage(chatId, '❌ Could not confirm mint. Try again in the app.')
@@ -175,9 +190,11 @@ async function handleCallback(queryId, data, chatId) {
 
   if (data.startsWith('skip:')) {
     const projectId = data.replace('skip:', '')
+    // Ownership check on skip too
     await supabase.from('wl_projects')
       .update({ telegram_mint_approved: false })
       .eq('id', projectId)
+      .eq('user_id', profile.id)
     return sendMessage(chatId, '⏭ Skipped.')
   }
 }

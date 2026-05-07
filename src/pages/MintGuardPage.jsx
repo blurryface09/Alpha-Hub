@@ -151,7 +151,12 @@ export default function MintGuardPage() {
 
   // Auto-check if any live mints need to fire (guard prevents double-trigger with Countdown)
   useEffect(() => {
-    const autoProjects = projects.filter(p => p.status === 'live' && p.mint_mode === 'auto' && p.contract_address)
+    const autoProjects = projects.filter(p =>
+      p.status === 'live' &&
+      p.mint_mode === 'auto' &&
+      p.contract_address &&
+      !p.auto_mint_fired  // skip if server-side cron already fired it
+    )
     autoProjects.forEach(p => {
       if (!autoFired.current.has(p.id)) {
         autoFired.current.add(p.id)
@@ -294,10 +299,22 @@ export default function MintGuardPage() {
 
   const executeMint = async (project) => {
     setMintingId(project.id)
-    const tgProject = { ...project, _telegram_chat_id: telegramChatId }
+    // Snapshot token/chatId at execution time — avoids stale closure issues
+    const { data: sessionData } = await supabase.auth.getSession()
+    const liveToken = sessionData?.session?.access_token || userToken
+    const { data: profileData } = await supabase.from('profiles').select('telegram_chat_id').eq('id', user.id).single()
+    const liveChatId = profileData?.telegram_chat_id || telegramChatId
+    const tgProject = { ...project, _telegram_chat_id: liveChatId }
+
+    // Mark as fired in DB before attempting — prevents cron from double-firing same project
+    if (project.mint_mode === 'auto') {
+      await supabase.from('wl_projects').update({ auto_mint_fired: true }).eq('id', project.id)
+      setProjects(prev => prev.map(p => p.id === project.id ? { ...p, auto_mint_fired: true } : p))
+    }
+
     // Notify Telegram that auto-mint is firing
-    if (telegramChatId && project.mint_mode === 'auto') {
-      notifyTelegram(tgProject, 'auto', userToken)
+    if (liveChatId && project.mint_mode === 'auto') {
+      notifyTelegram(tgProject, 'auto', liveToken)
     }
     try {
       const result = await mintHook(project, user.id)
@@ -312,7 +329,7 @@ export default function MintGuardPage() {
           data: { tx_hash: result.txHash, project_id: project.id },
         })
         // Telegram success alert
-        notifyTelegram({ ...tgProject, tx_hash: result.txHash }, 'success', userToken)
+        notifyTelegram({ ...tgProject, tx_hash: result.txHash }, 'success', liveToken)
       } else if (result && !result.success) {
         await supabase.from('notifications').insert({
           user_id: user.id,
@@ -321,8 +338,14 @@ export default function MintGuardPage() {
           message: result.error,
           data: { project_id: project.id },
         })
+        // Reset auto_mint_fired so user can retry
+        if (project.mint_mode === 'auto') {
+          await supabase.from('wl_projects').update({ auto_mint_fired: false }).eq('id', project.id)
+          setProjects(prev => prev.map(p => p.id === project.id ? { ...p, auto_mint_fired: false } : p))
+          autoFired.current.delete(project.id)
+        }
         // Telegram failure alert
-        notifyTelegram({ ...tgProject, error: result.error }, 'failed', userToken)
+        notifyTelegram({ ...tgProject, error: result.error }, 'failed', liveToken)
       }
     } finally {
       setMintingId(null)

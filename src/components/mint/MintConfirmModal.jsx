@@ -4,6 +4,7 @@ import { Zap, AlertTriangle, X, Flame } from 'lucide-react'
 
 export default function MintConfirmModal({ project, onConfirm, onCancel }) {
   const [gas, setGas] = useState(project.gas_limit || 200000)
+  const gasWarning = gas < 21000 ? 'Too low — minimum is 21,000' : gas > 2_000_000 ? 'Very high — double-check this value' : null
 
   const price = parseFloat(project.mint_price) || 0
   const qty = parseInt(project.max_mint) || 1
@@ -87,7 +88,10 @@ export default function MintConfirmModal({ project, onConfirm, onCancel }) {
                 Reset
               </button>
             </div>
-            <p className="text-[10px] text-muted mt-1">Default: 200,000 — increase if tx fails with out-of-gas</p>
+            {gasWarning
+              ? <p className="text-[10px] text-accent3 mt-1 font-semibold">⚠ {gasWarning}</p>
+              : <p className="text-[10px] text-muted mt-1">Default: 200,000 — increase if tx fails with out-of-gas</p>
+            }
           </div>
 
           <div className="flex items-start gap-2 text-xs text-accent3 mb-4 bg-accent3/8 border border-accent3/20 rounded-lg p-3">
@@ -99,7 +103,8 @@ export default function MintConfirmModal({ project, onConfirm, onCancel }) {
             <button onClick={onCancel} className="btn-ghost flex-1">Cancel</button>
             <button
               onClick={() => onConfirm(gas)}
-              className="flex-1 bg-green text-bg font-semibold text-sm px-4 py-2.5 rounded-lg hover:bg-emerald-400 active:scale-95 transition-all flex items-center justify-center gap-2"
+              disabled={gas < 21000}
+              className="flex-1 bg-green text-bg font-semibold text-sm px-4 py-2.5 rounded-lg hover:bg-emerald-400 active:scale-95 transition-all flex items-center justify-center gap-2 disabled:opacity-40 disabled:cursor-not-allowed"
             >
               <Zap size={14} />
               Execute Mint
