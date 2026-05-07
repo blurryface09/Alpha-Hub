@@ -32,7 +32,14 @@ export default function AuthPage() {
         toast.success('Welcome back.')
       }
     } catch (err) {
-      toast.error(err.message)
+      const msg = err.message || ''
+      if (msg.toLowerCase().includes('rate limit') || msg.toLowerCase().includes('email')) {
+        toast.error('Too many signups right now — try again in a few minutes or contact the admin.', { duration: 6000 })
+      } else if (msg.toLowerCase().includes('already registered') || msg.toLowerCase().includes('already been registered')) {
+        toast.error('This email already has an account — try signing in instead.')
+      } else {
+        toast.error(msg)
+      }
     } finally {
       setLoading(false)
     }
