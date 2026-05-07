@@ -25,26 +25,41 @@ async function getAuthToken() {
 
 // Direct fetch for inserts - bypasses supabase-js lock completely
 export async function directInsert(table, data) {
-  const token = await getAuthToken()
-  if (!token) throw new Error('Not authenticated - please sign in again')
+  const token = await Promise.race([
+    getAuthToken(),
+    new Promise((_, reject) => setTimeout(() => reject(new Error('Auth timeout — please refresh')), 5000))
+  ])
+  if (!token) throw new Error('Not authenticated — please sign in again')
 
-  const response = await fetch(`${supabaseUrl}/rest/v1/${table}`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'apikey': supabaseKey,
-      'Authorization': 'Bearer ' + token,
-      'Prefer': 'return=representation',
-    },
-    body: JSON.stringify(data),
-  })
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), 10000)
+
+  let response
+  try {
+    response = await fetch(`${supabaseUrl}/rest/v1/${table}`, {
+      method: 'POST',
+      signal: controller.signal,
+      headers: {
+        'Content-Type': 'application/json',
+        'apikey': supabaseKey,
+        'Authorization': 'Bearer ' + token,
+        'Prefer': 'return=representation',
+      },
+      body: JSON.stringify(data),
+    })
+  } catch (e) {
+    clearTimeout(timer)
+    if (e.name === 'AbortError') throw new Error('Save timed out — check your connection and try again')
+    throw e
+  }
+  clearTimeout(timer)
 
   const text = await response.text()
   let result
   try { result = JSON.parse(text) } catch { result = null }
 
   if (!response.ok) {
-    const msg = result?.message || result?.error || result?.hint || `Insert failed (${response.status})`
+    const msg = result?.message || result?.error || result?.hint || `Save failed (${response.status})`
     throw new Error(msg)
   }
 
@@ -67,23 +82,40 @@ export async function directInsert(table, data) {
 
 // Direct fetch for updates
 export async function directUpdate(table, data, column, value) {
-  const token = await getAuthToken()
-  if (!token) throw new Error('Not authenticated - please sign in again')
+  const token = await Promise.race([
+    getAuthToken(),
+    new Promise((_, reject) => setTimeout(() => reject(new Error('Auth timeout — please refresh')), 5000))
+  ])
+  if (!token) throw new Error('Not authenticated — please sign in again')
 
-  const response = await fetch(`${supabaseUrl}/rest/v1/${table}?${column}=eq.${value}`, {
-    method: 'PATCH',
-    headers: {
-      'Content-Type': 'application/json',
-      'apikey': supabaseKey,
-      'Authorization': 'Bearer ' + token,
-      'Prefer': 'return=representation',
-    },
-    body: JSON.stringify(data),
-  })
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), 10000)
 
-  const result = await response.json()
+  let response
+  try {
+    response = await fetch(`${supabaseUrl}/rest/v1/${table}?${column}=eq.${value}`, {
+      method: 'PATCH',
+      signal: controller.signal,
+      headers: {
+        'Content-Type': 'application/json',
+        'apikey': supabaseKey,
+        'Authorization': 'Bearer ' + token,
+        'Prefer': 'return=representation',
+      },
+      body: JSON.stringify(data),
+    })
+  } catch (e) {
+    clearTimeout(timer)
+    if (e.name === 'AbortError') throw new Error('Update timed out — check your connection and try again')
+    throw e
+  }
+  clearTimeout(timer)
+
+  const text = await response.text()
+  let result
+  try { result = JSON.parse(text) } catch { result = null }
   if (!response.ok) {
-    throw new Error(result.message || result.error || 'Update failed: ' + response.status)
+    throw new Error(result?.message || result?.error || 'Update failed: ' + response.status)
   }
   return Array.isArray(result) ? result[0] : result
 }
