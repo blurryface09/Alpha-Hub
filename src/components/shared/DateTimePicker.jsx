@@ -1,25 +1,21 @@
 /**
- * DateTimePicker — replaces the clunky datetime-local input.
- * - Separate date + time fields (much cleaner on Chrome)
- * - Detects and displays the user's local timezone
+ * DateTimePicker — clean split date + time inputs with timezone awareness.
+ *
+ * - Buffers local date/time strings internally
+ * - Only calls onChange(utcISOString) once the date is fully valid (4-digit year)
+ * - Displays the user's detected timezone so they know what time they're setting
  * - value/onChange use UTC ISO strings (what the DB stores)
- *   so everything round-trips correctly across timezones.
  */
-import React from 'react'
+import React, { useState, useEffect } from 'react'
 import { Clock } from 'lucide-react'
 
-// Detect short timezone label e.g. "WAT", "GMT+1", "EST"
 function tzLabel() {
   try {
-    const tz = Intl.DateTimeFormat().resolvedOptions().timeZone
-    const abbr = new Date().toLocaleTimeString('en', { timeZoneName: 'short' }).split(' ').pop()
-    return abbr || tz
-  } catch {
-    return 'local'
-  }
+    return new Date().toLocaleTimeString('en', { timeZoneName: 'short' }).split(' ').pop() || 'local'
+  } catch { return 'local' }
 }
 
-// UTC ISO string → { date: 'YYYY-MM-DD', time: 'HH:MM' } in LOCAL time
+// UTC ISO string → { date: 'YYYY-MM-DD', time: 'HH:MM' } in user's LOCAL time
 function utcToLocalParts(utcStr) {
   if (!utcStr) return { date: '', time: '' }
   const d = new Date(utcStr)
@@ -31,25 +27,40 @@ function utcToLocalParts(utcStr) {
   }
 }
 
-// LOCAL date + time strings → UTC ISO string
+// LOCAL date + time strings → UTC ISO string (only when date is complete)
 function localPartsToUtc(date, time) {
-  if (!date) return null
-  // new Date('YYYY-MM-DDTHH:MM') is parsed as LOCAL time by the browser
-  const str = `${date}T${time || '00:00'}:00`
-  const d = new Date(str)
+  if (!date || !/^\d{4}-\d{2}-\d{2}$/.test(date)) return null
+  const str = `${date}T${time && /^\d{2}:\d{2}$/.test(time) ? time : '00:00'}:00`
+  const d = new Date(str) // parsed as LOCAL time
   return isNaN(d) ? null : d.toISOString()
 }
 
 export default function DateTimePicker({ value, onChange, label = 'Mint Date & Time' }) {
-  const { date, time } = utcToLocalParts(value)
+  const initial = utcToLocalParts(value)
+  const [localDate, setLocalDate] = useState(initial.date)
+  const [localTime, setLocalTime] = useState(initial.time)
   const tz = tzLabel()
 
+  // Sync inbound value changes (e.g. when EditModal loads project data)
+  useEffect(() => {
+    const parts = utcToLocalParts(value)
+    setLocalDate(parts.date)
+    setLocalTime(parts.time)
+  }, [value])
+
   const handleDate = (e) => {
-    onChange(localPartsToUtc(e.target.value, time))
+    const d = e.target.value
+    setLocalDate(d)
+    const utc = localPartsToUtc(d, localTime)
+    if (utc) onChange(utc)      // only emit when date is fully valid
+    else if (!d) onChange(null) // cleared
   }
 
   const handleTime = (e) => {
-    onChange(localPartsToUtc(date, e.target.value))
+    const t = e.target.value
+    setLocalTime(t)
+    const utc = localPartsToUtc(localDate, t)
+    if (utc) onChange(utc)
   }
 
   return (
@@ -61,19 +72,19 @@ export default function DateTimePicker({ value, onChange, label = 'Mint Date & T
         <input
           type="date"
           className="input flex-1 min-w-0"
-          value={date}
+          value={localDate}
           onChange={handleDate}
         />
         <input
           type="time"
           className="input w-28"
-          value={time}
+          value={localTime}
           onChange={handleTime}
         />
       </div>
       <p className="text-[10px] text-muted mt-1 flex items-center gap-1">
         <Clock size={9} />
-        Times are in your local timezone · <span className="text-accent font-mono">{tz}</span>
+        Your timezone · <span className="text-accent font-mono">{tz}</span>
       </p>
     </div>
   )

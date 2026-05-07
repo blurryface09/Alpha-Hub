@@ -14,13 +14,22 @@ export const supabase = createClient(supabaseUrl, supabaseKey, {
   },
 })
 
-// Get auth token from the supabase client (always fresh, auto-refreshed)
+// Get auth token — fast path reads localStorage directly (no async lock / network call)
 async function getAuthToken() {
+  try {
+    for (const key of Object.keys(localStorage)) {
+      if (key.startsWith('sb-') && key.endsWith('-auth-token')) {
+        const parsed = JSON.parse(localStorage.getItem(key) || '{}')
+        const token = parsed?.access_token
+        const exp = parsed?.expires_at
+        // Use cached token if it's still valid for at least 60 more seconds
+        if (token && exp && exp * 1000 > Date.now() + 60_000) return token
+      }
+    }
+  } catch {}
+  // Slow path: ask the SDK (may trigger a network refresh)
   const { data: { session } } = await supabase.auth.getSession()
-  if (session?.access_token) return session.access_token
-  // Session missing — try a refresh before giving up
-  const { data: { session: refreshed } } = await supabase.auth.refreshSession()
-  return refreshed?.access_token || null
+  return session?.access_token || null
 }
 
 // Direct fetch for inserts - bypasses supabase-js lock completely
