@@ -15,7 +15,8 @@ export const supabase = createClient(supabaseUrl, supabaseKey, {
 })
 
 // Get auth token — fast path reads localStorage directly (no async lock / network call)
-async function getAuthToken() {
+// Exported so any page/component can use it without going through the slow SDK
+export async function getAuthToken() {
   try {
     for (const key of Object.keys(localStorage)) {
       if (key.startsWith('sb-') && key.endsWith('-auth-token')) {

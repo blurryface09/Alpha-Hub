@@ -2,7 +2,7 @@ import React, { useState, useEffect, useCallback } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { Plus, Shield } from 'lucide-react'
 import toast from 'react-hot-toast'
-import { supabase, directInsert, directUpdate } from '../lib/supabase'
+import { supabase, directInsert, directUpdate, getAuthToken } from '../lib/supabase'
 import { useMint } from '../hooks/useMint'
 import { useAuthStore } from '../store'
 import AddProjectModal from '../components/mint/AddProjectModal'
@@ -170,9 +170,7 @@ export default function MintGuardPage() {
     if (!user) return
     supabase.from('profiles').select('telegram_chat_id').eq('id', user.id).single()
       .then(({ data }) => { if (data?.telegram_chat_id) setTelegramChatId(data.telegram_chat_id) })
-    supabase.auth.getSession().then(({ data: { session } }) => {
-      if (session?.access_token) setUserToken(session.access_token)
-    })
+    getAuthToken().then(token => { if (token) setUserToken(token) })
   }, [user])
 
   // Send Telegram live-alert when a project transitions to 'live'
@@ -300,8 +298,7 @@ export default function MintGuardPage() {
   const executeMint = async (project) => {
     setMintingId(project.id)
     // Snapshot token/chatId at execution time — avoids stale closure issues
-    const { data: sessionData } = await supabase.auth.getSession()
-    const liveToken = sessionData?.session?.access_token || userToken
+    const liveToken = await getAuthToken() || userToken
     const { data: profileData } = await supabase.from('profiles').select('telegram_chat_id').eq('id', user.id).single()
     const liveChatId = profileData?.telegram_chat_id || telegramChatId
     const tgProject = { ...project, _telegram_chat_id: liveChatId }

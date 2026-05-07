@@ -3,7 +3,7 @@ import { motion } from 'framer-motion'
 import { Settings, Key, Wallet, Save, Eye, EyeOff, Check, ExternalLink, Send, Link2, RefreshCw, CheckCircle, Zap, AlertTriangle, Trash2 } from 'lucide-react'
 import toast from 'react-hot-toast'
 import { useAuthStore, useSettingsStore } from '../store'
-import { supabase } from '../lib/supabase'
+import { supabase, getAuthToken } from '../lib/supabase'
 
 export default function SettingsPage() {
   const { user, profile, fetchProfile } = useAuthStore()
@@ -37,12 +37,10 @@ export default function SettingsPage() {
   // Load minting wallet address on mount
   useEffect(() => {
     if (!user) return
-    supabase.auth.getSession().then(async ({ data: { session } }) => {
-      if (!session) return
+    getAuthToken().then(async token => {
+      if (!token) return
       try {
-        const r = await fetch('/api/wallet', {
-          headers: { Authorization: 'Bearer ' + session.access_token },
-        })
+        const r = await fetch('/api/wallet', { headers: { Authorization: 'Bearer ' + token } })
         const d = await r.json()
         if (d.wallet?.wallet_address) setMintWalletAddress(d.wallet.wallet_address)
       } catch {}
@@ -53,14 +51,11 @@ export default function SettingsPage() {
     if (!mintPrivateKey.trim()) { toast.error('Paste a private key first'); return }
     setMintWalletLoading(true)
     try {
-      const { data: { session } } = await supabase.auth.getSession()
-      if (!session) throw new Error('Not authenticated')
+      const token = await getAuthToken()
+      if (!token) throw new Error('Not authenticated — please refresh the page')
       const r = await fetch('/api/wallet', {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: 'Bearer ' + session.access_token,
-        },
+        headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + token },
         body: JSON.stringify({ private_key: mintPrivateKey }),
       })
       const d = await r.json()
@@ -77,10 +72,10 @@ export default function SettingsPage() {
 
   const removeMintWallet = async () => {
     if (!confirm('Remove the stored minting wallet? Auto-mint will stop working.')) return
-    const { data: { session } } = await supabase.auth.getSession()
+    const token = await getAuthToken()
     await fetch('/api/wallet', {
       method: 'DELETE',
-      headers: { Authorization: 'Bearer ' + session?.access_token },
+      headers: { Authorization: 'Bearer ' + token },
     })
     setMintWalletAddress(null)
     toast.success('Minting wallet removed')
