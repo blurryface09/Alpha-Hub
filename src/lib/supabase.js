@@ -14,23 +14,47 @@ export const supabase = createClient(supabaseUrl, supabaseKey, {
   },
 })
 
-// Get auth token — fast path reads localStorage directly (no async lock / network call)
-// Exported so any page/component can use it without going through the slow SDK
+// Get auth token — reads localStorage directly, no async SDK lock.
+// Falls back to SDK only if no token found at all.
 export async function getAuthToken() {
+  let expiredToken = null
+
   try {
     for (const key of Object.keys(localStorage)) {
       if (key.startsWith('sb-') && key.endsWith('-auth-token')) {
         const parsed = JSON.parse(localStorage.getItem(key) || '{}')
         const token = parsed?.access_token
-        const exp = parsed?.expires_at
-        // Use cached token if it's still valid for at least 60 more seconds
-        if (token && exp && exp * 1000 > Date.now() + 60_000) return token
+        const exp = parsed?.expires_at   // epoch seconds
+
+        if (!token) continue
+
+        if (exp && exp * 1000 > Date.now() + 60_000) {
+          // Token valid for at least another 60s — use it immediately
+          return token
+        }
+
+        if (exp && exp * 1000 > Date.now() - 5 * 60_000) {
+          // Token expired within last 5 min — keep as fallback, kick off background refresh
+          expiredToken = token
+          supabase.auth.refreshSession().catch(() => {})
+        }
       }
     }
   } catch {}
-  // Slow path: ask the SDK (may trigger a network refresh)
-  const { data: { session } } = await supabase.auth.getSession()
-  return session?.access_token || null
+
+  // Return slightly-expired token rather than hanging — server will 401 if truly dead
+  if (expiredToken) return expiredToken
+
+  // True last resort: SDK with hard timeout
+  try {
+    const result = await Promise.race([
+      supabase.auth.getSession(),
+      new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), 4000))
+    ])
+    return result?.data?.session?.access_token || null
+  } catch {
+    return null
+  }
 }
 
 // Direct fetch for inserts - bypasses supabase-js lock completely

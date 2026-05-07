@@ -14,6 +14,16 @@ const supabase = createClient(
   process.env.SUPABASE_SERVICE_KEY
 )
 
+// Format a UTC date for display — always show UTC label so it's unambiguous
+// across all timezones. Users set time in their local tz (app converts to UTC),
+// so we can't know their tz server-side. UTC label avoids confusion.
+function fmtTime(utcStr) {
+  const d = new Date(utcStr)
+  const pad = n => String(n).padStart(2, '0')
+  const months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec']
+  return `${months[d.getUTCMonth()]} ${d.getUTCDate()}, ${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())} UTC`
+}
+
 async function sendTelegram(chatId, text, extra = {}) {
   if (!BOT_TOKEN || !chatId) return
   try {
@@ -65,9 +75,8 @@ export default async function handler(req, res) {
           if (!chatId) continue
           const chain = (p.chain || 'eth').toUpperCase()
           const price = p.mint_price || 'Free'
-          const time = new Date(p.mint_date).toLocaleString()
           await sendTelegram(chatId,
-            `⏰ <b>Mint in ~30 min: ${p.name}</b>\n\n${chain} · ${price} · ${p.wl_type}\n🕐 ${time}`)
+            `⏰ <b>Mint in ~30 min: ${p.name}</b>\n\n${chain} · ${price} · ${p.wl_type}\n🕐 ${fmtTime(p.mint_date)}`)
           notified++
         }
       }
