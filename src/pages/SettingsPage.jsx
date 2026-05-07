@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react'
 import { motion } from 'framer-motion'
-import { Settings, Key, Wallet, Save, Eye, EyeOff, Check, ExternalLink, Send, Link2, RefreshCw, CheckCircle } from 'lucide-react'
+import { Settings, Key, Wallet, Save, Eye, EyeOff, Check, ExternalLink, Send, Link2, RefreshCw, CheckCircle, Zap, AlertTriangle, Trash2 } from 'lucide-react'
 import toast from 'react-hot-toast'
 import { useAuthStore, useSettingsStore } from '../store'
 import { supabase } from '../lib/supabase'
@@ -21,12 +21,70 @@ export default function SettingsPage() {
   const [telegramLinkCode, setTelegramLinkCode] = useState(null)
   const [telegramLoading, setTelegramLoading] = useState(false)
 
+  // Minting wallet
+  const [mintWalletAddress, setMintWalletAddress] = useState(null)
+  const [mintPrivateKey, setMintPrivateKey] = useState('')
+  const [mintWalletLoading, setMintWalletLoading] = useState(false)
+  const [showMintKey, setShowMintKey] = useState(false)
+
   // Sync form when profile loads/updates from Supabase
   useEffect(() => {
     if (profile?.username) setUsername(profile.username)
     if (profile?.wallet_address) setWalletAddress(profile.wallet_address)
     if (profile?.telegram_chat_id) setTelegramLinked(true)
   }, [profile])
+
+  // Load minting wallet address on mount
+  useEffect(() => {
+    if (!user) return
+    supabase.auth.getSession().then(async ({ data: { session } }) => {
+      if (!session) return
+      try {
+        const r = await fetch('/api/wallet', {
+          headers: { Authorization: 'Bearer ' + session.access_token },
+        })
+        const d = await r.json()
+        if (d.wallet?.wallet_address) setMintWalletAddress(d.wallet.wallet_address)
+      } catch {}
+    })
+  }, [user])
+
+  const saveMintWallet = async () => {
+    if (!mintPrivateKey.trim()) { toast.error('Paste a private key first'); return }
+    setMintWalletLoading(true)
+    try {
+      const { data: { session } } = await supabase.auth.getSession()
+      if (!session) throw new Error('Not authenticated')
+      const r = await fetch('/api/wallet', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: 'Bearer ' + session.access_token,
+        },
+        body: JSON.stringify({ private_key: mintPrivateKey }),
+      })
+      const d = await r.json()
+      if (!r.ok) throw new Error(d.error || 'Save failed')
+      setMintWalletAddress(d.address)
+      setMintPrivateKey('')
+      toast.success('Minting wallet saved!')
+    } catch (err) {
+      toast.error(err.message)
+    } finally {
+      setMintWalletLoading(false)
+    }
+  }
+
+  const removeMintWallet = async () => {
+    if (!confirm('Remove the stored minting wallet? Auto-mint will stop working.')) return
+    const { data: { session } } = await supabase.auth.getSession()
+    await fetch('/api/wallet', {
+      method: 'DELETE',
+      headers: { Authorization: 'Bearer ' + session?.access_token },
+    })
+    setMintWalletAddress(null)
+    toast.success('Minting wallet removed')
+  }
 
   const generateTelegramLink = async () => {
     setTelegramLoading(true)
@@ -218,6 +276,76 @@ export default function SettingsPage() {
           <Save size={14} />
           Save All Keys
         </button>
+      </div>
+
+      {/* Server-side Minting Wallet */}
+      <div className="card mb-4">
+        <div className="flex items-center gap-2 mb-3">
+          <Zap size={14} className="text-green" />
+          <div className="section-label mb-0">Auto-Mint Wallet</div>
+          {mintWalletAddress && (
+            <span className="badge badge-green text-[10px] ml-auto flex items-center gap-1">
+              <CheckCircle size={9} /> Active
+            </span>
+          )}
+        </div>
+
+        <div className="flex items-start gap-2 bg-accent3/8 border border-accent3/20 rounded-lg p-3 mb-3">
+          <AlertTriangle size={12} className="text-accent3 flex-shrink-0 mt-0.5" />
+          <p className="text-xs text-accent3 leading-relaxed">
+            <b>Use a dedicated burner wallet only.</b> Never paste your main wallet's key. Fund it with just enough ETH for planned mints. Keys are encrypted server-side — never stored in plaintext.
+          </p>
+        </div>
+
+        {mintWalletAddress ? (
+          <div className="space-y-3">
+            <div className="bg-surface2 rounded-lg p-3 border border-border">
+              <p className="text-xs text-muted mb-1">Active minting wallet</p>
+              <p className="font-mono text-sm text-green">{mintWalletAddress}</p>
+              <p className="text-xs text-muted mt-1">Auto-mint cron fires every minute for live projects.</p>
+            </div>
+            <button onClick={removeMintWallet} className="btn-ghost text-xs text-accent2 border-accent2/30 hover:border-accent2 flex items-center gap-1.5">
+              <Trash2 size={11} /> Remove Wallet
+            </button>
+          </div>
+        ) : (
+          <div className="space-y-3">
+            <p className="text-sm text-muted">
+              Store a burner wallet's private key so Alpha-Hub can auto-mint on your behalf — even when you're offline or asleep.
+            </p>
+            <div>
+              <label className="text-xs font-mono text-muted uppercase tracking-wider block mb-1.5">
+                Private Key (burner wallet)
+              </label>
+              <div className="relative">
+                <input
+                  type={showMintKey ? 'text' : 'password'}
+                  className="input pr-10 font-mono text-xs"
+                  placeholder="0x... or raw hex key"
+                  value={mintPrivateKey}
+                  onChange={e => setMintPrivateKey(e.target.value)}
+                />
+                <button
+                  onClick={() => setShowMintKey(s => !s)}
+                  className="absolute right-3 top-1/2 -translate-y-1/2 text-muted hover:text-text"
+                >
+                  {showMintKey ? <EyeOff size={14} /> : <Eye size={14} />}
+                </button>
+              </div>
+              <p className="text-xs text-muted mt-1">
+                Key is encrypted server-side with AES-256-GCM. Only the wallet address is ever returned to the client.
+              </p>
+            </div>
+            <button
+              onClick={saveMintWallet}
+              disabled={mintWalletLoading || !mintPrivateKey.trim()}
+              className="btn-primary flex items-center gap-2"
+            >
+              {mintWalletLoading ? <div className="spinner w-3.5 h-3.5" /> : <Zap size={14} />}
+              Save Minting Wallet
+            </button>
+          </div>
+        )}
       </div>
 
       {/* Telegram */}
