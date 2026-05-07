@@ -111,7 +111,7 @@ export default function SettingsPage() {
     const { error } = await supabase.from('profiles')
       .update({ telegram_chat_id: null })
       .eq('id', user.id)
-    if (error) { toast.error(err.message); return }
+    if (error) { toast.error(error.message); return }
     setTelegramLinked(false)
     await fetchProfile(user.id)
     toast.success('Telegram disconnected')
