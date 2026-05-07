@@ -3,6 +3,7 @@ import { motion } from 'framer-motion'
 import { X, Link2, Shield, Loader, Sparkles } from 'lucide-react'
 import toast from 'react-hot-toast'
 import { extractProjectMetadata } from '../../lib/ai'
+import DateTimePicker from '../shared/DateTimePicker'
 
 const WL_TYPES = [
   { val: 'GTD',     label: 'GTD',     desc: 'Guaranteed spot' },
@@ -178,15 +179,14 @@ export default function AddProjectModal({ onAdd, onClose }) {
                 </div>
               </div>
 
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="text-xs font-mono text-muted uppercase tracking-wider block mb-1.5">Mint Date & Time</label>
-                  <input className="input" type="datetime-local" value={form.mint_date} onChange={e => set('mint_date', e.target.value)} />
-                </div>
-                <div>
-                  <label className="text-xs font-mono text-muted uppercase tracking-wider block mb-1.5">Mint Price</label>
-                  <input className="input" placeholder="e.g. 0.08" value={form.mint_price} onChange={e => set('mint_price', e.target.value)} />
-                </div>
+              <DateTimePicker
+                value={form.mint_date}
+                onChange={val => set('mint_date', val)}
+              />
+
+              <div>
+                <label className="text-xs font-mono text-muted uppercase tracking-wider block mb-1.5">Mint Price</label>
+                <input className="input" placeholder="e.g. 0.08" value={form.mint_price} onChange={e => set('mint_price', e.target.value)} />
               </div>
 
               <div>

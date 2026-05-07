@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react'
 import { motion } from 'framer-motion'
 import { X, Shield, Loader } from 'lucide-react'
 import toast from 'react-hot-toast'
+import DateTimePicker from '../shared/DateTimePicker'
 
 const WL_TYPES = [
   { val: 'GTD',     label: 'GTD — Guaranteed spot' },
@@ -20,7 +21,7 @@ export default function EditProjectModal({ project, onSave, onClose }) {
     name: project.name || '',
     chain: project.chain || 'eth',
     contract_address: project.contract_address || '',
-    mint_date: project.mint_date ? new Date(project.mint_date).toISOString().slice(0, 16) : '',
+    mint_date: project.mint_date || '',  // stored as UTC ISO, DateTimePicker converts to local on display
     mint_price: project.mint_price || '',
     wl_type: project.wl_type || 'UNKNOWN',
     mint_mode: project.mint_mode || 'confirm',
@@ -94,15 +95,14 @@ export default function EditProjectModal({ project, onSave, onClose }) {
             </div>
           </div>
 
-          <div className="grid grid-cols-2 gap-3">
-            <div>
-              <label className="text-xs font-mono text-muted uppercase tracking-wider block mb-1.5">Mint Date</label>
-              <input className="input" type="datetime-local" value={form.mint_date} onChange={e => set('mint_date', e.target.value)} />
-            </div>
-            <div>
-              <label className="text-xs font-mono text-muted uppercase tracking-wider block mb-1.5">Mint Price</label>
-              <input className="input" placeholder="e.g. 0.08 ETH" value={form.mint_price} onChange={e => set('mint_price', e.target.value)} />
-            </div>
+          <DateTimePicker
+            value={form.mint_date}
+            onChange={val => set('mint_date', val)}
+          />
+
+          <div>
+            <label className="text-xs font-mono text-muted uppercase tracking-wider block mb-1.5">Mint Price</label>
+            <input className="input" placeholder="e.g. 0.08 ETH" value={form.mint_price} onChange={e => set('mint_price', e.target.value)} />
           </div>
 
           <div>
