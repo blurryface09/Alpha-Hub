@@ -130,32 +130,36 @@ export default function MintGuardPage() {
   const filtered = activeTab === 'all' ? projects : projects.filter(p => p.status === activeTab)
 
   const handleAddProject = async (projectData) => {
+    if (!user?.id) {
+      toast.error('Not logged in — please sign out and back in')
+      throw new Error('Not logged in')
+    }
+    const insertData = {
+      name: projectData.name || 'Unnamed',
+      source_url: projectData.source_url || null,
+      source_type: projectData.source_type || 'website',
+      chain: projectData.chain || 'eth',
+      contract_address: projectData.contract_address || null,
+      mint_date: projectData.mint_date || null,
+      mint_price: projectData.mint_price || null,
+      wl_type: projectData.wl_type || 'UNKNOWN',
+      mint_mode: projectData.mint_mode || 'confirm',
+      max_mint: projectData.max_mint || 1,
+      gas_limit: projectData.gas_limit || 200000,
+      notes: projectData.notes || null,
+      user_id: user.id,
+      status: 'upcoming',
+    }
+    toast.loading('Saving...', { id: 'save-project' })
     try {
-      if (!user?.id) { toast.error('Not logged in -- please sign out and back in'); return }
-      const insertData = {
-        name: projectData.name || 'Unnamed',
-        source_url: projectData.source_url || 'https://unknown.com',
-        source_type: projectData.source_type || 'website',
-        chain: projectData.chain || 'eth',
-        contract_address: projectData.contract_address || null,
-        mint_date: projectData.mint_date || null,
-        mint_price: projectData.mint_price || null,
-        wl_type: projectData.wl_type || 'UNKNOWN',
-        mint_mode: projectData.mint_mode || 'confirm',
-        max_mint: projectData.max_mint || 1,
-        gas_limit: projectData.gas_limit || 200000,
-        notes: projectData.notes || null,
-        user_id: user.id,
-        status: 'upcoming',
-      }
-      toast.loading('Saving...', { id: 'save-project' })
       const data = await directInsert('wl_projects', insertData)
       setProjects(prev => [data, ...prev])
       toast.success(`${data.name} added!`, { id: 'save-project' })
       setShowAddModal(false)
     } catch (err) {
-      console.error('Unexpected error:', err)
-      toast.error(`Unexpected error: ${err.message}`, { id: 'save-project' })
+      console.error('handleAddProject error:', err)
+      toast.error(err.message || 'Save failed', { id: 'save-project' })
+      throw err
     }
   }
 

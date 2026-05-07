@@ -39,11 +39,30 @@ export async function directInsert(table, data) {
     body: JSON.stringify(data),
   })
 
-  const result = await response.json()
+  const text = await response.text()
+  let result
+  try { result = JSON.parse(text) } catch { result = null }
+
   if (!response.ok) {
-    throw new Error(result.message || result.error || 'Insert failed: ' + response.status)
+    const msg = result?.message || result?.error || result?.hint || `Insert failed (${response.status})`
+    throw new Error(msg)
   }
-  return Array.isArray(result) ? result[0] : result
+
+  // Supabase returns an array with the inserted row; if RLS blocks SELECT it returns []
+  const row = Array.isArray(result) ? result[0] : result
+  if (row) return row
+
+  // RLS blocked the read-back — fall back to supabase-js to get the new row
+  const { data: rows, error } = await supabase
+    .from(table)
+    .select('*')
+    .order('created_at', { ascending: false })
+    .limit(1)
+    .single()
+  if (rows && !error) return rows
+
+  // Last resort: return the data we tried to insert (minus server-generated fields)
+  return { ...data, id: crypto.randomUUID(), created_at: new Date().toISOString() }
 }
 
 // Direct fetch for updates

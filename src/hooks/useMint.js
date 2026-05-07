@@ -10,6 +10,49 @@ const CHAIN_MAP = {
   bnb: bsc.id,
 }
 
+const ETHERSCAN_V2 = 'https://api.etherscan.io/v2/api'
+const ETHERSCAN_KEY = import.meta.env.VITE_ETHERSCAN_API_KEY
+const CHAIN_IDS = { eth: 1, base: 8453, bnb: 56 }
+
+// Try to fetch verified ABI from Etherscan
+async function fetchContractAbi(contractAddress, chainKey) {
+  if (!ETHERSCAN_KEY) return null
+  try {
+    const chainId = CHAIN_IDS[chainKey] || 1
+    const url = `${ETHERSCAN_V2}?chainid=${chainId}&module=contract&action=getabi&address=${contractAddress}&apikey=${ETHERSCAN_KEY}`
+    const r = await fetch(url, { signal: AbortSignal.timeout(8000) })
+    const d = await r.json()
+    if (d.status === '1' && d.result && d.result !== 'Contract source code not verified') {
+      return JSON.parse(d.result)
+    }
+  } catch {}
+  return null
+}
+
+// Pull out the best mint function from a verified ABI
+function findMintFn(abi) {
+  const priority = ['mint', 'publicMint', 'mintPublic', 'allowlistMint', 'presaleMint', 'purchase', 'safeMint']
+  const fns = abi.filter(f => f.type === 'function' &&
+    (f.stateMutability === 'payable' || f.stateMutability === 'nonpayable'))
+  for (const name of priority) {
+    const fn = fns.find(f => f.name === name)
+    if (fn) return fn
+  }
+  return null
+}
+
+// Is this error a hard stop (user said no, or real on-chain revert)?
+function isHardStop(e) {
+  const msg = (e.shortMessage || e.message || '').toLowerCase()
+  return (
+    e.code === 4001 ||
+    msg.includes('user rejected') ||
+    msg.includes('user denied') ||
+    msg.includes('rejected') ||
+    msg.includes('execution reverted')
+  )
+}
+
 export function useMint() {
   const { address, isConnected, chain } = useAccount()
   const { writeContractAsync } = useWriteContract()
@@ -32,52 +75,90 @@ export function useMint() {
       try {
         toast.loading('Switching network...', { id: 'mint-tx' })
         await switchChainAsync({ chainId: targetChainId })
-      } catch(e) {
+      } catch (e) {
         toast.error('Failed to switch network: ' + e.message, { id: 'mint-tx' })
         return { success: false, error: e.message }
       }
     }
 
     try {
-      toast.loading('Check your wallet to confirm...', { id: 'mint-tx' })
-
-      const mintAbi = parseAbi([
-        'function mint(uint256 quantity) payable',
-        'function publicMint(uint256 quantity) payable',
-        'function safeMint(address to) payable',
-        'function mintPublic(uint256 quantity) payable',
-      ])
-
       const priceStr = (project.mint_price || '0').replace(/[^0-9.]/g, '') || '0'
       const mintPrice = parseEther(priceStr)
       const quantity = BigInt(project.max_mint || 1)
+      const gasLimit = BigInt(project.gas_limit || 200000)
 
       let txHash
-      const mintFunctions = ['mint', 'publicMint', 'mintPublic']
 
-      for (const funcName of mintFunctions) {
-        try {
-          txHash = await writeContractAsync({
-            address: project.contract_address,
-            abi: mintAbi,
-            functionName: funcName,
-            args: [quantity],
-            value: mintPrice * quantity,
-            gas: BigInt(project.gas_limit || 200000),
-          })
-          break
-        } catch(e) {
-          if (e.message?.includes('does not exist') || e.message?.includes('not found')) {
-            continue
+      // --- Step 1: Try verified ABI from Etherscan ---
+      toast.loading('Checking contract...', { id: 'mint-tx' })
+      const verifiedAbi = await fetchContractAbi(project.contract_address, project.chain || 'eth')
+
+      if (verifiedAbi) {
+        const mintFn = findMintFn(verifiedAbi)
+        if (mintFn) {
+          toast.loading('Check your wallet to confirm...', { id: 'mint-tx' })
+          // Build args: if the function takes inputs, pass quantity; otherwise no args
+          const args = mintFn.inputs?.length > 0 ? [quantity] : []
+          try {
+            txHash = await writeContractAsync({
+              address: project.contract_address,
+              abi: verifiedAbi,
+              functionName: mintFn.name,
+              args,
+              value: mintPrice * quantity,
+              gas: gasLimit,
+            })
+          } catch (e) {
+            if (isHardStop(e)) throw e
+            // Verified ABI call failed for some reason — fall through to guessing
           }
-          throw e
         }
       }
 
-      if (!txHash) throw new Error('Could not find mint function on contract')
+      // --- Step 2: Fallback — try common signatures ---
+      if (!txHash) {
+        toast.loading('Check your wallet to confirm...', { id: 'mint-tx' })
 
-      toast.loading('Waiting for confirmation...', { id: 'mint-tx' })
+        // Ordered by how common they are in the wild
+        const attempts = [
+          { sig: 'function mint(uint256 quantity) payable',          name: 'mint',           args: [quantity] },
+          { sig: 'function mint(uint256 amount) payable',            name: 'mint',           args: [quantity] },
+          { sig: 'function publicMint(uint256 quantity) payable',    name: 'publicMint',     args: [quantity] },
+          { sig: 'function mintPublic(uint256 quantity) payable',    name: 'mintPublic',     args: [quantity] },
+          { sig: 'function mint() payable',                          name: 'mint',           args: []         },
+          { sig: 'function purchase(uint256 numberOfTokens) payable',name: 'purchase',       args: [quantity] },
+          { sig: 'function presaleMint(uint256 quantity) payable',   name: 'presaleMint',    args: [quantity] },
+          { sig: 'function allowlistMint(uint256 quantity) payable', name: 'allowlistMint',  args: [quantity] },
+          { sig: 'function safeMint(address to) payable',            name: 'safeMint',       args: [address]  },
+        ]
 
+        for (const attempt of attempts) {
+          try {
+            txHash = await writeContractAsync({
+              address: project.contract_address,
+              abi: parseAbi([attempt.sig]),
+              functionName: attempt.name,
+              args: attempt.args,
+              value: mintPrice * quantity,
+              gas: gasLimit,
+            })
+            break // success
+          } catch (e) {
+            if (isHardStop(e)) throw e
+            // Encoding / not-found / any other error — try next signature
+            continue
+          }
+        }
+      }
+
+      if (!txHash) {
+        throw new Error(
+          'Could not find a supported mint function on this contract. ' +
+          'Make sure the sale is live, or check the contract address.'
+        )
+      }
+
+      // Log to mint_log
       await supabase.from('mint_log').insert({
         user_id: userId,
         project_id: project.id,
@@ -86,16 +167,18 @@ export function useMint() {
         tx_hash: txHash,
         status: 'pending',
         executed_at: new Date().toISOString(),
-      })
+      }).then(() => {}).catch(() => {}) // non-critical, don't fail the mint
 
-      toast.success('Mint submitted! TX: ' + txHash.slice(0,12) + '...', { id: 'mint-tx', duration: 8000 })
+      toast.success('Mint submitted! TX: ' + txHash.slice(0, 12) + '...', { id: 'mint-tx', duration: 8000 })
       return { success: true, txHash }
 
-    } catch(e) {
+    } catch (e) {
       const msg = e.shortMessage || e.message || 'Transaction failed'
-      toast.error(msg.slice(0, 100), { id: 'mint-tx' })
+      toast.error(msg.slice(0, 120), { id: 'mint-tx' })
+
+      // Log failure (non-critical)
       if (userId) {
-        await supabase.from('mint_log').insert({
+        supabase.from('mint_log').insert({
           user_id: userId,
           project_id: project.id,
           wallet_address: address || 'unknown',
@@ -103,7 +186,7 @@ export function useMint() {
           status: 'failed',
           error_message: msg.slice(0, 200),
           executed_at: new Date().toISOString(),
-        })
+        }).then(() => {}).catch(() => {})
       }
       return { success: false, error: msg }
     }
