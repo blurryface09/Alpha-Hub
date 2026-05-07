@@ -89,19 +89,16 @@ export default function SettingsPage() {
   const generateTelegramLink = async () => {
     setTelegramLoading(true)
     try {
-      // Generate a short random token
       const token = Math.random().toString(36).slice(2, 10).toUpperCase()
-      const expires = new Date(Date.now() + 15 * 60 * 1000).toISOString() // 15 min
 
       const { error } = await supabase.from('telegram_link_tokens').insert({
         user_id: user.id,
         token,
-        expires_at: expires,
       })
-      if (error) throw error
+      if (error) throw new Error(error.message || JSON.stringify(error))
       setTelegramLinkCode(token)
     } catch (err) {
-      toast.error('Could not generate link: ' + err.message)
+      toast.error('Could not generate link: ' + (err.message || 'Unknown error'), { duration: 6000 })
     } finally {
       setTelegramLoading(false)
     }
