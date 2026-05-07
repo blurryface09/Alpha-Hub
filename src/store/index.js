@@ -64,17 +64,6 @@ export const useAuthStore = create((set, get) => ({
     }
   },
 
-  // Get fresh session - call before any DB operation
-  getValidSession: async () => {
-    const { data: { session }, error } = await supabase.auth.getSession()
-    if (error || !session) {
-      // Try refresh
-      const { data: { session: refreshed } } = await supabase.auth.refreshSession()
-      return refreshed
-    }
-    return session
-  },
-
   signOut: async () => {
     await supabase.auth.signOut()
     set({ user: null, profile: null })
