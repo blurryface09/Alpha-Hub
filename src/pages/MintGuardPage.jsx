@@ -88,10 +88,14 @@ export default function MintGuardPage() {
         .eq('user_id', user.id)
         .order('mint_date', { ascending: true, nullsFirst: false })
       if (error) { console.error('fetchProjects error:', error); return }
-      if (data) {
-        // Auto-update statuses based on dates
+      // Never overwrite existing projects with an empty result — could be a transient
+      // auth token refresh causing RLS to block the query momentarily.
+      if (data && data.length > 0) {
         const updated = await autoUpdateStatus(data)
         setProjects(updated)
+      } else if (data && data.length === 0) {
+        // Only clear if we genuinely have nothing on first load
+        setProjects(prev => prev.length === 0 ? [] : prev)
       }
     } catch(e) {
       console.error('fetchProjects catch:', e)
@@ -111,9 +115,9 @@ export default function MintGuardPage() {
     // Silent background refresh every 60s -- never clears projects
     const interval = setInterval(() => fetchProjects(false), 60000)
 
-    // Re-fetch immediately when tab becomes visible again (fixes stale state after tab switch)
+    // Re-fetch when tab/app becomes visible — small delay lets Supabase finish token refresh first
     const onVisibility = () => {
-      if (document.visibilityState === 'visible') fetchProjects(false)
+      if (document.visibilityState === 'visible') setTimeout(() => fetchProjects(false), 800)
     }
     document.addEventListener('visibilitychange', onVisibility)
 
