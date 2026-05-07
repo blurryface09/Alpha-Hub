@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react'
 import { motion } from 'framer-motion'
-import { Settings, Key, Wallet, Save, Eye, EyeOff, Check, ExternalLink } from 'lucide-react'
+import { Settings, Key, Wallet, Save, Eye, EyeOff, Check, ExternalLink, Send, Link2, RefreshCw, CheckCircle } from 'lucide-react'
 import toast from 'react-hot-toast'
 import { useAuthStore, useSettingsStore } from '../store'
 import { supabase } from '../lib/supabase'
@@ -17,12 +17,47 @@ export default function SettingsPage() {
   })
   const [username, setUsername] = useState(profile?.username || '')
   const [walletAddress, setWalletAddress] = useState(profile?.wallet_address || '')
+  const [telegramLinked, setTelegramLinked] = useState(false)
+  const [telegramLinkCode, setTelegramLinkCode] = useState(null)
+  const [telegramLoading, setTelegramLoading] = useState(false)
 
   // Sync form when profile loads/updates from Supabase
   useEffect(() => {
     if (profile?.username) setUsername(profile.username)
     if (profile?.wallet_address) setWalletAddress(profile.wallet_address)
+    if (profile?.telegram_chat_id) setTelegramLinked(true)
   }, [profile])
+
+  const generateTelegramLink = async () => {
+    setTelegramLoading(true)
+    try {
+      // Generate a short random token
+      const token = Math.random().toString(36).slice(2, 10).toUpperCase()
+      const expires = new Date(Date.now() + 15 * 60 * 1000).toISOString() // 15 min
+
+      const { error } = await supabase.from('telegram_link_tokens').insert({
+        user_id: user.id,
+        token,
+        expires_at: expires,
+      })
+      if (error) throw error
+      setTelegramLinkCode(token)
+    } catch (err) {
+      toast.error('Could not generate link: ' + err.message)
+    } finally {
+      setTelegramLoading(false)
+    }
+  }
+
+  const disconnectTelegram = async () => {
+    const { error } = await supabase.from('profiles')
+      .update({ telegram_chat_id: null })
+      .eq('id', user.id)
+    if (error) { toast.error(err.message); return }
+    setTelegramLinked(false)
+    await fetchProfile(user.id)
+    toast.success('Telegram disconnected')
+  }
   const [show, setShow] = useState({})
   const [saving, setSaving] = useState(false)
 
@@ -183,6 +218,88 @@ export default function SettingsPage() {
           <Save size={14} />
           Save All Keys
         </button>
+      </div>
+
+      {/* Telegram */}
+      <div className="card mb-4">
+        <div className="flex items-center gap-2 mb-3">
+          <Send size={14} className="text-accent" />
+          <div className="section-label mb-0">Telegram Notifications</div>
+          {telegramLinked && (
+            <span className="badge badge-green text-[10px] ml-auto flex items-center gap-1">
+              <CheckCircle size={9} /> Connected
+            </span>
+          )}
+        </div>
+
+        {telegramLinked ? (
+          <div className="space-y-3">
+            <p className="text-sm text-text">
+              ✅ Your Telegram is connected. You'll get real-time mint alerts and can confirm/skip mints directly from Telegram.
+            </p>
+            <p className="text-xs text-muted">
+              Bot commands: <code className="bg-surface2 px-1 rounded">/dashboard</code> · <code className="bg-surface2 px-1 rounded">/live</code> · <code className="bg-surface2 px-1 rounded">/upcoming</code>
+            </p>
+            <button onClick={disconnectTelegram} className="btn-ghost text-xs text-accent2 border-accent2/30 hover:border-accent2">
+              Disconnect Telegram
+            </button>
+          </div>
+        ) : (
+          <div className="space-y-3">
+            <p className="text-sm text-muted">
+              Connect Telegram to get real-time mint alerts, 30-min reminders, and confirm/skip mints with one tap.
+            </p>
+
+            {!telegramLinkCode ? (
+              <button
+                onClick={generateTelegramLink}
+                disabled={telegramLoading}
+                className="btn-primary flex items-center gap-2"
+              >
+                {telegramLoading
+                  ? <div className="spinner w-3.5 h-3.5" />
+                  : <Link2 size={14} />}
+                Generate Link Code
+              </button>
+            ) : (
+              <div className="space-y-3">
+                <div className="bg-surface2 border border-border rounded-lg p-3">
+                  <p className="text-xs text-muted mb-2">1. Open Telegram and message this bot:</p>
+                  <a
+                    href="https://t.me/AlphaHubMintBot"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-sm font-mono text-accent hover:underline flex items-center gap-1"
+                  >
+                    @AlphaHubMintBot <ExternalLink size={11} />
+                  </a>
+                  <p className="text-xs text-muted mt-3 mb-1">2. Send this message to the bot:</p>
+                  <div className="bg-surface rounded-md p-2 font-mono text-sm flex items-center justify-between">
+                    <span>/start {telegramLinkCode}</span>
+                    <button
+                      onClick={() => { navigator.clipboard.writeText(`/start ${telegramLinkCode}`); toast.success('Copied!') }}
+                      className="text-accent text-xs hover:underline ml-2"
+                    >
+                      Copy
+                    </button>
+                  </div>
+                  <p className="text-xs text-muted mt-2">⏱ Code expires in 15 minutes</p>
+                </div>
+                <div className="flex gap-2">
+                  <button
+                    onClick={async () => { await fetchProfile(user.id); if (profile?.telegram_chat_id) setTelegramLinked(true) }}
+                    className="btn-ghost text-xs flex items-center gap-1.5"
+                  >
+                    <RefreshCw size={11} /> Check connection
+                  </button>
+                  <button onClick={() => setTelegramLinkCode(null)} className="btn-ghost text-xs">
+                    Cancel
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+        )}
       </div>
 
       {/* Account info */}

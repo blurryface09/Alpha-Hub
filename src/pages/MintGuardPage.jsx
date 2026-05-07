@@ -11,6 +11,22 @@ import ProjectCard from '../components/mint/ProjectCard'
 
 const STATUS_TABS = ['all', 'upcoming', 'live', 'minted', 'missed']
 
+// Send a notification to the user's Telegram (fire-and-forget)
+async function notifyTelegram(project, type, userToken) {
+  const chatId = project._telegram_chat_id
+  if (!chatId || !userToken) return
+  try {
+    await fetch('/api/telegram-notify', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': 'Bearer ' + userToken,
+      },
+      body: JSON.stringify({ chat_id: chatId, project, type }),
+    })
+  } catch {}
+}
+
 export default function MintGuardPage() {
   const { user } = useAuthStore()
   const { executeMint: mintHook, isConnected } = useMint()
@@ -20,7 +36,10 @@ export default function MintGuardPage() {
   const [showAddModal, setShowAddModal] = useState(false)
   const [confirmMint, setConfirmMint] = useState(null) // project to confirm mint for
   const [mintingId, setMintingId] = useState(null)
+  const [telegramChatId, setTelegramChatId] = useState(null)
+  const [userToken, setUserToken] = useState(null)
   const autoFired = React.useRef(new Set())
+  const tgNotified = React.useRef(new Set()) // prevent duplicate Telegram notifications
 
   // Auto-update project status based on mint date
   const autoUpdateStatus = async (projects) => {
@@ -127,6 +146,50 @@ export default function MintGuardPage() {
     })
   }, [projects])
 
+  // Load user's Telegram chat ID + auth token for notify calls
+  useEffect(() => {
+    if (!user) return
+    supabase.from('profiles').select('telegram_chat_id').eq('id', user.id).single()
+      .then(({ data }) => { if (data?.telegram_chat_id) setTelegramChatId(data.telegram_chat_id) })
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      if (session?.access_token) setUserToken(session.access_token)
+    })
+  }, [user])
+
+  // Send Telegram live-alert when a project transitions to 'live'
+  useEffect(() => {
+    if (!telegramChatId || !userToken) return
+    projects.forEach(p => {
+      if (p.status === 'live' && !tgNotified.current.has(p.id)) {
+        tgNotified.current.add(p.id)
+        notifyTelegram({ ...p, _telegram_chat_id: telegramChatId }, 'live', userToken)
+      }
+    })
+  }, [projects, telegramChatId, userToken])
+
+  // Watch for Telegram mint approvals (user tapped "Confirm" in Telegram)
+  useEffect(() => {
+    if (!user) return
+    const channel = supabase
+      .channel('tg-mint-approvals')
+      .on('postgres_changes', {
+        event: 'UPDATE', schema: 'public', table: 'wl_projects',
+        filter: `user_id=eq.${user.id}`,
+      }, payload => {
+        const updated = payload.new
+        if (updated.telegram_mint_approved === true && updated.status !== 'minted') {
+          // Reset the flag first, then execute
+          supabase.from('wl_projects').update({ telegram_mint_approved: null }).eq('id', updated.id)
+          setProjects(prev => prev.map(p => p.id === updated.id
+            ? { ...p, ...updated, telegram_mint_approved: null } : p))
+          // Execute the mint directly (skip confirm modal — user already confirmed in Telegram)
+          executeMint({ ...updated })
+        }
+      })
+      .subscribe()
+    return () => supabase.removeChannel(channel)
+  }, [user])
+
   const filtered = activeTab === 'all' ? projects : projects.filter(p => p.status === activeTab)
 
   const handleAddProject = async (projectData) => {
@@ -217,6 +280,11 @@ export default function MintGuardPage() {
 
   const executeMint = async (project) => {
     setMintingId(project.id)
+    const tgProject = { ...project, _telegram_chat_id: telegramChatId }
+    // Notify Telegram that auto-mint is firing
+    if (telegramChatId && project.mint_mode === 'auto') {
+      notifyTelegram(tgProject, 'auto', userToken)
+    }
     try {
       const result = await mintHook(project, user.id)
       if (result?.success) {
@@ -229,6 +297,8 @@ export default function MintGuardPage() {
           message: `Transaction confirmed. Hash: ${result.txHash?.slice(0, 16)}...`,
           data: { tx_hash: result.txHash, project_id: project.id },
         })
+        // Telegram success alert
+        notifyTelegram({ ...tgProject, tx_hash: result.txHash }, 'success', userToken)
       } else if (result && !result.success) {
         await supabase.from('notifications').insert({
           user_id: user.id,
@@ -237,6 +307,8 @@ export default function MintGuardPage() {
           message: result.error,
           data: { project_id: project.id },
         })
+        // Telegram failure alert
+        notifyTelegram({ ...tgProject, error: result.error }, 'failed', userToken)
       }
     } finally {
       setMintingId(null)
