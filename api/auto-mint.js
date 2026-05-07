@@ -176,7 +176,12 @@ export default async function handler(req, res) {
   }
 
   if (!process.env.WALLET_ENCRYPTION_KEY) {
-    return res.status(500).json({ error: 'WALLET_ENCRYPTION_KEY not configured' })
+    // Return 200 so cron-job.org doesn't disable — just log the config issue
+    return res.status(200).json({ ok: false, error: 'WALLET_ENCRYPTION_KEY not configured' })
+  }
+
+  if (!process.env.VITE_SUPABASE_URL || !process.env.SUPABASE_SERVICE_KEY) {
+    return res.status(200).json({ ok: false, error: 'Supabase env vars missing' })
   }
 
   // Find all live projects with auto-mint enabled and a contract address
@@ -188,7 +193,7 @@ export default async function handler(req, res) {
     .not('contract_address', 'is', null)
     .neq('auto_mint_fired', true)  // don't double-fire
 
-  if (error) return res.status(500).json({ error: error.message })
+  if (error) return res.status(200).json({ ok: false, error: error.message })
   if (!projects?.length) return res.status(200).json({ ok: true, fired: 0 })
 
   const userIds = [...new Set(projects.map(p => p.user_id))]
@@ -297,3 +302,4 @@ export default async function handler(req, res) {
 
   res.status(200).json({ ok: true, fired })
 }
+
