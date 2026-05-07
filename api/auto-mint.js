@@ -164,7 +164,7 @@ async function executeMintServerSide(project, privateKey, chatId) {
   }
 
   if (!txHash) throw new Error('No supported mint function found on contract')
-  return txHash
+  return { txHash, publicClient }
 }
 
 // ---- main handler ----------------------------------------------------------
@@ -244,9 +244,30 @@ export default async function handler(req, res) {
         `⚡ <b>Auto-minting: ${project.name}</b>\n${chain} · ${price}\nFiring transaction from ${walletRow.wallet_address.slice(0, 10)}...`
       )
 
-      const txHash = await executeMintServerSide(project, privateKey, chatId)
+      const { txHash, publicClient: pc } = await executeMintServerSide(project, privateKey, chatId)
 
-      // Update status and log the transaction
+      // Wait for on-chain confirmation before declaring success
+      // Times out after 90s — if still pending, mark as pending not minted
+      let confirmed = false
+      try {
+        const receipt = await Promise.race([
+          pc.waitForTransactionReceipt({ hash: txHash }),
+          new Promise((_, reject) => setTimeout(() => reject(new Error('receipt timeout')), 90_000))
+        ])
+        confirmed = receipt.status === 'success'
+      } catch {
+        // Tx submitted but not confirmed in time — leave status as live so it can be retried
+      }
+
+      if (!confirmed) {
+        await supabase.from('wl_projects').update({ auto_mint_fired: false }).eq('id', project.id)
+        await tgNotify(chatId,
+          `⏳ <b>TX submitted but unconfirmed: ${project.name}</b>\n\nTX: <code>${txHash.slice(0, 20)}...</code>\nCheck on-chain and mark manually if needed.`
+        )
+        continue
+      }
+
+      // Confirmed on-chain — now mark minted
       await supabase.from('wl_projects')
         .update({ status: 'minted' })
         .eq('id', project.id)
@@ -265,12 +286,12 @@ export default async function handler(req, res) {
         user_id: project.user_id,
         type: 'mint_success',
         title: `✅ Auto-Mint Success — ${project.name}`,
-        message: `Server-side mint executed. TX: ${txHash.slice(0, 18)}...`,
+        message: `Transaction confirmed on-chain. TX: ${txHash.slice(0, 18)}...`,
         data: { tx_hash: txHash, project_id: project.id },
       }).then(() => {}).catch(() => {})
 
       await tgNotify(chatId,
-        `✅ <b>Auto-Mint Success: ${project.name}</b>\n\nTX: <code>${txHash.slice(0, 20)}...</code>\nWallet: ${walletRow.wallet_address.slice(0, 10)}...`
+        `✅ <b>Auto-Mint Confirmed: ${project.name}</b>\n\nTX: <code>${txHash.slice(0, 20)}...</code>\nWallet: ${walletRow.wallet_address.slice(0, 10)}...`
       )
 
       fired++

@@ -16,6 +16,8 @@ const MINT_MODES = [
   { val: 'auto', label: 'Auto', icon: '⚡', desc: 'Fires immediately when live' },
 ]
 
+const STATUS_OPTIONS = ['upcoming', 'live', 'minted', 'missed', 'cancelled']
+
 export default function EditProjectModal({ project, onSave, onClose }) {
   const [form, setForm] = useState({
     name: project.name || '',
@@ -28,6 +30,7 @@ export default function EditProjectModal({ project, onSave, onClose }) {
     max_mint: project.max_mint || 1,
     gas_limit: project.gas_limit || 200000,
     notes: project.notes || '',
+    status: project.status || 'upcoming',
   })
   const [loading, setLoading] = useState(false)
 
@@ -78,7 +81,7 @@ export default function EditProjectModal({ project, onSave, onClose }) {
             <input className="input" value={form.name} onChange={e => set('name', e.target.value)} />
           </div>
 
-          <div className="grid grid-cols-2 gap-3">
+          <div className="grid grid-cols-3 gap-3">
             <div>
               <label className="text-xs font-mono text-muted uppercase tracking-wider block mb-1.5">Chain</label>
               <select className="input" value={form.chain} onChange={e => set('chain', e.target.value)}>
@@ -91,6 +94,12 @@ export default function EditProjectModal({ project, onSave, onClose }) {
               <label className="text-xs font-mono text-muted uppercase tracking-wider block mb-1.5">WL Type</label>
               <select className="input" value={form.wl_type} onChange={e => set('wl_type', e.target.value)}>
                 {WL_TYPES.map(t => <option key={t.val} value={t.val}>{t.label}</option>)}
+              </select>
+            </div>
+            <div>
+              <label className="text-xs font-mono text-muted uppercase tracking-wider block mb-1.5">Status</label>
+              <select className="input" value={form.status} onChange={e => set('status', e.target.value)}>
+                {STATUS_OPTIONS.map(s => <option key={s} value={s}>{s.charAt(0).toUpperCase() + s.slice(1)}</option>)}
               </select>
             </div>
           </div>
