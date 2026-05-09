@@ -7,6 +7,7 @@ export const useAuthStore = create((set, get) => ({
   user: null,
   profile: null,
   loading: true,
+  signingIn: false,
   _authSubscription: null,
 
   init: async () => {
@@ -37,43 +38,50 @@ export const useAuthStore = create((set, get) => ({
     }
   },
 
-  signInWithWallet: async (address) => {
+  signInWithWallet: async (address, signMessageAsync) => {
+    if (get().signingIn) return { success: false, error: 'Already signing in' }
+
     try {
-      set({ loading: true })
-      const email = address.toLowerCase() + '@alphahub.wallet'
-      const password = 'AH_' + address.toLowerCase() + '_2024'
+      set({ signingIn: true })
 
-      const { data: signInData, error: signInError } = await supabase.auth.signInWithPassword({
-        email,
-        password,
+      const domain = window.location.host
+      const origin = window.location.origin
+      const issuedAt = new Date().toISOString()
+      const nonce = crypto.randomUUID().replace(/-/g, '').slice(0, 16)
+
+      const message = [
+        domain + ' wants you to sign in with your Ethereum account:',
+        address,
+        '',
+        'Sign in to Alpha Hub',
+        '',
+        'URI: ' + origin,
+        'Version: 1',
+        'Chain ID: 1',
+        'Nonce: ' + nonce,
+        'Issued At: ' + issuedAt,
+      ].join('\n')
+
+      const signature = await signMessageAsync({ message })
+
+      const { data, error } = await supabase.auth.signInWithWeb3({
+        chain: 'ethereum',
+        message,
+        signature,
       })
 
-      if (!signInError && signInData.user) {
-        set({ user: signInData.user })
-        await get().fetchProfile(signInData.user.id)
-        set({ loading: false })
+      if (error) throw error
+
+      if (data?.user) {
+        set({ user: data.user, signingIn: false })
+        await get().fetchProfile(data.user.id)
         return { success: true }
       }
 
-      // No account yet - create one
-      const { data: signUpData, error: signUpError } = await supabase.auth.signUp({
-        email,
-        password,
-      })
-
-      if (signUpError) throw signUpError
-
-      if (signUpData.user) {
-        set({ user: signUpData.user })
-        await get().fetchProfile(signUpData.user.id)
-        set({ loading: false })
-        return { success: true }
-      }
-
-      throw new Error('Sign up failed')
+      throw new Error('Sign in failed — no user returned')
     } catch (err) {
       console.error('signInWithWallet error:', err)
-      set({ loading: false })
+      set({ signingIn: false })
       return { success: false, error: err.message }
     }
   },
@@ -107,7 +115,7 @@ export const useAuthStore = create((set, get) => ({
 }))
 
 // --- Notifications Store -----------------------------------------
-export const useNotificationStore = create((set, get) => ({
+export const useNotificationStore = create((set) => ({
   notifications: [],
   unreadCount: 0,
 
