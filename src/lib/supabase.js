@@ -14,47 +14,41 @@ export const supabase = createClient(supabaseUrl, supabaseKey, {
   },
 })
 
-// Get auth token — reads localStorage directly, no async SDK lock.
-// Falls back to SDK only if no token found at all.
+// Get auth token — always uses SDK first for SIWE wallet sessions
+// localStorage scan is a fast-path fallback for email sessions only
 export async function getAuthToken() {
-  let expiredToken = null
+  // Primary: always try SDK first — works for both email and wallet SIWE sessions
+  try {
+    const { data: { session }, error } = await Promise.race([
+      supabase.auth.getSession(),
+      new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), 4000))
+    ])
+    if (session?.access_token) return session.access_token
+  } catch {}
 
+  // Fallback: scan localStorage for email-based sessions
   try {
     for (const key of Object.keys(localStorage)) {
       if (key.startsWith('sb-') && key.endsWith('-auth-token')) {
         const parsed = JSON.parse(localStorage.getItem(key) || '{}')
         const token = parsed?.access_token
-        const exp = parsed?.expires_at   // epoch seconds
+        const exp = parsed?.expires_at
 
         if (!token) continue
 
         if (exp && exp * 1000 > Date.now() + 60_000) {
-          // Token valid for at least another 60s — use it immediately
           return token
         }
 
         if (exp && exp * 1000 > Date.now() - 5 * 60_000) {
-          // Token expired within last 5 min — keep as fallback, kick off background refresh
-          expiredToken = token
           supabase.auth.refreshSession().catch(() => {})
+          return token
         }
       }
     }
   } catch {}
 
-  // Return slightly-expired token rather than hanging — server will 401 if truly dead
-  if (expiredToken) return expiredToken
-
-  // True last resort: SDK with hard timeout
-  try {
-    const result = await Promise.race([
-      supabase.auth.getSession(),
-      new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), 4000))
-    ])
-    return result?.data?.session?.access_token || null
-  } catch {
-    return null
-  }
+  return null
 }
 
 // Direct fetch for inserts - bypasses supabase-js lock completely
@@ -97,11 +91,9 @@ export async function directInsert(table, data) {
     throw new Error(msg)
   }
 
-  // Supabase returns an array with the inserted row; if RLS blocks SELECT it returns []
   const row = Array.isArray(result) ? result[0] : result
   if (row) return row
 
-  // RLS blocked the read-back — fall back to supabase-js to get the new row
   const { data: rows, error } = await supabase
     .from(table)
     .select('*')
@@ -110,7 +102,6 @@ export async function directInsert(table, data) {
     .single()
   if (rows && !error) return rows
 
-  // Last resort: return the data we tried to insert (minus server-generated fields)
   return { ...data, id: crypto.randomUUID(), created_at: new Date().toISOString() }
 }
 
