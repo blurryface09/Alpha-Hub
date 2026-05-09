@@ -3,26 +3,32 @@ import { Outlet, NavLink, useNavigate } from 'react-router-dom'
 import { motion, AnimatePresence } from 'framer-motion'
 import {
   LayoutDashboard, Shield, Radar, Search,
-  Settings, Bell, LogOut, Menu, X, ChevronRight, Zap
+  Settings, Bell, LogOut, Menu, X, Zap
 } from 'lucide-react'
+import { useAccount } from 'wagmi'
 import { useAuthStore, useNotificationStore } from '../store'
 import ConnectWallet from '../components/shared/ConnectWallet'
 import NotificationPanel from '../components/shared/NotificationPanel'
 
+const ADMIN_WALLET = import.meta.env.VITE_ADMIN_WALLET?.toLowerCase()
+
 const NAV_ITEMS = [
-  { path: '/',          label: 'Overview',      icon: LayoutDashboard, exact: true },
-  { path: '/mintguard', label: 'MintGuard',     icon: Shield,          badge: 'NEW' },
-  { path: '/whaleradar',label: 'WhaleRadar',    icon: Radar },
-  { path: '/alpha',     label: 'Alpha Tools',   icon: Search },
-  { path: '/settings',  label: 'Settings',      icon: Settings },
+  { path: '/',           label: 'Overview',    icon: LayoutDashboard, exact: true },
+  { path: '/mintguard',  label: 'MintGuard',   icon: Shield,          badge: 'NEW' },
+  { path: '/whaleradar', label: 'WhaleRadar',  icon: Radar },
+  { path: '/alpha',      label: 'Alpha Tools', icon: Search },
+  { path: '/settings',   label: 'Settings',    icon: Settings },
 ]
 
 export default function DashboardLayout() {
   const { user, profile, signOut } = useAuthStore()
+  const { address, isConnected } = useAccount()
   const { notifications, unreadCount, fetch: fetchNotifs, subscribe, markAllRead } = useNotificationStore()
   const [sidebarOpen, setSidebarOpen] = useState(false)
   const [notifOpen, setNotifOpen] = useState(false)
   const navigate = useNavigate()
+
+  const isAdmin = isConnected && address?.toLowerCase() === ADMIN_WALLET
 
   useEffect(() => {
     if (user) {
@@ -70,7 +76,7 @@ export default function DashboardLayout() {
         {/* Status indicator */}
         <div className="mx-4 mt-3 mb-1 px-3 py-2 bg-surface2 rounded-lg border border-border flex items-center gap-2">
           <div className="dot-live" />
-          <span className="text-xs text-muted font-mono">ETH ' BASE ' LIVE</span>
+          <span className="text-xs text-muted font-mono">ETH · BASE · LIVE</span>
         </div>
 
         {/* Nav */}
@@ -80,7 +86,7 @@ export default function DashboardLayout() {
               key={item.path}
               to={item.path}
               end={item.exact}
-              className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`}
+              className={({ isActive }) => 'nav-link ' + (isActive ? 'active' : '')}
               onClick={() => setSidebarOpen(false)}
             >
               <item.icon size={16} />
@@ -88,17 +94,36 @@ export default function DashboardLayout() {
               {item.badge && <span className="badge badge-cyan text-[10px]">{item.badge}</span>}
             </NavLink>
           ))}
+
+          {/* Admin nav item — only visible to admin wallet */}
+          {isAdmin && (
+            <NavLink
+              to="/admin"
+              className={({ isActive }) => 'nav-link ' + (isActive ? 'active' : '')}
+              onClick={() => setSidebarOpen(false)}
+            >
+              <Zap size={16} />
+              <span className="flex-1">Admin</span>
+              <span className="badge text-[10px] px-1.5 py-0.5 rounded bg-amber-500/10 text-amber-400 border border-amber-500/20">
+                YOU
+              </span>
+            </NavLink>
+          )}
         </nav>
 
         {/* User */}
         <div className="px-3 py-3 border-t border-border">
           <div className="flex items-center gap-3 px-3 py-2.5 rounded-lg bg-surface2 mb-1">
             <div className="w-7 h-7 rounded-full bg-accent/20 flex items-center justify-center text-accent text-xs font-bold">
-              {(profile?.username || user?.email)?.[0]?.toUpperCase() || '?'}
+              {address ? address[2]?.toUpperCase() : '?'}
             </div>
             <div className="flex-1 min-w-0">
-              <div className="text-xs font-medium truncate">{profile?.username || 'User'}</div>
-              <div className="text-[10px] text-muted truncate">{user?.email}</div>
+              <div className="text-xs font-medium truncate">
+                {isAdmin ? 'Admin' : (profile?.username || 'User')}
+              </div>
+              <div className="text-[10px] text-muted font-mono truncate">
+                {address ? address.slice(0, 6) + '...' + address.slice(-4) : ''}
+              </div>
             </div>
           </div>
           <button
@@ -124,10 +149,8 @@ export default function DashboardLayout() {
 
           <div className="flex-1" />
 
-          {/* Connect Wallet */}
           <ConnectWallet />
 
-          {/* Notification bell */}
           <div className="relative">
             <button
               onClick={() => setNotifOpen(!notifOpen)}
@@ -152,8 +175,6 @@ export default function DashboardLayout() {
               )}
             </AnimatePresence>
           </div>
-
-
         </header>
 
         {/* Page content */}

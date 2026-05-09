@@ -1,0 +1,382 @@
+import React, { useState, useEffect, useCallback } from 'react'
+import { useAccount } from 'wagmi'
+import { supabase } from '../lib/supabase'
+import { useSubscription } from '../hooks/useSubscription'
+import toast from 'react-hot-toast'
+import {
+  Shield, Users, Plus, Trash2, RefreshCw,
+  Wallet, Clock, CheckCircle2, XCircle, Loader2,
+  TrendingUp, Calendar, Copy
+} from 'lucide-react'
+
+const ADMIN_WALLET = import.meta.env.VITE_ADMIN_WALLET?.toLowerCase()
+
+const PLAN_DAYS = {
+  weekly: 7,
+  monthly: 30,
+  quarterly: 90,
+}
+
+const PLAN_COLORS = {
+  weekly: 'text-cyan-400 bg-cyan-500/10 border-cyan-500/20',
+  monthly: 'text-violet-400 bg-violet-500/10 border-violet-500/20',
+  quarterly: 'text-amber-400 bg-amber-500/10 border-amber-500/20',
+}
+
+function StatCard({ icon: Icon, label, value, sub, color }) {
+  return (
+    <div className="card p-4 flex items-start gap-3">
+      <div className={`w-9 h-9 rounded-lg flex items-center justify-center ${color}`}>
+        <Icon size={16} />
+      </div>
+      <div>
+        <div className="text-xl font-bold text-text">{value}</div>
+        <div className="text-xs text-muted">{label}</div>
+        {sub && <div className="text-[10px] text-muted mt-0.5">{sub}</div>}
+      </div>
+    </div>
+  )
+}
+
+export default function AdminPage() {
+  const { address, isConnected } = useAccount()
+  const isAdmin = isConnected && address?.toLowerCase() === ADMIN_WALLET
+
+  const [subscribers, setSubscribers] = useState([])
+  const [loading, setLoading] = useState(true)
+  const [adding, setAdding] = useState(false)
+  const [showAddForm, setShowAddForm] = useState(false)
+
+  const [newWallet, setNewWallet] = useState('')
+  const [newPlan, setNewPlan] = useState('monthly')
+  const [newNote, setNewNote] = useState('')
+
+  const fetchSubscribers = useCallback(async () => {
+    setLoading(true)
+    try {
+      const { data, error } = await supabase
+        .from('subscriptions')
+        .select('*')
+        .order('created_at', { ascending: false })
+
+      if (error) throw error
+      setSubscribers(data || [])
+    } catch (err) {
+      toast.error('Failed to load subscribers')
+    } finally {
+      setLoading(false)
+    }
+  }, [])
+
+  useEffect(() => {
+    if (isAdmin) fetchSubscribers()
+  }, [isAdmin, fetchSubscribers])
+
+  const activeSubscribers = subscribers.filter(s => s.verified && new Date(s.expires_at) > new Date())
+  const totalEth = subscribers.reduce((sum, s) => sum + parseFloat(s.amount_eth || 0), 0)
+
+  const handleAddSubscriber = async () => {
+    if (!newWallet || !newWallet.startsWith('0x') || newWallet.length !== 42) {
+      toast.error('Enter a valid wallet address')
+      return
+    }
+
+    setAdding(true)
+    try {
+      const now = new Date()
+      const days = PLAN_DAYS[newPlan]
+      const expiresAt = new Date(now.getTime() + days * 24 * 60 * 60 * 1000)
+      const txHash = 'manual_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8)
+
+      const { error } = await supabase
+        .from('subscriptions')
+        .upsert({
+          wallet_address: newWallet.toLowerCase(),
+          plan: newPlan,
+          tx_hash: txHash,
+          chain_id: 1,
+          amount_eth: 0,
+          started_at: now.toISOString(),
+          expires_at: expiresAt.toISOString(),
+          verified: true,
+        }, { onConflict: 'wallet_address' })
+
+      if (error) throw error
+
+      toast.success('Access granted to ' + newWallet.slice(0, 6) + '...' + newWallet.slice(-4))
+      setNewWallet('')
+      setNewNote('')
+      setShowAddForm(false)
+      fetchSubscribers()
+    } catch (err) {
+      toast.error(err.message || 'Failed to add subscriber')
+    } finally {
+      setAdding(false)
+    }
+  }
+
+  const handleRevoke = async (id, wallet) => {
+    if (!confirm('Revoke access for ' + wallet.slice(0, 6) + '...' + wallet.slice(-4) + '?')) return
+
+    try {
+      const { error } = await supabase
+        .from('subscriptions')
+        .delete()
+        .eq('id', id)
+
+      if (error) throw error
+      toast.success('Access revoked')
+      fetchSubscribers()
+    } catch (err) {
+      toast.error('Failed to revoke access')
+    }
+  }
+
+  const handleExtend = async (id, currentExpiry, plan) => {
+    try {
+      const base = new Date(currentExpiry) > new Date() ? new Date(currentExpiry) : new Date()
+      const days = PLAN_DAYS[plan] || 30
+      const newExpiry = new Date(base.getTime() + days * 24 * 60 * 60 * 1000)
+
+      const { error } = await supabase
+        .from('subscriptions')
+        .update({ expires_at: newExpiry.toISOString() })
+        .eq('id', id)
+
+      if (error) throw error
+      toast.success('Extended by ' + days + ' days')
+      fetchSubscribers()
+    } catch (err) {
+      toast.error('Failed to extend')
+    }
+  }
+
+  const copyAddress = (addr) => {
+    navigator.clipboard.writeText(addr)
+    toast.success('Copied!')
+  }
+
+  const daysRemaining = (expiresAt) => {
+    const diff = new Date(expiresAt) - new Date()
+    return Math.max(0, Math.ceil(diff / (1000 * 60 * 60 * 24)))
+  }
+
+  const isActive = (s) => s.verified && new Date(s.expires_at) > new Date()
+
+  if (!isAdmin) {
+    return (
+      <div className="flex flex-col items-center justify-center min-h-[60vh] gap-3">
+        <Shield size={40} className="text-muted" />
+        <p className="text-muted text-sm">Admin access only</p>
+      </div>
+    )
+  }
+
+  return (
+    <div className="space-y-6">
+
+      {/* Header */}
+      <div className="flex items-center justify-between">
+        <div>
+          <h1 className="text-xl font-bold text-text flex items-center gap-2">
+            <Shield size={20} className="text-accent" />
+            Admin Panel
+          </h1>
+          <p className="text-xs text-muted mt-0.5">Manage subscribers and access</p>
+        </div>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={fetchSubscribers}
+            className="p-2 rounded-lg border border-border text-muted hover:text-text hover:bg-surface2 transition-all"
+          >
+            <RefreshCw size={14} />
+          </button>
+          <button
+            onClick={() => setShowAddForm(!showAddForm)}
+            className="flex items-center gap-2 px-3 py-2 rounded-lg bg-accent text-white text-xs font-semibold hover:bg-accent/90 transition-all"
+          >
+            <Plus size={14} />
+            Add User
+          </button>
+        </div>
+      </div>
+
+      {/* Stats */}
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+        <StatCard
+          icon={Users}
+          label="Active Users"
+          value={activeSubscribers.length}
+          sub={subscribers.length + ' total'}
+          color="bg-violet-500/10 text-violet-400"
+        />
+        <StatCard
+          icon={TrendingUp}
+          label="ETH Collected"
+          value={totalEth.toFixed(4)}
+          sub="all time"
+          color="bg-cyan-500/10 text-cyan-400"
+        />
+        <StatCard
+          icon={CheckCircle2}
+          label="Verified"
+          value={subscribers.filter(s => s.verified).length}
+          sub="paid subscriptions"
+          color="bg-green-500/10 text-green-400"
+        />
+        <StatCard
+          icon={Clock}
+          label="Expiring Soon"
+          value={activeSubscribers.filter(s => daysRemaining(s.expires_at) <= 3).length}
+          sub="within 3 days"
+          color="bg-amber-500/10 text-amber-400"
+        />
+      </div>
+
+      {/* Add form */}
+      {showAddForm && (
+        <div className="card p-5 border border-accent/20 space-y-4">
+          <h3 className="text-sm font-semibold text-text flex items-center gap-2">
+            <Plus size={14} className="text-accent" />
+            Grant Access
+          </h3>
+
+          <div className="space-y-3">
+            <div>
+              <label className="text-xs font-mono text-muted uppercase tracking-wider block mb-1.5">
+                Wallet Address
+              </label>
+              <input
+                className="input w-full font-mono text-sm"
+                placeholder="0x..."
+                value={newWallet}
+                onChange={e => setNewWallet(e.target.value)}
+              />
+            </div>
+
+            <div>
+              <label className="text-xs font-mono text-muted uppercase tracking-wider block mb-1.5">
+                Plan
+              </label>
+              <div className="grid grid-cols-3 gap-2">
+                {Object.keys(PLAN_DAYS).map(plan => (
+                  <button
+                    key={plan}
+                    onClick={() => setNewPlan(plan)}
+                    className={`py-2 px-3 rounded-lg border text-xs font-medium capitalize transition-all ${
+                      newPlan === plan
+                        ? PLAN_COLORS[plan]
+                        : 'border-border text-muted hover:border-accent/30'
+                    }`}
+                  >
+                    {plan}
+                    <div className="text-[10px] opacity-60">{PLAN_DAYS[plan]}d</div>
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div className="flex gap-2">
+              <button
+                onClick={handleAddSubscriber}
+                disabled={adding}
+                className="flex-1 flex items-center justify-center gap-2 py-2.5 rounded-lg bg-accent text-white text-sm font-semibold hover:bg-accent/90 disabled:opacity-50 transition-all"
+              >
+                {adding ? <Loader2 size={14} className="animate-spin" /> : <CheckCircle2 size={14} />}
+                {adding ? 'Granting...' : 'Grant Access'}
+              </button>
+              <button
+                onClick={() => { setShowAddForm(false); setNewWallet('') }}
+                className="px-4 py-2.5 rounded-lg border border-border text-muted text-sm hover:text-text transition-all"
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Subscribers list */}
+      <div className="card overflow-hidden">
+        <div className="px-5 py-3 border-b border-border flex items-center justify-between">
+          <h3 className="text-sm font-semibold text-text">All Subscribers</h3>
+          <span className="text-xs text-muted">{subscribers.length} total</span>
+        </div>
+
+        {loading ? (
+          <div className="flex items-center justify-center py-12">
+            <Loader2 size={20} className="animate-spin text-muted" />
+          </div>
+        ) : subscribers.length === 0 ? (
+          <div className="flex flex-col items-center justify-center py-12 gap-2">
+            <Users size={28} className="text-muted" />
+            <p className="text-sm text-muted">No subscribers yet</p>
+          </div>
+        ) : (
+          <div className="divide-y divide-border">
+            {subscribers.map(sub => (
+              <div key={sub.id} className="px-5 py-4 flex items-start gap-3 hover:bg-surface2/50 transition-all">
+
+                {/* Status dot */}
+                <div className={`mt-1 w-2 h-2 rounded-full shrink-0 ${isActive(sub) ? 'bg-green-400' : 'bg-red-400/50'}`} />
+
+                <div className="flex-1 min-w-0 space-y-1">
+                  {/* Wallet */}
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs font-mono text-text">
+                      {sub.wallet_address.slice(0, 8)}...{sub.wallet_address.slice(-6)}
+                    </span>
+                    <button onClick={() => copyAddress(sub.wallet_address)} className="text-muted hover:text-accent transition-colors">
+                      <Copy size={10} />
+                    </button>
+                    {sub.tx_hash?.startsWith('manual') && (
+                      <span className="text-[10px] px-1.5 py-0.5 rounded bg-amber-500/10 text-amber-400 border border-amber-500/20">
+                        manual
+                      </span>
+                    )}
+                  </div>
+
+                  {/* Plan + expiry */}
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <span className={`text-[10px] px-2 py-0.5 rounded-full border capitalize ${PLAN_COLORS[sub.plan]}`}>
+                      {sub.plan}
+                    </span>
+                    {isActive(sub) ? (
+                      <span className="text-[10px] text-green-400">
+                        {daysRemaining(sub.expires_at)}d remaining
+                      </span>
+                    ) : (
+                      <span className="text-[10px] text-red-400">Expired</span>
+                    )}
+                    <span className="text-[10px] text-muted">
+                      {sub.amount_eth > 0 ? sub.amount_eth + ' ETH' : 'free'}
+                    </span>
+                  </div>
+                </div>
+
+                {/* Actions */}
+                <div className="flex items-center gap-1 shrink-0">
+                  <button
+                    onClick={() => handleExtend(sub.id, sub.expires_at, sub.plan)}
+                    title="Extend by plan duration"
+                    className="p-1.5 rounded-lg text-muted hover:text-accent hover:bg-accent/10 transition-all"
+                  >
+                    <Calendar size={13} />
+                  </button>
+                  <button
+                    onClick={() => handleRevoke(sub.id, sub.wallet_address)}
+                    title="Revoke access"
+                    className="p-1.5 rounded-lg text-muted hover:text-red-400 hover:bg-red-500/10 transition-all"
+                  >
+                    <Trash2 size={13} />
+                  </button>
+                </div>
+
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}
