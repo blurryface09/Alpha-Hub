@@ -35,16 +35,9 @@ function ProtectedRoute({ children }) {
     </div>
   )
 
-  // Not logged in via Supabase auth — go to auth page
   if (!user) return <Navigate to="/auth" replace />
-
-  // Admin wallet — bypass paywall
   if (isAdmin) return children
-
-  // No active subscription — show paywall
   if (!isActive) return <Paywall onSuccess={refresh} />
-
-  // Active subscription — let them in
   return children
 }
 
