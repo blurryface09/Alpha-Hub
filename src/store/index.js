@@ -11,7 +11,6 @@ export const useAuthStore = create((set, get) => ({
 
   init: async () => {
     try {
-      // Get session first
       const { data: { session } } = await supabase.auth.getSession()
       if (session?.user) {
         set({ user: session.user })
@@ -19,7 +18,6 @@ export const useAuthStore = create((set, get) => ({
       }
       set({ loading: false })
 
-      // Set up listener ONCE with proper cleanup stored
       const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, session) => {
         if (event === 'SIGNED_IN' || event === 'TOKEN_REFRESHED') {
           if (session?.user) {
@@ -31,12 +29,52 @@ export const useAuthStore = create((set, get) => ({
         }
       })
 
-      // Store unsubscribe function to prevent duplicate listeners
       get()._authSubscription?.unsubscribe()
       set({ _authSubscription: subscription })
     } catch (err) {
       console.error('Auth init error:', err)
       set({ loading: false })
+    }
+  },
+
+  signInWithWallet: async (address) => {
+    try {
+      set({ loading: true })
+      const email = address.toLowerCase() + '@alphahub.wallet'
+      const password = 'AH_' + address.toLowerCase() + '_2024'
+
+      const { data: signInData, error: signInError } = await supabase.auth.signInWithPassword({
+        email,
+        password,
+      })
+
+      if (!signInError && signInData.user) {
+        set({ user: signInData.user })
+        await get().fetchProfile(signInData.user.id)
+        set({ loading: false })
+        return { success: true }
+      }
+
+      // No account yet - create one
+      const { data: signUpData, error: signUpError } = await supabase.auth.signUp({
+        email,
+        password,
+      })
+
+      if (signUpError) throw signUpError
+
+      if (signUpData.user) {
+        set({ user: signUpData.user })
+        await get().fetchProfile(signUpData.user.id)
+        set({ loading: false })
+        return { success: true }
+      }
+
+      throw new Error('Sign up failed')
+    } catch (err) {
+      console.error('signInWithWallet error:', err)
+      set({ loading: false })
+      return { success: false, error: err.message }
     }
   },
 
@@ -48,19 +86,17 @@ export const useAuthStore = create((set, get) => ({
         .eq('id', userId)
         .single()
       if (error && error.code === 'PGRST116') {
-        // Profile missing — create it
         const { data: newProfile } = await supabase
           .from('profiles')
-          .upsert({ id: userId, username: 'user_' + userId.slice(0,6) })
+          .upsert({ id: userId, username: 'user_' + userId.slice(0, 6) })
           .select()
           .single()
         if (newProfile) set({ profile: newProfile })
       } else if (data) {
-        // Always update profile with latest from DB
         set({ profile: data })
       }
     } catch (err) {
-      console.error('fetchProfile catch:', err)
+      console.error('fetchProfile error:', err)
     }
   },
 
@@ -107,7 +143,7 @@ export const useNotificationStore = create((set, get) => ({
       .channel('notifications')
       .on('postgres_changes', {
         event: 'INSERT', schema: 'public', table: 'notifications',
-        filter: `user_id=eq.${userId}`,
+        filter: 'user_id=eq.' + userId,
       }, (payload) => {
         set(s => ({
           notifications: [payload.new, ...s.notifications],
