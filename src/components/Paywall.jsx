@@ -4,6 +4,7 @@ import { parseEther } from 'viem'
 import toast from 'react-hot-toast'
 import { Zap, Clock, Shield, ChevronRight, Loader2, CheckCircle2 } from 'lucide-react'
 import ConnectWallet from './shared/ConnectWallet'
+import { getAuthToken } from '../lib/supabase'
 
 const RECEIVER_WALLET = import.meta.env.VITE_RECEIVER_WALLET
 
@@ -74,10 +75,15 @@ export default function Paywall({ onSuccess }) {
       setStep('verifying')
 
       await new Promise(r => setTimeout(r, 5000))
+      const token = await getAuthToken()
+      if (!token) throw new Error('Sign in again before verifying payment')
 
       const res = await fetch('/api/verify-payment', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+        },
         body: JSON.stringify({
           txHash,
           walletAddress: address,

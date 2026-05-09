@@ -1,31 +1,20 @@
-const GROQ_URL = 'https://api.groq.com/openai/v1/chat/completions'
-const GROQ_KEY = import.meta.env.VITE_GROQ_API_KEY
+import { getAuthToken } from './supabase'
 
-const SYSTEM = `You are an expert on-chain forensics analyst and smart contract auditor for a professional crypto and NFT trading community. You have deep knowledge of DeFi protocols, DEX mechanics, NFT markets, MEV/sandwich attacks, rug pull patterns, and on-chain behavior analysis. You give structured forensic reports with clear section headers. You decode failed transactions precisely, identify bot behavior, jeet patterns, honeypots and contract backdoors. You write in direct crypto community language. No financial disclaimers. Ever.`
-
-
-async function callGroq(prompt) {
-  if (!GROQ_KEY) return 'No Groq API key set. Add VITE_GROQ_API_KEY to Vercel environment variables.'
+async function callAI(type, prompt) {
+  const token = await getAuthToken()
+  if (!token) return 'Sign in again to use AI analysis.'
   try {
-    const r = await fetch(GROQ_URL, {
+    const r = await fetch('/api/ai-analysis', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'Authorization': `Bearer ${GROQ_KEY}`,
+        Authorization: `Bearer ${token}`,
       },
-      body: JSON.stringify({
-        model: 'llama-3.3-70b-versatile',
-        messages: [
-          { role: 'system', content: SYSTEM },
-          { role: 'user', content: prompt }
-        ],
-        max_tokens: 2048,
-        temperature: 0.7,
-      }),
+      body: JSON.stringify({ type, prompt }),
     })
     const d = await r.json()
-    if (d.error) return `AI error: ${d.error.message}`
-    return d.choices?.[0]?.message?.content || 'Analysis unavailable.'
+    if (!r.ok || d.error) return `AI error: ${d.error || 'Request failed'}`
+    return d.content || 'Analysis unavailable.'
   } catch(e) {
     return `AI unavailable: ${e.message}`
   }
@@ -103,7 +92,7 @@ One punchy sentence: trust this wallet, copy their moves, or stay away?
 
 Max 400 words. Be direct. Crypto language.`
 
-  return callGroq(prompt)
+  return callAI('wallet', prompt)
 }
 
 // --- Contract Security Audit -------------------------------------
@@ -167,7 +156,7 @@ One sentence: ape in, proceed careful, or hard avoid?
 
 Max 350 words. Direct. No fluff.`
 
-  return callGroq(prompt)
+  return callAI('contract', prompt)
 }
 
 // --- Whale Activity Summary --------------------------------------
@@ -186,7 +175,7 @@ If it's a mint, explain why this matters (new project, following smart money, et
 If it's a large trade, explain what it signals (bullish, bearish, accumulation, distribution).
 Keep it sharp, 2 sentences max. Crypto slang welcome.`
 
-  return callGroq(prompt)
+  return callAI('whale', prompt)
 }
 
 // --- Project Metadata from URL -----------------------------------
@@ -204,9 +193,59 @@ Based on the URL alone, extract and return ONLY a JSON object (no markdown, no e
 Return only valid JSON.`
 
   try {
-    const result = await callGroq(prompt)
+    const result = await callAI('project', prompt)
     const jsonMatch = result.match(/\{[\s\S]*\}/)
     if (jsonMatch) return JSON.parse(jsonMatch[0])
   } catch {}
   return { name: null, source_type: 'website', chain: 'eth', notes: null }
+}
+
+export async function fetchProjectIntel(project) {
+  const prompt = `You are a crypto/NFT project researcher. Research this NFT project.
+
+Project: ${project.name}
+Source URL: ${project.source_url || 'unknown'}
+WL Type: ${project.wl_type}
+Chain: ${project.chain}
+Mint Date: ${project.mint_date || 'not set'}
+Notes: ${project.notes || 'none'}
+
+Respond with ONLY valid JSON, no markdown:
+{"summary":"2 sentence description","wl_giveaway_likely":false,"giveaway_note":"","red_flags":[],"green_flags":[],"hype_score":5,"hype_reason":"one sentence","advice":"one sharp sentence","discord_tip":"what to look for","twitter_tip":"search terms for X"}`
+
+  try {
+    const text = await callAI('project', prompt)
+    if (text.startsWith('AI error:') || text.startsWith('AI unavailable:')) return { error: text }
+    const clean = text
+      .replace(/```json\n?/g, '')
+      .replace(/```\n?/g, '')
+      .replace(/^[^{]*/s, '')
+      .trim()
+    const jsonMatch = clean.match(/\{[\s\S]*\}/)
+    if (jsonMatch) {
+      try {
+        return JSON.parse(jsonMatch[0])
+      } catch {
+        const fixed = jsonMatch[0]
+          .replace(/,\s*}/g, '}')
+          .replace(/,\s*]/g, ']')
+          .replace(/([{,]\s*)(\w+):/g, '$1"$2":')
+        return JSON.parse(fixed)
+      }
+    }
+    return {
+      summary: text.slice(0, 300),
+      hype_score: 5,
+      advice: text.slice(0, 150),
+      red_flags: [],
+      green_flags: [],
+      wl_giveaway_likely: false,
+      giveaway_note: '',
+      hype_reason: '',
+      discord_tip: '',
+      twitter_tip: '',
+    }
+  } catch (e) {
+    return { error: e.message }
+  }
 }

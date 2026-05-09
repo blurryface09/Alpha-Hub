@@ -1,4 +1,4 @@
-import { createClient } from '@supabase/supabase-js'
+import { createServiceClient, requireUser, userOwnsWallet } from './_lib/auth.js'
 
 const PLAN_CONFIG = {
   weekly:    { days: 7,  ethMin: 0.0015 },
@@ -8,15 +8,13 @@ const PLAN_CONFIG = {
 
 const RECEIVER_ADDRESS = process.env.VITE_RECEIVER_WALLET?.toLowerCase()
 
-const supabase = createClient(
-  process.env.VITE_SUPABASE_URL,
-  process.env.SUPABASE_SERVICE_ROLE_KEY
-)
-
 export default async function handler(req, res) {
   if (req.method !== 'POST') {
     return res.status(405).json({ error: 'Method not allowed' })
   }
+
+  const user = await requireUser(req, res)
+  if (!user) return
 
   const { txHash, walletAddress, plan } = req.body
 
@@ -28,7 +26,16 @@ export default async function handler(req, res) {
     return res.status(400).json({ error: 'Invalid plan' })
   }
 
+  if (!/^0x[a-fA-F0-9]{40}$/.test(walletAddress)) {
+    return res.status(400).json({ error: 'Invalid wallet address' })
+  }
+
+  if (!userOwnsWallet(user, walletAddress)) {
+    return res.status(403).json({ error: 'Wallet does not match authenticated session' })
+  }
+
   try {
+    const supabase = createServiceClient()
     const { data: existing } = await supabase
       .from('subscriptions')
       .select('id')
@@ -39,7 +46,8 @@ export default async function handler(req, res) {
       return res.status(409).json({ error: 'Transaction already used' })
     }
 
-    const etherscanUrl = `https://api.etherscan.io/api?module=proxy&action=eth_getTransactionByHash&txhash=${txHash}&apikey=${process.env.VITE_ETHERSCAN_API_KEY}`
+    const etherscanKey = process.env.ETHERSCAN_API_KEY || process.env.VITE_ETHERSCAN_API_KEY
+    const etherscanUrl = `https://api.etherscan.io/api?module=proxy&action=eth_getTransactionByHash&txhash=${txHash}&apikey=${etherscanKey}`
     const ethRes = await fetch(etherscanUrl)
     const ethData = await ethRes.json()
     const tx = ethData.result
@@ -83,6 +91,7 @@ export default async function handler(req, res) {
         started_at: now.toISOString(),
         expires_at: expiresAt.toISOString(),
         verified: true,
+        user_id: user.id,
       }, {
         onConflict: 'wallet_address',
       })

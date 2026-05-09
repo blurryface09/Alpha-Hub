@@ -13,8 +13,7 @@ const STATUS_TABS = ['all', 'upcoming', 'live', 'minted', 'missed']
 
 // Send a notification to the user's Telegram (fire-and-forget)
 async function notifyTelegram(project, type, userToken) {
-  const chatId = project._telegram_chat_id
-  if (!chatId || !userToken) return
+  if (!userToken) return
   try {
     await fetch('/api/telegram-notify', {
       method: 'POST',
@@ -22,7 +21,7 @@ async function notifyTelegram(project, type, userToken) {
         'Content-Type': 'application/json',
         'Authorization': 'Bearer ' + userToken,
       },
-      body: JSON.stringify({ chat_id: chatId, project, type }),
+      body: JSON.stringify({ project, type }),
     })
   } catch {}
 }

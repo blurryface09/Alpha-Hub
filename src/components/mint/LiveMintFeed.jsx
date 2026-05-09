@@ -1,9 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react'
 import { Activity, RefreshCw, ExternalLink, Zap } from 'lucide-react'
 import { CHAINS } from '../../lib/blockchain'
-
-const ETHERSCAN_KEY = import.meta.env.VITE_ETHERSCAN_API_KEY
-const ETHERSCAN_V2 = 'https://api.etherscan.io/v2/api'
+import { getAuthToken } from '../../lib/supabase'
 
 const EXPLORER = {
   eth: 'etherscan.io',
@@ -36,8 +34,19 @@ async function fetchContractMints(contractAddress, chainKey) {
   const chain = CHAINS[chainKey]
   if (!chain || !contractAddress) return []
   try {
-    const url = `${ETHERSCAN_V2}?chainid=${chain.id}&module=account&action=txlist&address=${contractAddress}&startblock=0&endblock=99999999&sort=desc&page=1&offset=50&apikey=${ETHERSCAN_KEY}`
-    const r = await fetch(url)
+    const token = await getAuthToken()
+    if (!token) return []
+    const url = new URL('/api/etherscan', window.location.origin)
+    url.searchParams.set('chainid', chain.id)
+    url.searchParams.set('module', 'account')
+    url.searchParams.set('action', 'txlist')
+    url.searchParams.set('address', contractAddress)
+    url.searchParams.set('startblock', '0')
+    url.searchParams.set('endblock', '99999999')
+    url.searchParams.set('sort', 'desc')
+    url.searchParams.set('page', '1')
+    url.searchParams.set('offset', '50')
+    const r = await fetch(url, { headers: { Authorization: `Bearer ${token}` } })
     const d = await r.json()
     if (d.status !== '1' || !Array.isArray(d.result)) return []
     // Filter to only mint transactions (to the contract)
@@ -56,8 +65,19 @@ async function fetchJeetScore(walletAddress, chainKey) {
   const chain = CHAINS[chainKey]
   if (!chain) return 50
   try {
-    const url = `${ETHERSCAN_V2}?chainid=${chain.id}&module=account&action=txlist&address=${walletAddress}&startblock=0&endblock=99999999&sort=desc&page=1&offset=100&apikey=${ETHERSCAN_KEY}`
-    const r = await fetch(url)
+    const token = await getAuthToken()
+    if (!token) return 50
+    const url = new URL('/api/etherscan', window.location.origin)
+    url.searchParams.set('chainid', chain.id)
+    url.searchParams.set('module', 'account')
+    url.searchParams.set('action', 'txlist')
+    url.searchParams.set('address', walletAddress)
+    url.searchParams.set('startblock', '0')
+    url.searchParams.set('endblock', '99999999')
+    url.searchParams.set('sort', 'desc')
+    url.searchParams.set('page', '1')
+    url.searchParams.set('offset', '100')
+    const r = await fetch(url, { headers: { Authorization: `Bearer ${token}` } })
     const d = await r.json()
     if (d.status !== '1' || !Array.isArray(d.result)) return 50
     const txs = d.result

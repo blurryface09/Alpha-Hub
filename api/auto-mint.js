@@ -5,7 +5,7 @@
  *
  * vercel.json cron: { "path": "/api/auto-mint", "schedule": "* * * * *" }
  * Required env vars: WALLET_ENCRYPTION_KEY, SUPABASE_SERVICE_KEY,
- *                    VITE_SUPABASE_URL, VITE_ALCHEMY_API_KEY,
+ *                    VITE_SUPABASE_URL, ALCHEMY_API_KEY,
  *                    TELEGRAM_BOT_TOKEN (optional), CRON_SECRET (optional)
  */
 
@@ -20,8 +20,8 @@ const supabase = createClient(
   process.env.SUPABASE_SERVICE_KEY
 )
 
-const ALCHEMY_KEY = process.env.VITE_ALCHEMY_API_KEY
-const ETHERSCAN_KEY = process.env.VITE_ETHERSCAN_API_KEY
+const ALCHEMY_KEY = process.env.ALCHEMY_API_KEY || process.env.VITE_ALCHEMY_API_KEY
+const ETHERSCAN_KEY = process.env.ETHERSCAN_API_KEY || process.env.VITE_ETHERSCAN_API_KEY
 const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN
 
 const CHAIN_CONFIG = {
@@ -323,4 +323,3 @@ export default async function handler(req, res) {
 
   res.status(200).json({ ok: true, fired })
 }
-

@@ -1,10 +1,6 @@
-import { createClient } from '@supabase/supabase-js'
+import { createServiceClient, requireUser } from './_lib/auth.js'
 
 const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN
-const supabase = createClient(
-  process.env.VITE_SUPABASE_URL,
-  process.env.VITE_SUPABASE_ANON_KEY  // anon key is fine — we just validate the user's token
-)
 
 async function sendTelegram(chatId, text, extra = {}) {
   if (!BOT_TOKEN) return { ok: false, error: 'Bot token not configured' }
@@ -19,16 +15,20 @@ async function sendTelegram(chatId, text, extra = {}) {
 export default async function handler(req, res) {
   if (req.method !== 'POST') return res.status(405).end()
 
-  // Validate caller is an authenticated Alpha-Hub user
-  const authHeader = req.headers.authorization || ''
-  const token = authHeader.replace('Bearer ', '').trim()
-  if (!token) return res.status(401).json({ error: 'No token' })
+  const user = await requireUser(req, res)
+  if (!user) return
 
-  const { data: { user }, error: authErr } = await supabase.auth.getUser(token)
-  if (authErr || !user) return res.status(401).json({ error: 'Unauthorized' })
+  const { project, type } = req.body || {}
+  if (!project) return res.status(400).json({ error: 'Missing project' })
 
-  const { chat_id, project, type } = req.body || {}
-  if (!chat_id || !project) return res.status(400).json({ error: 'Missing chat_id or project' })
+  const supabase = createServiceClient()
+  const { data: profile } = await supabase
+    .from('profiles')
+    .select('telegram_chat_id')
+    .eq('id', user.id)
+    .single()
+  const chat_id = profile?.telegram_chat_id
+  if (!chat_id) return res.status(400).json({ error: 'Telegram is not linked' })
 
   const chain = (project.chain || 'eth').toUpperCase()
   const price = project.mint_price || 'Free'

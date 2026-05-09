@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react'
 import { useAccount } from 'wagmi'
-import { supabase } from '../lib/supabase'
+import { getAuthToken } from '../lib/supabase'
 import { useSubscription } from '../hooks/useSubscription'
 import toast from 'react-hot-toast'
 import {
@@ -54,15 +54,16 @@ export default function AdminPage() {
   const fetchSubscribers = useCallback(async () => {
     setLoading(true)
     try {
-      const { data, error } = await supabase
-        .from('subscriptions')
-        .select('*')
-        .order('created_at', { ascending: false })
-
-      if (error) throw error
-      setSubscribers(data || [])
+      const token = await getAuthToken()
+      if (!token) throw new Error('Sign in again to manage subscribers')
+      const res = await fetch('/api/admin-subscriptions', {
+        headers: { Authorization: `Bearer ${token}` },
+      })
+      const data = await res.json()
+      if (!res.ok) throw new Error(data.error || 'Failed to load subscribers')
+      setSubscribers(data.subscriptions || [])
     } catch (err) {
-      toast.error('Failed to load subscribers')
+      toast.error(err.message || 'Failed to load subscribers')
     } finally {
       setLoading(false)
     }
@@ -83,25 +84,18 @@ export default function AdminPage() {
 
     setAdding(true)
     try {
-      const now = new Date()
-      const days = PLAN_DAYS[newPlan]
-      const expiresAt = new Date(now.getTime() + days * 24 * 60 * 60 * 1000)
-      const txHash = 'manual_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8)
-
-      const { error } = await supabase
-        .from('subscriptions')
-        .upsert({
-          wallet_address: newWallet.toLowerCase(),
-          plan: newPlan,
-          tx_hash: txHash,
-          chain_id: 1,
-          amount_eth: 0,
-          started_at: now.toISOString(),
-          expires_at: expiresAt.toISOString(),
-          verified: true,
-        }, { onConflict: 'wallet_address' })
-
-      if (error) throw error
+      const token = await getAuthToken()
+      if (!token) throw new Error('Sign in again to grant access')
+      const res = await fetch('/api/admin-subscriptions', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({ walletAddress: newWallet, plan: newPlan }),
+      })
+      const result = await res.json()
+      if (!res.ok) throw new Error(result.error || 'Failed to add subscriber')
 
       toast.success('Access granted to ' + newWallet.slice(0, 6) + '...' + newWallet.slice(-4))
       setNewWallet('')
@@ -119,12 +113,14 @@ export default function AdminPage() {
     if (!confirm('Revoke access for ' + wallet.slice(0, 6) + '...' + wallet.slice(-4) + '?')) return
 
     try {
-      const { error } = await supabase
-        .from('subscriptions')
-        .delete()
-        .eq('id', id)
-
-      if (error) throw error
+      const token = await getAuthToken()
+      if (!token) throw new Error('Sign in again to revoke access')
+      const res = await fetch('/api/admin-subscriptions?id=' + encodeURIComponent(id), {
+        method: 'DELETE',
+        headers: { Authorization: `Bearer ${token}` },
+      })
+      const result = await res.json()
+      if (!res.ok) throw new Error(result.error || 'Failed to revoke access')
       toast.success('Access revoked')
       fetchSubscribers()
     } catch (err) {
@@ -138,12 +134,18 @@ export default function AdminPage() {
       const days = PLAN_DAYS[plan] || 30
       const newExpiry = new Date(base.getTime() + days * 24 * 60 * 60 * 1000)
 
-      const { error } = await supabase
-        .from('subscriptions')
-        .update({ expires_at: newExpiry.toISOString() })
-        .eq('id', id)
-
-      if (error) throw error
+      const token = await getAuthToken()
+      if (!token) throw new Error('Sign in again to extend access')
+      const res = await fetch('/api/admin-subscriptions', {
+        method: 'PATCH',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({ id, expiresAt: newExpiry.toISOString() }),
+      })
+      const result = await res.json()
+      if (!res.ok) throw new Error(result.error || 'Failed to extend')
       toast.success('Extended by ' + days + ' days')
       fetchSubscribers()
     } catch (err) {

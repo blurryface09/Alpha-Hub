@@ -2,7 +2,7 @@ import { useAccount, useWriteContract, useSwitchChain } from 'wagmi'
 import { parseEther, parseAbi } from 'viem'
 import { mainnet, base, bsc } from 'wagmi/chains'
 import toast from 'react-hot-toast'
-import { supabase } from '../lib/supabase'
+import { supabase, getAuthToken } from '../lib/supabase'
 
 const CHAIN_MAP = {
   eth: mainnet.id,
@@ -10,17 +10,23 @@ const CHAIN_MAP = {
   bnb: bsc.id,
 }
 
-const ETHERSCAN_V2 = 'https://api.etherscan.io/v2/api'
-const ETHERSCAN_KEY = import.meta.env.VITE_ETHERSCAN_API_KEY
 const CHAIN_IDS = { eth: 1, base: 8453, bnb: 56 }
 
 // Try to fetch verified ABI from Etherscan
 async function fetchContractAbi(contractAddress, chainKey) {
-  if (!ETHERSCAN_KEY) return null
   try {
+    const token = await getAuthToken()
+    if (!token) return null
     const chainId = CHAIN_IDS[chainKey] || 1
-    const url = `${ETHERSCAN_V2}?chainid=${chainId}&module=contract&action=getabi&address=${contractAddress}&apikey=${ETHERSCAN_KEY}`
-    const r = await fetch(url, { signal: AbortSignal.timeout(8000) })
+    const url = new URL('/api/etherscan', window.location.origin)
+    url.searchParams.set('chainid', chainId)
+    url.searchParams.set('module', 'contract')
+    url.searchParams.set('action', 'getabi')
+    url.searchParams.set('address', contractAddress)
+    const r = await fetch(url, {
+      headers: { Authorization: `Bearer ${token}` },
+      signal: AbortSignal.timeout(8000),
+    })
     const d = await r.json()
     if (d.status === '1' && d.result && d.result !== 'Contract source code not verified') {
       return JSON.parse(d.result)

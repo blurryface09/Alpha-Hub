@@ -168,21 +168,24 @@ export const useWhaleStore = create((set) => ({
   activity: [],
   loading: false,
 
-  fetch: async () => {
+  fetch: async (userId) => {
     set({ loading: true })
-    const { data } = await supabase
+    let query = supabase
       .from('whale_activity')
       .select('*')
       .order('timestamp', { ascending: false })
       .limit(100)
+    if (userId) query = query.eq('user_id', userId)
+    const { data } = await query
     set({ activity: data || [], loading: false })
   },
 
-  subscribe: () => {
+  subscribe: (userId) => {
     const channel = supabase
       .channel('whale_activity')
       .on('postgres_changes', {
         event: 'INSERT', schema: 'public', table: 'whale_activity',
+        ...(userId ? { filter: 'user_id=eq.' + userId } : {}),
       }, (payload) => {
         set(s => ({ activity: [payload.new, ...s.activity].slice(0, 100) }))
       })

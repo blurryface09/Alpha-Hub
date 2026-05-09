@@ -33,10 +33,10 @@ export default function WhaleRadarPage() {
 
   useEffect(() => {
     fetchWatchlist()
-    fetchActivity()
-    const unsub = subscribe()
+    fetchActivity(user?.id)
+    const unsub = subscribe(user?.id)
     return unsub
-  }, [fetchWatchlist])
+  }, [fetchWatchlist, user?.id])
 
   // Polling engine
   useEffect(() => {
@@ -59,6 +59,7 @@ export default function WhaleRadarPage() {
             // Store in whale_activity
             await supabase.from('whale_activity').upsert({
               wallet_address: whale.wallet_address,
+              user_id: user.id,
               wallet_label: whale.label,
               chain: chainKey,
               tx_hash: tx.hash,
@@ -70,7 +71,7 @@ export default function WhaleRadarPage() {
               is_mint: isMint,
               timestamp: tx.timestamp.toISOString(),
               raw_data: { ...tx, ai_summary: aiSummary },
-            }, { onConflict: 'tx_hash' })
+            }, { onConflict: 'user_id,tx_hash' })
 
             // Notify user
             await supabase.from('notifications').insert({

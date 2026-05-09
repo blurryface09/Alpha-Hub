@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from 'react'
 import { useAccount } from 'wagmi'
-import { supabase } from '../lib/supabase'
+import { getAuthToken } from '../lib/supabase'
 
 export function useSubscription() {
   const { address, isConnected } = useAccount()
@@ -17,21 +17,14 @@ export function useSubscription() {
 
     try {
       setLoading(true)
-      const { data, error: fetchError } = await supabase
-        .from('subscriptions')
-        .select('*')
-        .eq('wallet_address', address.toLowerCase())
-        .eq('verified', true)
-        .gt('expires_at', new Date().toISOString())
-        .order('expires_at', { ascending: false })
-        .limit(1)
-        .single()
-
-      if (fetchError && fetchError.code !== 'PGRST116') {
-        setError(fetchError.message)
-      }
-
-      setSubscription(data || null)
+      const token = await getAuthToken()
+      if (!token) throw new Error('Sign in again to check your subscription')
+      const res = await fetch('/api/subscription?walletAddress=' + encodeURIComponent(address.toLowerCase()), {
+        headers: { Authorization: `Bearer ${token}` },
+      })
+      const data = await res.json()
+      if (!res.ok) throw new Error(data.error || 'Subscription check failed')
+      setSubscription(data.subscription || null)
     } catch (err) {
       setError(err.message)
     } finally {

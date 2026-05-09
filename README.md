@@ -25,15 +25,27 @@ cp .env.example .env
 ```
 
 Required keys:
-- `VITE_SUPABASE_URL` — your Supabase project URL ✅ (already set)
-- `VITE_SUPABASE_ANON_KEY` — your Supabase anon key ✅ (already set)
-- `VITE_ALCHEMY_API_KEY` — from alchemy.com (free)
-- `VITE_WALLETCONNECT_PROJECT_ID` — from cloud.walletconnect.com (free)
-- `VITE_ETHERSCAN_API_KEY` — from etherscan.io/apis (free)
-- `VITE_GEMINI_API_KEY` — from aistudio.google.com (free)
+- `VITE_SUPABASE_URL` — public Supabase project URL
+- `VITE_SUPABASE_ANON_KEY` — public Supabase anon key
+- `VITE_WALLETCONNECT_PROJECT_ID` — public WalletConnect project ID
+- `VITE_RECEIVER_WALLET` — public wallet that receives subscription payments
+- `VITE_ADMIN_WALLET` — public admin wallet used for UI visibility only
+- `SUPABASE_SERVICE_KEY` or `SUPABASE_SERVICE_ROLE_KEY` — server-only Supabase service role key
+- `ETHERSCAN_API_KEY` — server-only Etherscan API key
+- `GROQ_API_KEY` — server-only Groq API key for AI analysis
+- `ALCHEMY_API_KEY` — server-only Alchemy key for server auto-mint RPC
+- `WALLET_ENCRYPTION_KEY` — server-only long random secret for encrypted burner wallets
+- `ADMIN_WALLET` or `ADMIN_USER_ID` — server-only admin authorization
+- `TELEGRAM_BOT_TOKEN`, `TELEGRAM_WEBHOOK_SECRET`, `CRON_SECRET` — server-only Telegram/cron secrets
 
 ### 3. Run the database schema
-Go to Supabase → SQL Editor → paste the schema from `src/lib/supabase.js` → Run ✅ (already done)
+Go to Supabase → SQL Editor → run your base schema, then run:
+
+```bash
+security/rls_policies.sql
+```
+
+After running the RLS script, add your own user ID to `public.admins` or set `ADMIN_USER_ID`/`ADMIN_WALLET` in Vercel.
 
 ### 4. Run locally
 ```bash
