@@ -44,7 +44,7 @@ function ProtectedRoute({ children }) {
 function App() {
   const init = useAuthStore(s => s.init)
   const initialized = React.useRef(false)
-  
+
   useEffect(() => {
     if (!initialized.current) {
       initialized.current = true
