@@ -1,25 +1,22 @@
-// src/hooks/useSubscription.js
-// Checks if the connected wallet has an active subscription
-
-import { useState, useEffect, useCallback } from 'react';
-import { useAccount } from 'wagmi';
-import { supabase } from '../lib/supabase';
+import { useState, useEffect, useCallback } from 'react'
+import { useAccount } from 'wagmi'
+import { supabase } from '../lib/supabase'
 
 export function useSubscription() {
-  const { address, isConnected } = useAccount();
-  const [subscription, setSubscription] = useState(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState(null);
+  const { address, isConnected } = useAccount()
+  const [subscription, setSubscription] = useState(null)
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState(null)
 
   const checkSubscription = useCallback(async () => {
     if (!isConnected || !address) {
-      setSubscription(null);
-      setLoading(false);
-      return;
+      setSubscription(null)
+      setLoading(false)
+      return
     }
 
     try {
-      setLoading(true);
+      setLoading(true)
       const { data, error: fetchError } = await supabase
         .from('subscriptions')
         .select('*')
@@ -28,32 +25,31 @@ export function useSubscription() {
         .gt('expires_at', new Date().toISOString())
         .order('expires_at', { ascending: false })
         .limit(1)
-        .single();
+        .single()
 
       if (fetchError && fetchError.code !== 'PGRST116') {
-        // PGRST116 = no rows found — that's fine
-        setError(fetchError.message);
+        setError(fetchError.message)
       }
 
-      setSubscription(data || null);
+      setSubscription(data || null)
     } catch (err) {
-      setError(err.message);
+      setError(err.message)
     } finally {
-      setLoading(false);
+      setLoading(false)
     }
-  }, [address, isConnected]);
+  }, [address, isConnected])
 
   useEffect(() => {
-    checkSubscription();
-  }, [checkSubscription]);
+    checkSubscription()
+  }, [checkSubscription])
 
-  const isActive = !!subscription;
+  const isActive = !!subscription
 
   const daysRemaining = subscription
     ? Math.max(0, Math.ceil(
         (new Date(subscription.expires_at) - new Date()) / (1000 * 60 * 60 * 24)
       ))
-    : 0;
+    : 0
 
   return {
     subscription,
@@ -62,5 +58,5 @@ export function useSubscription() {
     loading,
     error,
     refresh: checkSubscription,
-  };
+  }
 }
