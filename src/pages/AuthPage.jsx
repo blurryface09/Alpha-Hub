@@ -1,49 +1,34 @@
-import React, { useState } from 'react'
+import React, { useEffect } from 'react'
 import { Navigate } from 'react-router-dom'
 import { motion } from 'framer-motion'
 import toast from 'react-hot-toast'
-import { supabase } from '../lib/supabase'
+import { useAccount } from 'wagmi'
 import { useAuthStore } from '../store'
+import ConnectWallet from '../components/shared/ConnectWallet'
+import { Zap, Shield, Clock, Loader2 } from 'lucide-react'
+
+const FEATURES = [
+  { icon: Shield, text: 'MintGuard' },
+  { icon: Zap, text: 'WhaleRadar' },
+  { icon: Clock, text: 'Wallet Forensics' },
+]
 
 export default function AuthPage() {
-  const { user } = useAuthStore()
-  const [mode, setMode] = useState('signin') // signin | signup
-  const [email, setEmail] = useState('')
-  const [password, setPassword] = useState('')
-  const [username, setUsername] = useState('')
-  const [loading, setLoading] = useState(false)
+  const { user, loading, signInWithWallet } = useAuthStore()
+  const { address, isConnected } = useAccount()
+
+  // Auto sign in when wallet connects
+  useEffect(() => {
+    if (isConnected && address && !user && !loading) {
+      signInWithWallet(address).then((result) => {
+        if (!result.success) {
+          toast.error('Sign in failed: ' + (result.error || 'Unknown error'))
+        }
+      })
+    }
+  }, [isConnected, address, user, loading])
 
   if (user) return <Navigate to="/" replace />
-
-  const handleSubmit = async (e) => {
-    e.preventDefault()
-    setLoading(true)
-    try {
-      if (mode === 'signup') {
-        const { data, error } = await supabase.auth.signUp({ email, password })
-        if (error) throw error
-        if (data.user) {
-          await supabase.from('profiles').insert({ id: data.user.id, username })
-          toast.success('Account created! Welcome to Alpha Hub.')
-        }
-      } else {
-        const { error } = await supabase.auth.signInWithPassword({ email, password })
-        if (error) throw error
-        toast.success('Welcome back.')
-      }
-    } catch (err) {
-      const msg = err.message || ''
-      if (msg.toLowerCase().includes('rate limit') || msg.toLowerCase().includes('email')) {
-        toast.error('Too many signups right now — try again in a few minutes or contact the admin.', { duration: 6000 })
-      } else if (msg.toLowerCase().includes('already registered') || msg.toLowerCase().includes('already been registered')) {
-        toast.error('This email already has an account — try signing in instead.')
-      } else {
-        toast.error(msg)
-      }
-    } finally {
-      setLoading(false)
-    }
-  }
 
   return (
     <div className="min-h-screen bg-bg flex items-center justify-center p-4">
@@ -61,66 +46,34 @@ export default function AuthPage() {
         </div>
 
         <div className="card">
-          {/* Mode toggle */}
-          <div className="flex bg-surface2 rounded-lg p-1 mb-6">
-            {['signin', 'signup'].map(m => (
-              <button
-                key={m}
-                onClick={() => setMode(m)}
-                className={`flex-1 py-2 text-sm font-medium rounded-md transition-all ${
-                  mode === m ? 'bg-surface text-accent border border-border2' : 'text-muted'
-                }`}
-              >
-                {m === 'signin' ? 'Sign In' : 'Create Account'}
-              </button>
-            ))}
+          <div className="text-center space-y-2 mb-6">
+            <h2 className="text-base font-semibold text-text">Connect your wallet</h2>
+            <p className="text-xs text-muted">
+              No email. No password. Your wallet is your identity.
+            </p>
           </div>
 
-          <form onSubmit={handleSubmit} className="space-y-4">
-            {mode === 'signup' && (
-              <div>
-                <label className="text-xs font-mono text-muted uppercase tracking-wider block mb-1.5">Username</label>
-                <input
-                  className="input"
-                  placeholder="your_username"
-                  value={username}
-                  onChange={e => setUsername(e.target.value)}
-                  required
-                />
-              </div>
-            )}
-            <div>
-              <label className="text-xs font-mono text-muted uppercase tracking-wider block mb-1.5">Email</label>
-              <input
-                className="input"
-                type="email"
-                placeholder="you@example.com"
-                value={email}
-                onChange={e => setEmail(e.target.value)}
-                required
-              />
+          {/* Connect button */}
+          <div className="flex justify-center mb-4">
+            <ConnectWallet />
+          </div>
+
+          {/* Loading state after wallet connects */}
+          {isConnected && !user && (
+            <div className="flex items-center justify-center gap-2 py-3">
+              <Loader2 className="w-4 h-4 animate-spin text-accent" />
+              <span className="text-xs text-muted font-mono">Signing you in...</span>
             </div>
-            <div>
-              <label className="text-xs font-mono text-muted uppercase tracking-wider block mb-1.5">Password</label>
-              <input
-                className="input"
-                type="password"
-                placeholder="••••••••"
-                value={password}
-                onChange={e => setPassword(e.target.value)}
-                required
-                minLength={6}
-              />
+          )}
+
+          {/* Connected address */}
+          {isConnected && address && (
+            <div className="mt-2 px-3 py-2 rounded-lg bg-green-500/5 border border-green-500/20 text-center">
+              <p className="text-xs font-mono text-green-400">
+                {address.slice(0, 6)}...{address.slice(-4)}
+              </p>
             </div>
-            <button
-              type="submit"
-              disabled={loading}
-              className="btn-primary w-full mt-2 flex items-center justify-center gap-2"
-            >
-              {loading && <div className="spinner w-3.5 h-3.5" />}
-              {mode === 'signin' ? 'Sign In' : 'Create Account'}
-            </button>
-          </form>
+          )}
 
           <p className="text-xs text-muted text-center mt-4">
             Your keys, your data. Nothing stored without your consent.
