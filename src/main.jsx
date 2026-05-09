@@ -13,6 +13,7 @@ import MintGuardPage from './pages/MintGuardPage'
 import WhaleRadarPage from './pages/WhaleRadarPage'
 import AlphaPage from './pages/AlphaPage'
 import SettingsPage from './pages/SettingsPage'
+import AdminPage from './pages/AdminPage'
 import Paywall from './components/Paywall'
 import { useSubscription } from './hooks/useSubscription'
 import { useAccount } from 'wagmi'
@@ -41,6 +42,13 @@ function ProtectedRoute({ children }) {
   return children
 }
 
+function AdminRoute({ children }) {
+  const { address, isConnected } = useAccount()
+  const isAdmin = isConnected && address?.toLowerCase() === ADMIN_WALLET
+  if (!isAdmin) return <Navigate to="/" replace />
+  return children
+}
+
 function App() {
   const init = useAuthStore(s => s.init)
   const initialized = React.useRef(false)
@@ -63,6 +71,7 @@ function App() {
             <Route path="whaleradar" element={<WhaleRadarPage />} />
             <Route path="alpha" element={<AlphaPage />} />
             <Route path="settings" element={<SettingsPage />} />
+            <Route path="admin" element={<AdminRoute><AdminPage /></AdminRoute>} />
           </Route>
         </Routes>
       </BrowserRouter>
