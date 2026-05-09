@@ -1,29 +1,27 @@
-// src/components/SubscriptionGate.jsx
-// Wrap your app routes with this — shows Paywall if wallet has no active sub
+import { useSubscription } from '../hooks/useSubscription'
+import { useAccount } from 'wagmi'
+import Paywall from './Paywall'
+import { Loader2 } from 'lucide-react'
 
-import { useSubscription } from '../hooks/useSubscription';
-import { useAccount } from 'wagmi';
-import Paywall from './Paywall';
-import { Loader2 } from 'lucide-react';
+const ADMIN_WALLET = import.meta.env.VITE_ADMIN_WALLET?.toLowerCase()
 
 export default function SubscriptionGate({ children }) {
-  const { isConnected } = useAccount();
-  const { isActive, loading, refresh } = useSubscription();
+  const { isConnected, address } = useAccount()
+  const { isActive, loading, refresh } = useSubscription()
 
-  // Still loading sub status
-  if (loading) {
+  const isAdmin = isConnected && address?.toLowerCase() === ADMIN_WALLET
+
+  if (loading && !isAdmin) {
     return (
       <div className="min-h-screen bg-[#0a0b0f] flex items-center justify-center">
         <Loader2 className="w-6 h-6 text-violet-400 animate-spin" />
       </div>
-    );
+    )
   }
 
-  // Not connected or no active sub — show paywall
-  if (!isConnected || !isActive) {
-    return <Paywall onSuccess={refresh} />;
+  if (!isConnected || (!isActive && !isAdmin)) {
+    return <Paywall onSuccess={refresh} />
   }
 
-  // Active sub — render the app
-  return children;
+  return children
 }

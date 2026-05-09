@@ -1,21 +1,17 @@
-// src/components/Paywall.jsx
-// Paywall screen shown to unsubscribed wallets
+import { useState } from 'react'
+import { useAccount, useSendTransaction } from 'wagmi'
+import { parseEther } from 'viem'
+import toast from 'react-hot-toast'
+import { Zap, Clock, Shield, ChevronRight, Loader2, CheckCircle2 } from 'lucide-react'
 
-import { useState } from 'react';
-import { useAccount, useSendTransaction } from 'wagmi';
-import { parseEther } from 'viem';
-import toast from 'react-hot-toast';
-import { Zap, Clock, Shield, ChevronRight, Loader2, CheckCircle2 } from 'lucide-react';
-
-const RECEIVER_WALLET = import.meta.env.VITE_RECEIVER_WALLET;
+const RECEIVER_WALLET = import.meta.env.VITE_RECEIVER_WALLET
 
 const PLANS = [
   {
     id: 'weekly',
     label: '7 Days',
-    price: '0.003',
-    priceUSD: '~$9',
-    period: 'week',
+    price: '0.0015',
+    priceUSD: '~$5',
     color: 'from-cyan-500/20 to-cyan-500/5',
     border: 'border-cyan-500/30',
     accent: 'text-cyan-400',
@@ -24,9 +20,8 @@ const PLANS = [
   {
     id: 'monthly',
     label: '30 Days',
-    price: '0.009',
-    priceUSD: '~$25',
-    period: 'month',
+    price: '0.005',
+    priceUSD: '~$15',
     color: 'from-violet-500/20 to-violet-500/5',
     border: 'border-violet-500/40',
     accent: 'text-violet-400',
@@ -35,53 +30,50 @@ const PLANS = [
   {
     id: 'quarterly',
     label: '90 Days',
-    price: '0.024',
-    priceUSD: '~$65',
-    period: 'quarter',
+    price: '0.012',
+    priceUSD: '~$35',
     color: 'from-amber-500/20 to-amber-500/5',
     border: 'border-amber-500/30',
     accent: 'text-amber-400',
     badge: 'BEST VALUE',
   },
-];
+]
 
 const FEATURES = [
   { icon: Shield, text: 'MintGuard — WL tracker + auto-mint' },
   { icon: Zap, text: 'WhaleRadar — real-time wallet alerts' },
   { icon: Clock, text: 'Alpha Tools — forensic wallet analysis' },
-];
+]
 
 export default function Paywall({ onSuccess }) {
-  const { address, isConnected } = useAccount();
-  const [selectedPlan, setSelectedPlan] = useState('monthly');
-  const [step, setStep] = useState('select'); // select | confirming | verifying | done
-  const [pendingTxHash, setPendingTxHash] = useState(null);
+  const { address, isConnected } = useAccount()
+  const [selectedPlan, setSelectedPlan] = useState('monthly')
+  const [step, setStep] = useState('select')
+  const [pendingTxHash, setPendingTxHash] = useState(null)
 
-  const { sendTransactionAsync } = useSendTransaction();
+  const { sendTransactionAsync } = useSendTransaction()
 
   const handlePay = async () => {
     if (!isConnected || !address) {
-      toast.error('Connect your wallet first');
-      return;
+      toast.error('Connect your wallet first')
+      return
     }
 
-    const plan = PLANS.find(p => p.id === selectedPlan);
+    const plan = PLANS.find(p => p.id === selectedPlan)
 
     try {
-      setStep('confirming');
+      setStep('confirming')
 
       const txHash = await sendTransactionAsync({
         to: RECEIVER_WALLET,
         value: parseEther(plan.price),
-      });
+      })
 
-      setPendingTxHash(txHash);
-      setStep('verifying');
+      setPendingTxHash(txHash)
+      setStep('verifying')
 
-      // Wait a few seconds for the tx to propagate
-      await new Promise(r => setTimeout(r, 5000));
+      await new Promise(r => setTimeout(r, 5000))
 
-      // Call our verification API
       const res = await fetch('/api/verify-payment', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -90,31 +82,30 @@ export default function Paywall({ onSuccess }) {
           walletAddress: address,
           plan: selectedPlan,
         }),
-      });
+      })
 
-      const data = await res.json();
+      const data = await res.json()
 
       if (!res.ok) {
-        throw new Error(data.error || 'Verification failed');
+        throw new Error(data.error || 'Verification failed')
       }
 
-      setStep('done');
-      toast.success(`Access activated! ${data.daysGranted} days unlocked.`);
+      setStep('done')
+      toast.success(`Access activated! ${data.daysGranted} days unlocked.`)
 
-      // Give user a moment to see the success state
       setTimeout(() => {
-        onSuccess?.();
-      }, 2000);
+        onSuccess?.()
+      }, 2000)
 
     } catch (err) {
-      setStep('select');
+      setStep('select')
       if (err.message?.includes('rejected') || err.code === 4001) {
-        toast.error('Transaction cancelled');
+        toast.error('Transaction cancelled')
       } else {
-        toast.error(err.message || 'Something went wrong');
+        toast.error(err.message || 'Something went wrong')
       }
     }
-  };
+  }
 
   if (step === 'done') {
     return (
@@ -127,19 +118,16 @@ export default function Paywall({ onSuccess }) {
           <p className="text-gray-400">Loading Alpha Hub...</p>
         </div>
       </div>
-    );
+    )
   }
 
   return (
     <div className="min-h-screen bg-[#0a0b0f] flex items-center justify-center p-6">
-      {/* Background glow */}
       <div className="absolute inset-0 overflow-hidden pointer-events-none">
         <div className="absolute top-1/4 left-1/2 -translate-x-1/2 w-[600px] h-[600px] bg-violet-600/5 rounded-full blur-3xl" />
       </div>
 
       <div className="relative w-full max-w-lg space-y-6">
-
-        {/* Header */}
         <div className="text-center space-y-2">
           <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-violet-500/10 border border-violet-500/20 text-violet-400 text-xs font-mono uppercase tracking-widest mb-3">
             <Zap className="w-3 h-3" />
@@ -153,7 +141,6 @@ export default function Paywall({ onSuccess }) {
           </p>
         </div>
 
-        {/* Features */}
         <div className="grid grid-cols-1 gap-2">
           {FEATURES.map(({ icon: Icon, text }) => (
             <div key={text} className="flex items-center gap-3 px-4 py-2.5 rounded-lg bg-white/[0.03] border border-white/[0.06]">
@@ -163,17 +150,16 @@ export default function Paywall({ onSuccess }) {
           ))}
         </div>
 
-        {/* Plan selector */}
         <div className="grid grid-cols-3 gap-3">
           {PLANS.map(plan => (
             <button
               key={plan.id}
               onClick={() => setSelectedPlan(plan.id)}
-              className={`relative flex flex-col items-center p-4 rounded-xl border transition-all duration-200 text-left
-                ${selectedPlan === plan.id
+              className={`relative flex flex-col items-center p-4 rounded-xl border transition-all duration-200 text-left ${
+                selectedPlan === plan.id
                   ? `bg-gradient-to-b ${plan.color} ${plan.border} scale-[1.02]`
                   : 'bg-white/[0.03] border-white/[0.08] hover:border-white/20'
-                }`}
+              }`}
             >
               {plan.badge && (
                 <span className={`absolute -top-2.5 left-1/2 -translate-x-1/2 text-[9px] font-bold px-2 py-0.5 rounded-full bg-[#0a0b0f] border ${plan.border} ${plan.accent} whitespace-nowrap`}>
@@ -190,7 +176,6 @@ export default function Paywall({ onSuccess }) {
           ))}
         </div>
 
-        {/* CTA */}
         <button
           onClick={handlePay}
           disabled={step !== 'select' || !isConnected}
@@ -213,7 +198,6 @@ export default function Paywall({ onSuccess }) {
           )}
         </button>
 
-        {/* Tx hash during verify */}
         {pendingTxHash && step === 'verifying' && (
           <p className="text-center text-xs text-gray-500 font-mono break-all">
             tx: {pendingTxHash}
@@ -225,5 +209,5 @@ export default function Paywall({ onSuccess }) {
         </p>
       </div>
     </div>
-  );
+  )
 }
