@@ -1,4 +1,5 @@
 import { requireUser } from './_lib/auth.js'
+import { rateLimit, sendRateLimit } from './_lib/redis.js'
 
 const GROQ_URL = 'https://api.groq.com/openai/v1/chat/completions'
 
@@ -20,6 +21,9 @@ export default async function handler(req, res) {
 
   const user = await requireUser(req, res)
   if (!user) return
+
+  const limited = await rateLimit(`rl:ai:${user.id}`, 20, 60)
+  if (!limited.allowed) return sendRateLimit(res, limited)
 
   const apiKey = process.env.GROQ_API_KEY || process.env.VITE_GROQ_API_KEY
   if (!apiKey) return res.status(500).json({ error: 'AI key is not configured on the server' })

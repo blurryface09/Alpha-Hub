@@ -10,6 +10,7 @@
 import crypto from 'crypto'
 import { createClient } from '@supabase/supabase-js'
 import { privateKeyToAccount } from 'viem/accounts'
+import { rateLimit, sendRateLimit } from './_lib/redis.js'
 
 const supabase = createClient(
   process.env.VITE_SUPABASE_URL,
@@ -58,6 +59,9 @@ async function authUser(req) {
 export default async function handler(req, res) {
   const user = await authUser(req)
   if (!user) return res.status(401).json({ error: 'Unauthorized' })
+
+  const limited = await rateLimit(`rl:wallet:${user.id}`, req.method === 'GET' ? 60 : 10, 60)
+  if (!limited.allowed) return sendRateLimit(res, limited)
 
   // GET — return wallet address only
   if (req.method === 'GET') {

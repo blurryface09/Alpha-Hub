@@ -1,4 +1,5 @@
 import { createServiceClient, requireUser } from './_lib/auth.js'
+import { rateLimit, sendRateLimit } from './_lib/redis.js'
 
 const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN
 
@@ -17,6 +18,9 @@ export default async function handler(req, res) {
 
   const user = await requireUser(req, res)
   if (!user) return
+
+  const limited = await rateLimit(`rl:telegram-notify:${user.id}`, 30, 60)
+  if (!limited.allowed) return sendRateLimit(res, limited)
 
   const { project, type } = req.body || {}
   if (!project) return res.status(400).json({ error: 'Missing project' })

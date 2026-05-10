@@ -1,4 +1,6 @@
 import { createServiceClient, requireAdmin } from './_lib/auth.js'
+import { writeAuditLog } from './_lib/audit.js'
+import { rateLimit, sendRateLimit } from './_lib/redis.js'
 
 const PLAN_DAYS = {
   weekly: 7,
@@ -13,6 +15,9 @@ function validWallet(wallet) {
 export default async function handler(req, res) {
   const admin = await requireAdmin(req, res)
   if (!admin) return
+
+  const limited = await rateLimit(`rl:admin-subscriptions:${admin.id}`, 60, 60)
+  if (!limited.allowed) return sendRateLimit(res, limited)
 
   const supabase = createServiceClient()
 
@@ -51,6 +56,11 @@ export default async function handler(req, res) {
       .single()
 
     if (error) return res.status(500).json({ error: error.message })
+    await writeAuditLog(supabase, {
+      action: 'admin.subscription.created',
+      userId: admin.id,
+      metadata: { walletAddress: walletAddress.toLowerCase(), plan, subscriptionId: data.id },
+    })
     return res.status(200).json({ subscription: data })
   }
 
@@ -79,6 +89,11 @@ export default async function handler(req, res) {
       .single()
 
     if (error) return res.status(500).json({ error: error.message })
+    await writeAuditLog(supabase, {
+      action: 'admin.subscription.updated',
+      userId: admin.id,
+      metadata: { subscriptionId: id, plan, expiresAt: nextExpiry.toISOString() },
+    })
     return res.status(200).json({ subscription: data })
   }
 
@@ -87,6 +102,11 @@ export default async function handler(req, res) {
     if (!id) return res.status(400).json({ error: 'Subscription id is required' })
     const { error } = await supabase.from('subscriptions').delete().eq('id', id)
     if (error) return res.status(500).json({ error: error.message })
+    await writeAuditLog(supabase, {
+      action: 'admin.subscription.deleted',
+      userId: admin.id,
+      metadata: { subscriptionId: id },
+    })
     return res.status(200).json({ ok: true })
   }
 

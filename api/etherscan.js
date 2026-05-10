@@ -1,4 +1,5 @@
 import { requireUser } from './_lib/auth.js'
+import { cacheGet, cacheSet, rateLimit, sendRateLimit } from './_lib/redis.js'
 
 const ETHERSCAN_V2 = 'https://api.etherscan.io/v2/api'
 const ALLOWED_MODULES = new Set(['account', 'contract'])
@@ -17,6 +18,9 @@ export default async function handler(req, res) {
 
   const user = await requireUser(req, res)
   if (!user) return
+
+  const limited = await rateLimit(`rl:etherscan:${user.id}`, 60, 60)
+  if (!limited.allowed) return sendRateLimit(res, limited)
 
   const apiKey = process.env.ETHERSCAN_API_KEY || process.env.VITE_ETHERSCAN_API_KEY
   if (!apiKey) return res.status(500).json({ error: 'Etherscan key is not configured on the server' })
@@ -39,10 +43,15 @@ export default async function handler(req, res) {
   }
   upstream.searchParams.set('apikey', apiKey)
 
+  const cacheKey = `cache:etherscan:${chainid}:${moduleName}:${action}:${address.toLowerCase()}:${upstream.searchParams.toString().replace(apiKey, 'key')}`
+  const cached = await cacheGet(cacheKey)
+  if (cached) return res.status(200).json(cached)
+
   try {
     const response = await fetch(upstream, { signal: AbortSignal.timeout(15000) })
     const data = await response.json().catch(() => null)
     if (!response.ok) return res.status(response.status).json({ error: 'Etherscan request failed' })
+    await cacheSet(cacheKey, data, action === 'balance' ? 30 : 60)
     return res.status(200).json(data)
   } catch (error) {
     return res.status(502).json({ error: error.message || 'Etherscan unavailable' })

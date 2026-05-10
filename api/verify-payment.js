@@ -1,4 +1,6 @@
 import { createServiceClient, requireUser, userOwnsWallet } from './_lib/auth.js'
+import { rateLimit, sendRateLimit } from './_lib/redis.js'
+import { writeAuditLog } from './_lib/audit.js'
 
 const PLAN_CONFIG = {
   weekly:    { days: 7,  ethMin: 0.0015 },
@@ -15,6 +17,9 @@ export default async function handler(req, res) {
 
   const user = await requireUser(req, res)
   if (!user) return
+
+  const limited = await rateLimit(`rl:verify-payment:${user.id}`, 10, 60)
+  if (!limited.allowed) return sendRateLimit(res, limited)
 
   const { txHash, walletAddress, plan } = req.body
 
@@ -100,6 +105,18 @@ export default async function handler(req, res) {
       console.error('Supabase insert error:', insertError)
       return res.status(500).json({ error: 'Failed to activate subscription' })
     }
+
+    await writeAuditLog(supabase, {
+      action: 'subscription.activated',
+      userId: user.id,
+      metadata: {
+        walletAddress: walletAddress.toLowerCase(),
+        plan,
+        txHash,
+        amountEth: valueEth,
+        expiresAt: expiresAt.toISOString(),
+      },
+    })
 
     return res.status(200).json({
       success: true,
