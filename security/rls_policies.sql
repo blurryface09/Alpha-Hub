@@ -44,7 +44,8 @@ as $$
     lower(auth.jwt() #>> '{user_metadata,wallet_address}'),
     lower(auth.jwt() #>> '{user_metadata,walletAddress}'),
     lower(auth.jwt() #>> '{user_metadata,address}'),
-    lower(auth.jwt() #>> '{user_metadata,sub}')
+    lower(auth.jwt() #>> '{user_metadata,custom_claims,address}'),
+    replace(lower(auth.jwt() #>> '{user_metadata,sub}'), 'web3:ethereum:', '')
   ], null);
 $$;
 

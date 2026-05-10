@@ -7,6 +7,24 @@ import { analyzeWallet, auditContract } from '../lib/ai'
 
 const TABS = ['wallet', 'contract']
 
+function renderAiText(text) {
+  const lines = String(text || '').split('\n')
+  return lines.map((line, lineIndex) => {
+    const parts = line.split(/(\*\*.*?\*\*)/g).filter(Boolean)
+    return (
+      <React.Fragment key={lineIndex}>
+        {parts.map((part, partIndex) => {
+          if (part.startsWith('**') && part.endsWith('**')) {
+            return <strong key={partIndex}>{part.slice(2, -2)}</strong>
+          }
+          return <React.Fragment key={partIndex}>{part}</React.Fragment>
+        })}
+        {lineIndex < lines.length - 1 ? <br /> : null}
+      </React.Fragment>
+    )
+  })
+}
+
 export default function AlphaPage() {
   const [activeTab, setActiveTab] = useState('wallet')
   const [chain, setChain] = useState('eth')
@@ -264,14 +282,9 @@ export default function AlphaPage() {
                 Running deep forensic analysis...
               </div>
             ) : aiAnalysis ? (
-              <div
-                className="ai-result text-sm leading-relaxed"
-                dangerouslySetInnerHTML={{
-                  __html: aiAnalysis
-                    .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
-                    .replace(/\n/g, '<br/>')
-                }}
-              />
+              <div className="ai-result text-sm leading-relaxed">
+                {renderAiText(aiAnalysis)}
+              </div>
             ) : null}
           </div>
         </motion.div>
@@ -348,14 +361,9 @@ export default function AlphaPage() {
                 Auditing contract...
               </div>
             ) : aiAnalysis ? (
-              <div
-                className="ai-result text-sm leading-relaxed"
-                dangerouslySetInnerHTML={{
-                  __html: aiAnalysis
-                    .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
-                    .replace(/\n/g, '<br/>')
-                }}
-              />
+              <div className="ai-result text-sm leading-relaxed">
+                {renderAiText(aiAnalysis)}
+              </div>
             ) : null}
           </div>
         </motion.div>

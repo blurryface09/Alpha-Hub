@@ -50,21 +50,25 @@ function userWallets(user) {
     user?.user_metadata?.wallet_address,
     user?.user_metadata?.walletAddress,
     user?.user_metadata?.address,
+    user?.user_metadata?.custom_claims?.address,
     user?.user_metadata?.sub,
     user?.app_metadata?.wallet_address,
     user?.app_metadata?.walletAddress,
     user?.app_metadata?.address,
+    user?.app_metadata?.custom_claims?.address,
     user?.app_metadata?.sub,
     user?.identities?.flatMap(identity => [
       identity?.identity_data?.wallet_address,
       identity?.identity_data?.walletAddress,
       identity?.identity_data?.address,
+      identity?.identity_data?.custom_claims?.address,
       identity?.identity_data?.sub,
     ]),
   ].flat().filter(Boolean)
 
   return candidates
     .map(value => String(value).toLowerCase())
+    .map(value => value.startsWith('web3:ethereum:') ? value.replace('web3:ethereum:', '') : value)
     .filter(value => /^0x[a-f0-9]{40}$/.test(value))
 }
 
