@@ -1,4 +1,4 @@
-const { createClient } = require('@supabase/supabase-js')
+import { createClient } from '@supabase/supabase-js'
 
 const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN
 
@@ -11,7 +11,7 @@ function getSupabase() {
 
 function fmtTime(utcStr) {
   const d = new Date(utcStr)
-  const pad = function(n) { return String(n).padStart(2, '0') }
+  const pad = (n) => String(n).padStart(2, '0')
   const months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec']
   return months[d.getUTCMonth()] + ' ' + d.getUTCDate() + ', ' + pad(d.getUTCHours()) + ':' + pad(d.getUTCMinutes()) + ' UTC'
 }
@@ -22,12 +22,12 @@ async function sendTelegram(chatId, text, extra) {
     await fetch('https://api.telegram.org/bot' + BOT_TOKEN + '/sendMessage', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(Object.assign({ chat_id: chatId, text: text, parse_mode: 'HTML' }, extra || {})),
+      body: JSON.stringify({ chat_id: chatId, text, parse_mode: 'HTML', ...(extra || {}) }),
     })
-  } catch(e) {}
+  } catch (e) {}
 }
 
-module.exports = async function handler(req, res) {
+export default async function handler(req, res) {
   try {
     const cronSecret = process.env.CRON_SECRET
     if (cronSecret) {
@@ -49,30 +49,24 @@ module.exports = async function handler(req, res) {
     let notified = 0
 
     try {
-      const upcomingResult = await supabase
+      const { data: upcoming } = await supabase
         .from('wl_projects')
         .select('id, name, mint_date, mint_price, chain, wl_type, user_id')
         .eq('status', 'upcoming')
         .gte('mint_date', from)
         .lte('mint_date', to)
 
-      const upcoming = upcomingResult.data
       if (upcoming && upcoming.length) {
-        const userIds = upcoming.map(function(p) { return p.user_id }).filter(function(v, i, a) { return a.indexOf(v) === i })
-        const profilesResult = await supabase
+        const userIds = [...new Set(upcoming.map(p => p.user_id))]
+        const { data: profiles } = await supabase
           .from('profiles')
           .select('id, telegram_chat_id')
           .in('id', userIds)
 
         const chatMap = {}
-        if (profilesResult.data) {
-          profilesResult.data.forEach(function(p) {
-            if (p.telegram_chat_id) chatMap[p.id] = p.telegram_chat_id
-          })
-        }
+        if (profiles) profiles.forEach(p => { if (p.telegram_chat_id) chatMap[p.id] = p.telegram_chat_id })
 
-        for (let i = 0; i < upcoming.length; i++) {
-          const p = upcoming[i]
+        for (const p of upcoming) {
           const chatId = chatMap[p.user_id]
           if (!chatId) continue
           const chain = (p.chain || 'eth').toUpperCase()
@@ -81,35 +75,29 @@ module.exports = async function handler(req, res) {
           notified++
         }
       }
-    } catch(e) {
+    } catch (e) {
       console.error('cron-notify reminders error:', e.message)
     }
 
     try {
       const liveFrom = new Date(now.getTime() - 5 * 60 * 1000).toISOString()
-      const liveResult = await supabase
+      const { data: live } = await supabase
         .from('wl_projects')
         .select('id, name, mint_date, mint_price, chain, wl_type, mint_mode, contract_address, user_id')
         .eq('status', 'live')
         .gte('mint_date', liveFrom)
 
-      const live = liveResult.data
       if (live && live.length) {
-        const userIds = live.map(function(p) { return p.user_id }).filter(function(v, i, a) { return a.indexOf(v) === i })
-        const profilesResult = await supabase
+        const userIds = [...new Set(live.map(p => p.user_id))]
+        const { data: profiles } = await supabase
           .from('profiles')
           .select('id, telegram_chat_id')
           .in('id', userIds)
 
         const chatMap = {}
-        if (profilesResult.data) {
-          profilesResult.data.forEach(function(p) {
-            if (p.telegram_chat_id) chatMap[p.id] = p.telegram_chat_id
-          })
-        }
+        if (profiles) profiles.forEach(p => { if (p.telegram_chat_id) chatMap[p.id] = p.telegram_chat_id })
 
-        for (let i = 0; i < live.length; i++) {
-          const p = live[i]
+        for (const p of live) {
           const chatId = chatMap[p.user_id]
           if (!chatId) continue
           const chain = (p.chain || 'eth').toUpperCase()
@@ -125,17 +113,17 @@ module.exports = async function handler(req, res) {
             ]],
           } : null
 
-          await sendTelegram(chatId, text, keyboard ? { reply_markup: keyboard } : {})
+          await sendTelegram(chatId, text, keyboard ? { reply_markup: keyboard } : undefined)
           notified++
         }
       }
-    } catch(e) {
+    } catch (e) {
       console.error('cron-notify live error:', e.message)
     }
 
-    return res.status(200).json({ ok: true, notified: notified, ts: now.toISOString() })
+    return res.status(200).json({ ok: true, notified, ts: now.toISOString() })
 
-  } catch(e) {
+  } catch (e) {
     console.error('cron-notify fatal:', e.message)
     return res.status(200).json({ ok: false, error: e.message })
   }
