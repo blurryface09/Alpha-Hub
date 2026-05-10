@@ -1,7 +1,7 @@
 /**
  * Server-side WhaleRadar poller.
- * Runs from Vercel Cron or an external cron service and writes activity into
- * Supabase, letting the browser consume realtime updates instead of polling.
+ * Runs from Vercel Cron every 3 minutes.
+ * Always returns 200 to prevent Vercel from disabling the cron.
  */
 
 import { createClient } from '@supabase/supabase-js'
@@ -9,28 +9,23 @@ import { createClient } from '@supabase/supabase-js'
 const ETHERSCAN_V2 = 'https://api.etherscan.io/v2/api'
 const ETHERSCAN_KEY = process.env.ETHERSCAN_API_KEY || process.env.VITE_ETHERSCAN_API_KEY
 
-const supabase = createClient(
-  process.env.VITE_SUPABASE_URL,
-  process.env.SUPABASE_SERVICE_KEY
-)
+function getSupabase() {
+  const url = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL
+  const key = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_SERVICE_KEY
+  if (!url || !key) return null
+  return createClient(url, key)
+}
 
 const CHAINS = {
-  eth: { id: '1', name: 'Ethereum', symbol: 'ETH' },
-  base: { id: '8453', name: 'Base', symbol: 'ETH' },
-  bnb: { id: '56', name: 'BNB Chain', symbol: 'BNB' },
+  eth:  { id: '1',    name: 'Ethereum', symbol: 'ETH' },
+  base: { id: '8453', name: 'Base',     symbol: 'ETH' },
+  bnb:  { id: '56',   name: 'BNB Chain', symbol: 'BNB' },
 }
 
 const MINT_METHOD_IDS = new Set([
-  '0x40993b26',
-  '0x1249c58b',
-  '0x6a627842',
-  '0xa0712d68',
-  '0x84bb1e42',
-  '0xd85d3d27',
-  '0x2db11544',
-  '0xefef39a1',
-  '0x570d8e1d',
-  '0x8ecfffd8',
+  '0x40993b26', '0x1249c58b', '0x6a627842', '0xa0712d68',
+  '0x84bb1e42', '0xd85d3d27', '0x2db11544', '0xefef39a1',
+  '0x570d8e1d', '0x8ecfffd8',
 ])
 
 function decodeMethodName(methodId) {
@@ -63,6 +58,7 @@ function decodeMethodName(methodId) {
 }
 
 async function fetchLatestTransactions(wallet) {
+  if (!ETHERSCAN_KEY) return []
   const chain = CHAINS[wallet.chain || 'eth'] || CHAINS.eth
   const url = new URL(ETHERSCAN_V2)
   url.searchParams.set('chainid', chain.id)
@@ -76,16 +72,21 @@ async function fetchLatestTransactions(wallet) {
   url.searchParams.set('sort', 'desc')
   url.searchParams.set('apikey', ETHERSCAN_KEY)
 
-  const response = await fetch(url, { signal: AbortSignal.timeout(15000) })
-  const data = await response.json().catch(() => null)
-  if (!response.ok || !data || data.status !== '1' || !Array.isArray(data.result)) return []
+  try {
+    const response = await fetch(url.toString(), { signal: AbortSignal.timeout(15000) })
+    const data = await response.json().catch(() => null)
+    if (!response.ok || !data || data.status !== '1' || !Array.isArray(data.result)) return []
 
-  const cutoffIdx = wallet.last_tx_hash
-    ? data.result.findIndex(tx => tx.hash === wallet.last_tx_hash)
-    : -1
+    const cutoffIdx = wallet.last_tx_hash
+      ? data.result.findIndex(tx => tx.hash === wallet.last_tx_hash)
+      : -1
 
-  if (cutoffIdx === 0) return []
-  return cutoffIdx > 0 ? data.result.slice(0, cutoffIdx) : data.result.slice(0, 1)
+    if (cutoffIdx === 0) return []
+    return cutoffIdx > 0 ? data.result.slice(0, cutoffIdx) : data.result.slice(0, 1)
+  } catch (e) {
+    console.error(`fetchLatestTransactions error for ${wallet.wallet_address}:`, e.message)
+    return []
+  }
 }
 
 function normalizeTx(tx, wallet) {
@@ -116,14 +117,22 @@ function normalizeTx(tx, wallet) {
 }
 
 export default async function handler(req, res) {
+  // ALWAYS return 200 — Vercel disables crons after repeated non-200 responses
   try {
     const cronSecret = process.env.CRON_SECRET
     if (cronSecret && req.headers.authorization !== `Bearer ${cronSecret}`) {
-      return res.status(401).end()
+      return res.status(200).json({ ok: false, error: 'unauthorized' })
     }
 
-    if (!process.env.VITE_SUPABASE_URL || !process.env.SUPABASE_SERVICE_KEY || !ETHERSCAN_KEY) {
+    const supabase = getSupabase()
+    if (!supabase) {
+      console.error('whale-poll: missing Supabase env vars')
       return res.status(200).json({ ok: false, error: 'missing env vars' })
+    }
+
+    if (!ETHERSCAN_KEY) {
+      console.error('whale-poll: missing Etherscan API key')
+      return res.status(200).json({ ok: false, error: 'missing etherscan key' })
     }
 
     const { data: wallets, error } = await supabase
@@ -131,10 +140,16 @@ export default async function handler(req, res) {
       .select('id, user_id, wallet_address, label, chain, last_tx_hash')
       .eq('is_active', true)
       .order('last_checked', { ascending: true, nullsFirst: true })
-      .limit(100)
+      .limit(50)
 
-    if (error) return res.status(200).json({ ok: false, error: error.message })
-    if (!wallets?.length) return res.status(200).json({ ok: true, checked: 0, inserted: 0 })
+    if (error) {
+      console.error('whale-poll watchlist query error:', error.message)
+      return res.status(200).json({ ok: false, error: error.message })
+    }
+
+    if (!wallets?.length) {
+      return res.status(200).json({ ok: true, checked: 0, inserted: 0 })
+    }
 
     let checked = 0
     let inserted = 0
@@ -154,7 +169,7 @@ export default async function handler(req, res) {
 
           if (!upsertError && insertedRow) {
             inserted++
-            await supabase.from('notifications').insert({
+            supabase.from('notifications').insert({
               user_id: wallet.user_id,
               type: row.is_mint ? 'whale_mint' : 'whale_move',
               title: `${row.is_mint ? 'WHALE MINTING' : 'Whale Move'} - ${wallet.label || wallet.wallet_address.slice(0, 10)}...`,
@@ -171,14 +186,17 @@ export default async function handler(req, res) {
             last_checked: new Date().toISOString(),
           })
           .eq('id', wallet.id)
-      } catch (error) {
-        console.error(`whale-poll failed for ${wallet.id}:`, error.message)
+
+      } catch (e) {
+        console.error(`whale-poll failed for wallet ${wallet.id}:`, e.message)
       }
     }
 
-    return res.status(200).json({ ok: true, checked, inserted })
-  } catch (error) {
-    console.error('whale-poll fatal:', error.message)
-    return res.status(200).json({ ok: false, error: error.message })
+    return res.status(200).json({ ok: true, checked, inserted, ts: new Date().toISOString() })
+
+  } catch (e) {
+    // Catch-all — NEVER let unhandled error return 500
+    console.error('whale-poll fatal:', e.message)
+    return res.status(200).json({ ok: false, error: e.message })
   }
 }
