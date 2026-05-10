@@ -1,22 +1,20 @@
 /**
  * Vercel Cron Job — runs every 5 minutes.
  * Sends 30-minute reminder notifications for upcoming mints.
- * Add to vercel.json: "crons": [{ "path": "/api/cron-notify", "schedule": "*/5 * * * *" }]
- *
- * Required env vars: TELEGRAM_BOT_TOKEN, SUPABASE_SERVICE_KEY, VITE_SUPABASE_URL, CRON_SECRET
+ * Always returns 200 to prevent Vercel from disabling the cron.
  */
 
 import { createClient } from '@supabase/supabase-js'
 
 const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN
-const supabase = createClient(
-  process.env.VITE_SUPABASE_URL,
-  process.env.SUPABASE_SERVICE_KEY
-)
 
-// Format a UTC date for display — always show UTC label so it's unambiguous
-// across all timezones. Users set time in their local tz (app converts to UTC),
-// so we can't know their tz server-side. UTC label avoids confusion.
+function getSupabase() {
+  const url = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL
+  const key = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_SERVICE_KEY
+  if (!url || !key) return null
+  return createClient(url, key)
+}
+
 function fmtTime(utcStr) {
   const d = new Date(utcStr)
   const pad = n => String(n).padStart(2, '0')
@@ -36,16 +34,20 @@ async function sendTelegram(chatId, text, extra = {}) {
 }
 
 export default async function handler(req, res) {
-  // Always return 200 to cron-job.org — a non-200 triggers auto-disable after N failures
+  // ALWAYS return 200 — Vercel disables crons after repeated non-200 responses
   try {
+    // Verify cron secret if set
     const cronSecret = process.env.CRON_SECRET
     if (cronSecret) {
       const auth = req.headers.authorization || ''
-      if (auth !== `Bearer ${cronSecret}`) return res.status(401).end()
+      if (auth !== `Bearer ${cronSecret}`) {
+        return res.status(200).json({ ok: false, error: 'unauthorized' })
+      }
     }
 
-    if (!process.env.VITE_SUPABASE_URL || !process.env.SUPABASE_SERVICE_KEY) {
-      console.error('cron-notify: missing required env vars')
+    const supabase = getSupabase()
+    if (!supabase) {
+      console.error('cron-notify: missing Supabase env vars')
       return res.status(200).json({ ok: false, error: 'missing env vars' })
     }
 
@@ -54,19 +56,24 @@ export default async function handler(req, res) {
     const to   = new Date(now.getTime() + 35 * 60 * 1000).toISOString()
     let notified = 0
 
-    // ---- 30-min reminders ------------------------------------------------
+    // 30-min reminders
     try {
-      const { data: upcoming } = await supabase
+      const { data: upcoming, error } = await supabase
         .from('wl_projects')
         .select('id, name, mint_date, mint_price, chain, wl_type, user_id')
         .eq('status', 'upcoming')
         .gte('mint_date', from)
         .lte('mint_date', to)
 
-      if (upcoming?.length) {
+      if (error) {
+        console.error('cron-notify upcoming query error:', error.message)
+      } else if (upcoming?.length) {
         const userIds = [...new Set(upcoming.map(p => p.user_id))]
         const { data: profiles } = await supabase
-          .from('profiles').select('id, telegram_chat_id').in('id', userIds)
+          .from('profiles')
+          .select('id, telegram_chat_id')
+          .in('id', userIds)
+
         const chatMap = {}
         profiles?.forEach(p => { if (p.telegram_chat_id) chatMap[p.id] = p.telegram_chat_id })
 
@@ -80,21 +87,28 @@ export default async function handler(req, res) {
           notified++
         }
       }
-    } catch (e) { console.error('cron-notify reminders error:', e.message) }
+    } catch (e) {
+      console.error('cron-notify reminders error:', e.message)
+    }
 
-    // ---- Live-mint pulse -------------------------------------------------
+    // Live-mint pulse
     try {
       const liveFrom = new Date(now.getTime() - 5 * 60 * 1000).toISOString()
-      const { data: live } = await supabase
+      const { data: live, error } = await supabase
         .from('wl_projects')
         .select('id, name, mint_date, mint_price, chain, wl_type, mint_mode, contract_address, user_id')
         .eq('status', 'live')
         .gte('mint_date', liveFrom)
 
-      if (live?.length) {
+      if (error) {
+        console.error('cron-notify live query error:', error.message)
+      } else if (live?.length) {
         const userIds = [...new Set(live.map(p => p.user_id))]
         const { data: profiles } = await supabase
-          .from('profiles').select('id, telegram_chat_id').in('id', userIds)
+          .from('profiles')
+          .select('id, telegram_chat_id')
+          .in('id', userIds)
+
         const chatMap = {}
         profiles?.forEach(p => { if (p.telegram_chat_id) chatMap[p.id] = p.telegram_chat_id })
 
@@ -119,12 +133,14 @@ export default async function handler(req, res) {
           notified++
         }
       }
-    } catch (e) { console.error('cron-notify live error:', e.message) }
+    } catch (e) {
+      console.error('cron-notify live error:', e.message)
+    }
 
-    return res.status(200).json({ ok: true, notified })
+    return res.status(200).json({ ok: true, notified, ts: now.toISOString() })
 
   } catch (e) {
-    // Catch-all — never let an unhandled error return 500 and trigger cron disable
+    // Catch-all — NEVER let unhandled error return 500
     console.error('cron-notify fatal:', e.message)
     return res.status(200).json({ ok: false, error: e.message })
   }
