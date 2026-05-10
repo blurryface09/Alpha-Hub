@@ -7,7 +7,7 @@
   ],
   "crons": [
     { "path": "/api/cron-notify", "schedule": "*/5 * * * *" },
-    { "path": "/api/whale-poll", "schedule": "*/5 * * * *" },
+    { "path": "/api/whale-poll", "schedule": "*/3 * * * *" },
     { "path": "/api/auto-mint", "schedule": "* * * * *" }
   ]
 }
