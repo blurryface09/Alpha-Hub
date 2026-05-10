@@ -16,13 +16,15 @@ function fmtTime(utcStr) {
   return months[d.getUTCMonth()] + ' ' + d.getUTCDate() + ', ' + pad(d.getUTCHours()) + ':' + pad(d.getUTCMinutes()) + ' UTC'
 }
 
-async function sendTelegram(chatId, text, extra) {
+async function sendTelegram(chatId, text, replyMarkup) {
   if (!BOT_TOKEN || !chatId) return
   try {
+    const body = { chat_id: chatId, text: text, parse_mode: 'HTML' }
+    if (replyMarkup) body.reply_markup = replyMarkup
     await fetch('https://api.telegram.org/bot' + BOT_TOKEN + '/sendMessage', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ chat_id: chatId, text, parse_mode: 'HTML', ...(extra || {}) }),
+      body: JSON.stringify(body),
     })
   } catch (e) {}
 }
@@ -57,21 +59,26 @@ export default async function handler(req, res) {
         .lte('mint_date', to)
 
       if (upcoming && upcoming.length) {
-        const userIds = [...new Set(upcoming.map(p => p.user_id))]
+        const userIds = Array.from(new Set(upcoming.map(function(p) { return p.user_id })))
         const { data: profiles } = await supabase
           .from('profiles')
           .select('id, telegram_chat_id')
           .in('id', userIds)
 
         const chatMap = {}
-        if (profiles) profiles.forEach(p => { if (p.telegram_chat_id) chatMap[p.id] = p.telegram_chat_id })
+        if (profiles) {
+          profiles.forEach(function(p) {
+            if (p.telegram_chat_id) chatMap[p.id] = p.telegram_chat_id
+          })
+        }
 
-        for (const p of upcoming) {
+        for (let i = 0; i < upcoming.length; i++) {
+          const p = upcoming[i]
           const chatId = chatMap[p.user_id]
           if (!chatId) continue
           const chain = (p.chain || 'eth').toUpperCase()
           const price = p.mint_price || 'Free'
-          await sendTelegram(chatId, '⏰ <b>Mint in ~30 min: ' + p.name + '</b>\n\n' + chain + ' · ' + price + ' · ' + p.wl_type + '\n🕐 ' + fmtTime(p.mint_date))
+          await sendTelegram(chatId, '⏰ <b>Mint in ~30 min: ' + p.name + '</b>\n\n' + chain + ' · ' + price + ' · ' + p.wl_type + '\n🕐 ' + fmtTime(p.mint_date), null)
           notified++
         }
       }
@@ -88,16 +95,21 @@ export default async function handler(req, res) {
         .gte('mint_date', liveFrom)
 
       if (live && live.length) {
-        const userIds = [...new Set(live.map(p => p.user_id))]
+        const userIds = Array.from(new Set(live.map(function(p) { return p.user_id })))
         const { data: profiles } = await supabase
           .from('profiles')
           .select('id, telegram_chat_id')
           .in('id', userIds)
 
         const chatMap = {}
-        if (profiles) profiles.forEach(p => { if (p.telegram_chat_id) chatMap[p.id] = p.telegram_chat_id })
+        if (profiles) {
+          profiles.forEach(function(p) {
+            if (p.telegram_chat_id) chatMap[p.id] = p.telegram_chat_id
+          })
+        }
 
-        for (const p of live) {
+        for (let i = 0; i < live.length; i++) {
+          const p = live[i]
           const chatId = chatMap[p.user_id]
           if (!chatId) continue
           const chain = (p.chain || 'eth').toUpperCase()
@@ -106,14 +118,17 @@ export default async function handler(req, res) {
           const text = '🚨 <b>LIVE: ' + p.name + '</b>\n' + chain + ' · ' + price + ' · ' + p.wl_type + '\n' +
             (isAuto ? '⚡ Server auto-mint will fire shortly' : 'Tap below to confirm or skip')
 
-          const keyboard = (!isAuto && p.contract_address) ? {
-            inline_keyboard: [[
-              { text: '✅ Confirm Mint', callback_data: 'confirm:' + p.id },
-              { text: '❌ Skip', callback_data: 'skip:' + p.id },
-            ]],
-          } : null
+          let keyboard = null
+          if (!isAuto && p.contract_address) {
+            keyboard = {
+              inline_keyboard: [[
+                { text: '✅ Confirm Mint', callback_data: 'confirm:' + p.id },
+                { text: '❌ Skip', callback_data: 'skip:' + p.id },
+              ]],
+            }
+          }
 
-          await sendTelegram(chatId, text, keyboard ? { reply_markup: keyboard } : undefined)
+          await sendTelegram(chatId, text, keyboard)
           notified++
         }
       }
@@ -121,7 +136,7 @@ export default async function handler(req, res) {
       console.error('cron-notify live error:', e.message)
     }
 
-    return res.status(200).json({ ok: true, notified, ts: now.toISOString() })
+    return res.status(200).json({ ok: true, notified: notified, ts: now.toISOString() })
 
   } catch (e) {
     console.error('cron-notify fatal:', e.message)
