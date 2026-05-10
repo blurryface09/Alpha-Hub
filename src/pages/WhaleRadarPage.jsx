@@ -1,24 +1,19 @@
-import React, { useState, useEffect, useRef, useCallback } from 'react'
+import React, { useState, useEffect, useCallback } from 'react'
 import { motion } from 'framer-motion'
 import { Radar, Plus, Trash2, Eye } from 'lucide-react'
 import toast from 'react-hot-toast'
 import { supabase } from '../lib/supabase'
 import { useAuthStore, useWhaleStore } from '../store'
-import { getLatestActivity, decodeMethodName, CHAINS } from '../lib/blockchain'
 import AddWalletModal from '../components/whale/AddWalletModal'
 import ActivityFeed from '../components/whale/ActivityFeed'
-
-const POLL_INTERVAL = 30000 // 30 seconds
 
 export default function WhaleRadarPage() {
   const { user } = useAuthStore()
   const { activity, fetch: fetchActivity, subscribe } = useWhaleStore()
   const [watchlist, setWatchlist] = useState([])
   const [loading, setLoading] = useState(true)
-  const [polling, setPolling] = useState(false)
   const [showAddModal, setShowAddModal] = useState(false)
   const [activeChain, setActiveChain] = useState('all')
-  const pollRef = useRef(null)
 
   const fetchWatchlist = useCallback(async () => {
     if (!user) return
@@ -37,68 +32,6 @@ export default function WhaleRadarPage() {
     const unsub = subscribe(user?.id)
     return unsub
   }, [fetchWatchlist, user?.id])
-
-  // Polling engine
-  useEffect(() => {
-    if (!watchlist.length) return
-    const poll = async () => {
-      setPolling(true)
-      for (const whale of watchlist) {
-        try {
-          const chainKey = whale.chain || 'eth'
-          const newTxs = await getLatestActivity(whale.wallet_address, chainKey, whale.last_tx_hash)
-          if (!newTxs.length) continue
-
-          for (const tx of newTxs) {
-            const methodName = decodeMethodName(tx.methodId)
-            const isMint = tx.isMint
-
-            // Get AI summary - completely optional, never blocks
-            let aiSummary = null
-
-            // Store in whale_activity
-            await supabase.from('whale_activity').upsert({
-              wallet_address: whale.wallet_address,
-              user_id: user.id,
-              wallet_label: whale.label,
-              chain: chainKey,
-              tx_hash: tx.hash,
-              action_type: methodName,
-              contract_address: tx.to,
-              value_eth: parseFloat(tx.value),
-              method_id: tx.methodId,
-              method_name: methodName,
-              is_mint: isMint,
-              timestamp: tx.timestamp.toISOString(),
-              raw_data: { ...tx, ai_summary: aiSummary },
-            }, { onConflict: 'user_id,tx_hash' })
-
-            // Notify user
-            await supabase.from('notifications').insert({
-              user_id: user.id,
-              type: isMint ? 'whale_mint' : 'whale_move',
-              title: `${isMint ? '🟢 WHALE MINTING' : '🐋 Whale Move'} -- ${whale.label || whale.wallet_address.slice(0, 10)}...`,
-              message: `${methodName} · ${tx.value} ${CHAINS[chainKey]?.symbol || 'ETH'} · ${CHAINS[chainKey]?.name}${aiSummary ? '\n' + aiSummary : ''}`,
-              data: { tx_hash: tx.hash, wallet: whale.wallet_address, chain: chainKey },
-            })
-          }
-
-          // Update last tx hash
-          await supabase.from('whale_watchlist')
-            .update({ last_tx_hash: newTxs[0].hash, last_checked: new Date().toISOString() })
-            .eq('id', whale.id)
-
-        } catch (err) {
-          console.error(`Failed polling ${whale.label || whale.wallet_address}:`, err)
-        }
-      }
-      setPolling(false)
-    }
-
-    poll() // immediate
-    pollRef.current = setInterval(poll, POLL_INTERVAL)
-    return () => clearInterval(pollRef.current)
-  }, [watchlist, user])
 
   const addWallet = async ({ address, label, chain }) => {
     try {
@@ -155,10 +88,10 @@ export default function WhaleRadarPage() {
           <div className="flex items-center gap-2 mb-1">
             <Radar size={20} className="text-accent" />
             <h1 className="text-xl font-bold">WhaleRadar</h1>
-            {polling && <div className="spinner w-3 h-3" />}
+            <div className="w-1.5 h-1.5 rounded-full bg-green animate-pulse" />
           </div>
           <p className="text-sm text-muted">
-            Track smart money. Know what they're minting before everyone else.
+            Server-monitored smart money alerts with realtime updates.
           </p>
         </div>
         <button onClick={() => {
