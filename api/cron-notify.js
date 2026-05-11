@@ -1,3 +1,4 @@
+// v3
 import { createClient } from '@supabase/supabase-js'
 
 const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN
