@@ -38,7 +38,7 @@ export const useAuthStore = create((set, get) => ({
     }
   },
 
-  signInWithWallet: async (address, signMessageAsync) => {
+  signInWithWallet: async (address, signMessageAsync, chainId = 1) => {
     if (get().signingIn) return { success: false, error: 'Already signing in' }
 
     try {
@@ -57,7 +57,7 @@ export const useAuthStore = create((set, get) => ({
         '',
         'URI: ' + origin,
         'Version: 1',
-        'Chain ID: 1',
+        'Chain ID: ' + chainId,
         'Nonce: ' + nonce,
         'Issued At: ' + issuedAt,
       ].join('\n')

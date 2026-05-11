@@ -9,7 +9,7 @@ import { Loader2, Wallet, ShieldCheck } from 'lucide-react'
 
 export default function AuthPage() {
   const { user, signingIn, signInWithWallet } = useAuthStore()
-  const { address, isConnected } = useAccount()
+  const { address, chain, isConnected } = useAccount()
   const { signMessageAsync } = useSignMessage()
   const [attempted, setAttempted] = useState(false)
   const [error, setError] = useState(null)
@@ -21,7 +21,7 @@ export default function AuthPage() {
     setAttempted(true)
     setError(null)
 
-    const result = await signInWithWallet(address, signMessageAsync)
+    const result = await signInWithWallet(address, signMessageAsync, chain?.id || 1)
 
     if (!result.success) {
       const msg = result.error || 'Sign in failed'
