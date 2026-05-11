@@ -7,7 +7,7 @@ const ADMIN_WALLET = import.meta.env.VITE_ADMIN_WALLET?.toLowerCase()
 
 export default function SubscriptionGate({ children }) {
   const { isConnected, address } = useAccount()
-  const { isActive, loading, refresh } = useSubscription()
+  const { isActive, isExpired, loading, refresh } = useSubscription()
 
   const isAdmin = isConnected && address?.toLowerCase() === ADMIN_WALLET
 
@@ -20,7 +20,7 @@ export default function SubscriptionGate({ children }) {
   }
 
   if (!isConnected || (!isActive && !isAdmin)) {
-    return <Paywall onSuccess={refresh} />
+    return <Paywall onSuccess={refresh} expired={isExpired} />
   }
 
   return children

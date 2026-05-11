@@ -7,6 +7,7 @@ import {
 } from 'lucide-react'
 import { useAccount } from 'wagmi'
 import { useAuthStore, useNotificationStore } from '../store'
+import { useSubscription } from '../hooks/useSubscription'
 import ConnectWallet from '../components/shared/ConnectWallet'
 import NotificationPanel from '../components/shared/NotificationPanel'
 
@@ -23,6 +24,7 @@ const NAV_ITEMS = [
 export default function DashboardLayout() {
   const { user, profile, signOut } = useAuthStore()
   const { address, isConnected } = useAccount()
+  const { subscription, isActive } = useSubscription()
   const { notifications, unreadCount, fetch: fetchNotifs, subscribe, markAllRead } = useNotificationStore()
   const [sidebarOpen, setSidebarOpen] = useState(false)
   const [notifOpen, setNotifOpen] = useState(false)
@@ -121,8 +123,13 @@ export default function DashboardLayout() {
               <div className="text-xs font-medium truncate">
                 {isAdmin ? 'Admin' : (profile?.username || 'User')}
               </div>
-              <div className="text-[10px] text-muted font-mono truncate">
-                {address ? address.slice(0, 6) + '...' + address.slice(-4) : ''}
+              <div className="text-[10px] text-muted font-mono truncate flex items-center gap-1.5">
+                <span>{address ? address.slice(0, 6) + '...' + address.slice(-4) : ''}</span>
+                {isActive && (
+                  <span className="badge badge-green text-[9px] uppercase">
+                    {subscription?.plan || 'pro'}
+                  </span>
+                )}
               </div>
             </div>
           </div>

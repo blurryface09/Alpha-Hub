@@ -16,6 +16,20 @@ function getSupabase() {
   })
 }
 
+function getTreasuryAddress() {
+  return (
+    process.env.TREASURY_ADDRESS ||
+    process.env.NEXT_PUBLIC_TREASURY_ADDRESS ||
+    process.env.VITE_TREASURY_ADDRESS ||
+    process.env.VITE_RECEIVER_WALLET ||
+    ''
+  )
+}
+
+function isWalletAddress(value) {
+  return /^0x[a-fA-F0-9]{40}$/.test(String(value || ''))
+}
+
 async function checkSupabase() {
   const supabase = getSupabase()
   if (!supabase) {
@@ -52,16 +66,35 @@ export default async function handler(req, res) {
     process.env.UPSTASH_REDIS_REST_URL &&
     process.env.UPSTASH_REDIS_REST_TOKEN
   )
+  const rpcConfigured = Boolean(
+    process.env.ALCHEMY_API_KEY ||
+    process.env.VITE_ALCHEMY_API_KEY ||
+    process.env.ETHERSCAN_API_KEY ||
+    process.env.VITE_ETHERSCAN_API_KEY
+  )
+  const paymentConfigured = isWalletAddress(getTreasuryAddress())
 
   const checks = {
     api: { ok: true },
     supabase,
     telegram: { ok: telegramConfigured },
     cron: { ok: cronProtected },
-    redis: { ok: redisConfigured },
+    payment: {
+      ok: paymentConfigured,
+      status: paymentConfigured ? 'healthy' : 'down',
+    },
+    rpc: {
+      ok: rpcConfigured,
+      status: rpcConfigured ? 'healthy' : 'degraded',
+    },
+    redis: {
+      ok: redisConfigured,
+      optional: true,
+      status: redisConfigured ? 'healthy' : 'optional',
+    },
   }
 
-  const degraded = Object.values(checks).some((check) => !check.ok)
+  const degraded = Object.values(checks).some((check) => !check.ok && !check.optional)
 
   return res.status(200).json({
     ok: !degraded,

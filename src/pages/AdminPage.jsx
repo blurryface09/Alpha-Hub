@@ -6,7 +6,7 @@ import toast from 'react-hot-toast'
 import {
   Shield, Users, Plus, Trash2, RefreshCw,
   Wallet, Clock, CheckCircle2, XCircle, Loader2,
-  TrendingUp, Calendar, Copy
+  TrendingUp, Calendar, Copy, CreditCard, Database, Radio, Send, Server
 } from 'lucide-react'
 
 const ADMIN_WALLET = import.meta.env.VITE_ADMIN_WALLET?.toLowerCase()
@@ -44,6 +44,7 @@ export default function AdminPage() {
 
   const [subscribers, setSubscribers] = useState([])
   const [loading, setLoading] = useState(true)
+  const [systemStatus, setSystemStatus] = useState(null)
   const [adding, setAdding] = useState(false)
   const [showAddForm, setShowAddForm] = useState(false)
 
@@ -70,7 +71,12 @@ export default function AdminPage() {
   }, [])
 
   useEffect(() => {
-    if (isAdmin) fetchSubscribers()
+    if (!isAdmin) return
+    fetchSubscribers()
+    fetch('/api/status')
+      .then(res => res.json())
+      .then(setSystemStatus)
+      .catch(() => setSystemStatus({ status: 'unreachable', checks: {} }))
   }, [isAdmin, fetchSubscribers])
 
   const activeSubscribers = subscribers.filter(s => s.verified && new Date(s.expires_at) > new Date())
@@ -165,6 +171,17 @@ export default function AdminPage() {
 
   const isActive = (s) => s.verified && new Date(s.expires_at) > new Date()
 
+  const health = systemStatus?.checks || {}
+  const healthItems = [
+    { label: 'API', value: systemStatus?.status || 'checking', ok: health.api?.ok !== false, icon: Server },
+    { label: 'Payments', value: health.payment?.status || 'checking', ok: health.payment?.ok !== false, icon: CreditCard },
+    { label: 'RPC', value: health.rpc?.status || 'checking', ok: health.rpc?.ok !== false, icon: Radio },
+    { label: 'Telegram', value: health.telegram?.ok ? 'healthy' : 'down', ok: health.telegram?.ok !== false, icon: Send },
+    { label: 'Supabase', value: health.supabase?.latencyMs != null ? `${health.supabase.latencyMs}ms` : 'checking', ok: health.supabase?.ok !== false, icon: Database },
+    { label: 'Cron', value: health.cron?.ok ? 'protected' : 'missing secret', ok: health.cron?.ok !== false, icon: Clock },
+    { label: 'Queue/Redis', value: health.redis?.status || 'optional', ok: true, icon: Radio },
+  ]
+
   if (!isAdmin) {
     return (
       <div className="flex flex-col items-center justify-center min-h-[60vh] gap-3">
@@ -233,6 +250,34 @@ export default function AdminPage() {
           sub="within 3 days"
           color="bg-amber-500/10 text-amber-400"
         />
+      </div>
+
+      <div className="card">
+        <div className="flex items-center justify-between mb-4">
+          <div>
+            <div className="section-label mb-1">System Health</div>
+            <h2 className="text-sm font-semibold">Admin operational status</h2>
+          </div>
+          <button
+            onClick={() => fetch('/api/status').then(res => res.json()).then(setSystemStatus)}
+            className="p-2 rounded-lg border border-border text-muted hover:text-text hover:bg-surface2 transition-all"
+          >
+            <RefreshCw size={14} />
+          </button>
+        </div>
+        <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-3">
+          {healthItems.map(item => (
+            <div key={item.label} className="metric-card flex items-center gap-3">
+              <div className={`w-8 h-8 rounded-lg flex items-center justify-center ${item.ok ? 'bg-green-500/10 text-green-400' : 'bg-amber-500/10 text-amber-400'}`}>
+                <item.icon size={14} />
+              </div>
+              <div className="min-w-0">
+                <div className="text-sm font-medium">{item.label}</div>
+                <div className="text-xs text-muted truncate">{item.value}</div>
+              </div>
+            </div>
+          ))}
+        </div>
       </div>
 
       {/* Add form */}

@@ -25,7 +25,6 @@ export default async function handler(req, res) {
     .select('*')
     .eq('wallet_address', walletAddress)
     .eq('verified', true)
-    .gt('expires_at', new Date().toISOString())
     .order('expires_at', { ascending: false })
     .limit(1)
     .maybeSingle()

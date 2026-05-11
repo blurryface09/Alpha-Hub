@@ -36,7 +36,8 @@ export function useSubscription() {
     checkSubscription()
   }, [checkSubscription])
 
-  const isActive = !!subscription
+  const isActive = !!subscription && new Date(subscription.expires_at) > new Date()
+  const isExpired = !!subscription && !isActive
 
   const daysRemaining = subscription
     ? Math.max(0, Math.ceil(
@@ -47,6 +48,7 @@ export function useSubscription() {
   return {
     subscription,
     isActive,
+    isExpired,
     daysRemaining,
     loading,
     error,

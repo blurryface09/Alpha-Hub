@@ -6,17 +6,14 @@ import {
   AlertTriangle,
   Bell,
   Clock,
-  Cpu,
-  Database,
-  Radio,
   Radar,
   Send,
-  Shield,
   Signal,
   Wallet,
   Zap,
 } from 'lucide-react'
 import { useAuthStore, useNotificationStore, useWhaleStore } from '../store'
+import { useSubscription } from '../hooks/useSubscription'
 import { supabase } from '../lib/supabase'
 
 function timeAgo(value) {
@@ -52,6 +49,7 @@ export default function OverviewPage() {
   const { user, profile } = useAuthStore()
   const { notifications, unreadCount, fetch: fetchNotifications } = useNotificationStore()
   const { activity, fetch: fetchWhaleActivity } = useWhaleStore()
+  const { subscription, isActive, daysRemaining } = useSubscription()
   const [stats, setStats] = useState({
     activeAutomints: 0,
     activeAlerts: 0,
@@ -62,7 +60,6 @@ export default function OverviewPage() {
     lastSync: null,
   })
   const [projects, setProjects] = useState([])
-  const [status, setStatus] = useState(null)
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
@@ -78,7 +75,6 @@ export default function OverviewPage() {
           activeAlertResult,
           mintedResult,
           profileResult,
-          statusResult,
         ] = await Promise.all([
           supabase
             .from('wl_projects')
@@ -106,11 +102,6 @@ export default function OverviewPage() {
             .select('telegram_chat_id')
             .eq('id', user.id)
             .single(),
-          fetch('/api/status').then((r) => r.json()).catch((e) => ({
-            ok: false,
-            status: 'unreachable',
-            error: e.message,
-          })),
         ])
 
         await Promise.all([
@@ -129,7 +120,6 @@ export default function OverviewPage() {
           .at(-1)
 
         setProjects(userProjects)
-        setStatus(statusResult)
         setStats({
           activeAutomints: userProjects.filter((p) =>
             p.status === 'live' &&
@@ -191,41 +181,6 @@ export default function OverviewPage() {
       .slice(0, 12)
   }, [activity, notifications, projects])
 
-  const healthItems = [
-    {
-      label: 'API',
-      value: status?.status || 'checking',
-      ok: status?.checks?.api?.ok !== false,
-      icon: Cpu,
-    },
-    {
-      label: 'Supabase',
-      value: status?.checks?.supabase?.latencyMs != null
-        ? `${status.checks.supabase.latencyMs}ms`
-        : status?.checks?.supabase?.ok ? 'connected' : 'check env',
-      ok: status?.checks?.supabase?.ok !== false,
-      icon: Database,
-    },
-    {
-      label: 'Telegram',
-      value: stats.telegramConnected ? 'connected' : 'not linked',
-      ok: stats.telegramConnected,
-      icon: Send,
-    },
-    {
-      label: 'Cron Guard',
-      value: status?.checks?.cron?.ok ? 'protected' : 'missing secret',
-      ok: status?.checks?.cron?.ok !== false,
-      icon: Shield,
-    },
-    {
-      label: 'Redis',
-      value: status?.checks?.redis?.ok ? 'enabled' : 'optional',
-      ok: true,
-      icon: Radio,
-    },
-  ]
-
   const summary = [
     { label: 'Active Automints', value: stats.activeAutomints, icon: Zap, tone: 'text-green' },
     { label: 'Active Alerts', value: stats.activeAlerts, icon: Bell, tone: stats.activeAlerts ? 'text-accent2' : 'text-muted' },
@@ -233,6 +188,29 @@ export default function OverviewPage() {
     { label: 'Active Mints', value: stats.activeProjects, icon: Clock, tone: 'text-accent3' },
     { label: 'Telegram', value: stats.telegramConnected ? 'On' : 'Off', icon: Send, tone: stats.telegramConnected ? 'text-green' : 'text-muted' },
     { label: 'Last Sync', value: timeAgo(stats.lastSync), icon: Signal, tone: 'text-accent' },
+  ]
+
+  const upcomingMints = projects.filter((p) => p.status === 'upcoming').length
+  const recentWhaleAlerts = activity.filter((a) => !a.is_mint).slice(0, 10).length
+  const lastDetection = [...activity]
+    .map((a) => a.timestamp || a.created_at)
+    .filter(Boolean)
+    .sort()
+    .at(-1)
+
+  const userValueItems = [
+    { label: 'Active Monitors', value: stats.walletsTracked + stats.activeProjects, icon: Signal, tone: 'text-accent' },
+    { label: 'Recent Whale Alerts', value: recentWhaleAlerts, icon: Radar, tone: 'text-accent' },
+    { label: 'Upcoming Mints', value: upcomingMints, icon: Clock, tone: 'text-accent3' },
+    { label: 'MintGuard Status', value: stats.activeAutomints ? 'Armed' : 'Watching', icon: Zap, tone: stats.activeAutomints ? 'text-green' : 'text-muted' },
+    { label: 'Wallets Tracked', value: stats.walletsTracked, icon: Wallet, tone: 'text-accent' },
+    { label: 'Last Detection', value: timeAgo(lastDetection), icon: Activity, tone: 'text-green' },
+    {
+      label: 'Subscription',
+      value: isActive ? `${subscription?.plan || 'active'} (${daysRemaining}d)` : 'inactive',
+      icon: Bell,
+      tone: isActive ? 'text-green' : 'text-accent3',
+    },
   ]
 
   return (
@@ -246,13 +224,13 @@ export default function OverviewPage() {
           <div className="section-label mb-1">ALPHA HUB - PRIVATE BETA</div>
           <h1 className="text-2xl font-bold mb-1">Command Center</h1>
           <p className="text-sm text-muted">
-            Realtime wallet intelligence, mint automation, alerts, and operational health.
+            Realtime wallet intelligence, mint automation, alerts, and monitor activity.
           </p>
         </div>
         <div className="flex items-center gap-2 rounded-lg border border-border bg-surface2 px-3 py-2">
-          <div className={status?.ok === false ? 'dot-warning' : 'dot-live'} />
+          <div className="dot-live" />
           <span className="text-xs font-mono text-muted">
-            {status?.ok === false ? 'DEGRADED' : 'LIVE SYNC ACTIVE'}
+            LIVE SYNC ACTIVE
           </span>
         </div>
       </motion.div>
@@ -319,18 +297,17 @@ export default function OverviewPage() {
 
         <aside className="space-y-4">
           <section className="card">
-            <div className="section-label">System Health</div>
+            <div className="section-label">Monitor Stack</div>
             <div className="space-y-3">
-              {healthItems.map((item) => (
+              {userValueItems.map((item) => (
                 <div key={item.label} className="flex items-center gap-3">
-                  <div className={`h-8 w-8 rounded-lg bg-surface2 border border-border flex items-center justify-center ${item.ok ? 'text-green' : 'text-accent3'}`}>
+                  <div className={`h-8 w-8 rounded-lg bg-surface2 border border-border flex items-center justify-center ${item.tone}`}>
                     <item.icon size={14} />
                   </div>
                   <div className="min-w-0 flex-1">
                     <div className="text-sm font-medium">{item.label}</div>
                     <div className="text-xs text-muted truncate">{item.value}</div>
                   </div>
-                  <div className={item.ok ? 'dot-live' : 'dot-warning'} />
                 </div>
               ))}
             </div>

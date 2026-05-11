@@ -1,18 +1,21 @@
 import { useState } from 'react'
-import { useAccount, useSendTransaction } from 'wagmi'
-import { parseEther } from 'viem'
+import { useAccount, usePublicClient, useSendTransaction } from 'wagmi'
+import { isAddress, parseEther } from 'viem'
 import toast from 'react-hot-toast'
 import { Zap, Clock, Shield, ChevronRight, Loader2, CheckCircle2 } from 'lucide-react'
 import ConnectWallet from './shared/ConnectWallet'
 import { getAuthToken } from '../lib/supabase'
 
-const RECEIVER_WALLET = import.meta.env.VITE_RECEIVER_WALLET
+const TREASURY_ADDRESS =
+  import.meta.env.VITE_TREASURY_ADDRESS ||
+  import.meta.env.NEXT_PUBLIC_TREASURY_ADDRESS ||
+  import.meta.env.VITE_RECEIVER_WALLET
 
 const PLANS = [
   {
     id: 'weekly',
     label: '7 Days',
-    price: '0.0015',
+    priceEth: '0.0015',
     priceUSD: '~$5',
     color: 'from-cyan-500/20 to-cyan-500/5',
     border: 'border-cyan-500/30',
@@ -22,7 +25,7 @@ const PLANS = [
   {
     id: 'monthly',
     label: '30 Days',
-    price: '0.005',
+    priceEth: '0.005',
     priceUSD: '~$15',
     color: 'from-violet-500/20 to-violet-500/5',
     border: 'border-violet-500/40',
@@ -32,7 +35,7 @@ const PLANS = [
   {
     id: 'quarterly',
     label: '90 Days',
-    price: '0.012',
+    priceEth: '0.012',
     priceUSD: '~$35',
     color: 'from-amber-500/20 to-amber-500/5',
     border: 'border-amber-500/30',
@@ -47,13 +50,20 @@ const FEATURES = [
   { icon: Clock, text: 'Alpha Tools — forensic wallet analysis' },
 ]
 
-export default function Paywall({ onSuccess }) {
-  const { address, isConnected } = useAccount()
+const SUPPORTED_PAYMENT_CHAINS = new Set([1, 8453, 56])
+
+export default function Paywall({ onSuccess, expired = false }) {
+  const { address, chain, isConnected } = useAccount()
   const [selectedPlan, setSelectedPlan] = useState('monthly')
   const [step, setStep] = useState('select')
   const [pendingTxHash, setPendingTxHash] = useState(null)
 
   const { sendTransactionAsync } = useSendTransaction()
+  const publicClient = usePublicClient()
+  const treasuryValid = Boolean(TREASURY_ADDRESS && isAddress(TREASURY_ADDRESS))
+  const supportedChain = !chain?.id || SUPPORTED_PAYMENT_CHAINS.has(chain.id)
+  const processing = step !== 'select'
+  const plan = PLANS.find(p => p.id === selectedPlan)
 
   const handlePay = async () => {
     if (!isConnected || !address) {
@@ -61,24 +71,55 @@ export default function Paywall({ onSuccess }) {
       return
     }
 
-    const plan = PLANS.find(p => p.id === selectedPlan)
+    if (!plan) {
+      toast.error('Select a plan first')
+      return
+    }
+
+    if (!treasuryValid) {
+      toast.error('Payment is temporarily unavailable. Please try again later.')
+      return
+    }
+
+    if (!supportedChain) {
+      toast.error('Wrong network or unsupported chain')
+      return
+    }
+
+    if (processing) return
 
     try {
       setStep('confirming')
 
+      if (import.meta.env.DEV) {
+        console.info('payment:start', {
+          selectedPlan: plan.id,
+          from: address,
+          treasury: TREASURY_ADDRESS,
+          chainId: chain?.id,
+          valueEth: plan.priceEth,
+        })
+      }
+
       const txHash = await sendTransactionAsync({
-        to: RECEIVER_WALLET,
-        value: parseEther(plan.price),
+        to: TREASURY_ADDRESS,
+        value: parseEther(plan.priceEth),
       })
 
       setPendingTxHash(txHash)
       setStep('verifying')
 
-      await new Promise(r => setTimeout(r, 5000))
+      if (!publicClient) throw new Error('RPC unavailable. Try again in a moment.')
+
+      await publicClient.waitForTransactionReceipt({
+        hash: txHash,
+        confirmations: 1,
+      })
+
       const token = await getAuthToken()
       if (!token) throw new Error('Sign in again before verifying payment')
 
-      const res = await fetch('/api/verify-payment', {
+      const res = await fetch('/api/payments/verify', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -87,7 +128,8 @@ export default function Paywall({ onSuccess }) {
         body: JSON.stringify({
           txHash,
           walletAddress: address,
-          plan: selectedPlan,
+          planId: selectedPlan,
+          chainId: chain?.id,
         }),
       })
 
@@ -98,7 +140,7 @@ export default function Paywall({ onSuccess }) {
       }
 
       setStep('done')
-      toast.success(`Access activated! ${data.daysGranted} days unlocked.`)
+      toast.success('Subscription activated.')
 
       setTimeout(() => {
         onSuccess?.()
@@ -108,8 +150,14 @@ export default function Paywall({ onSuccess }) {
       setStep('select')
       if (err.message?.includes('rejected') || err.code === 4001) {
         toast.error('Transaction cancelled')
+      } else if (err.message?.toLowerCase().includes('insufficient')) {
+        toast.error('Insufficient funds for this payment')
+      } else if (err.message?.toLowerCase().includes('chain') || err.message?.toLowerCase().includes('network')) {
+        toast.error('Wrong network or unsupported chain')
+      } else if (err.message?.toLowerCase().includes('treasury') || err.message?.toLowerCase().includes('address')) {
+        toast.error('Payment is temporarily unavailable. Please try again later.')
       } else {
-        toast.error(err.message || 'Something went wrong')
+        toast.error(err.message || 'Payment failed. Please try again.')
       }
     }
   }
@@ -146,7 +194,9 @@ export default function Paywall({ onSuccess }) {
             On-Chain Intelligence
           </h1>
           <p className="text-gray-400 text-sm">
-            Pay with your wallet. No account needed. Access is instant.
+            {expired
+              ? 'Your access expired. Renew to continue.'
+              : 'Pay with your wallet. No account needed. Access is instant.'}
           </p>
         </div>
 
@@ -197,7 +247,7 @@ export default function Paywall({ onSuccess }) {
               )}
               <span className="text-xs text-gray-400 mb-1">{plan.label}</span>
               <span className={`text-lg font-bold ${selectedPlan === plan.id ? plan.accent : 'text-white'}`}>
-                {plan.price}
+                {plan.priceEth}
               </span>
               <span className="text-[10px] text-gray-500">ETH</span>
               <span className="text-[10px] text-gray-500 mt-0.5">{plan.priceUSD}</span>
@@ -208,9 +258,9 @@ export default function Paywall({ onSuccess }) {
         {/* Pay button — only active when wallet connected */}
         <button
           onClick={handlePay}
-          disabled={step !== 'select' || !isConnected}
+          disabled={processing || !isConnected || !treasuryValid || !supportedChain || !plan}
           className={`w-full flex items-center justify-center gap-2 py-4 rounded-xl font-semibold text-white transition-all duration-200
-            ${isConnected
+            ${isConnected && treasuryValid && supportedChain
               ? 'bg-violet-600 hover:bg-violet-500 cursor-pointer'
               : 'bg-violet-600/30 cursor-not-allowed opacity-50'
             }`}
@@ -219,12 +269,16 @@ export default function Paywall({ onSuccess }) {
             <><Loader2 className="w-4 h-4 animate-spin" /> Confirm in wallet...</>
           )}
           {step === 'verifying' && (
-            <><Loader2 className="w-4 h-4 animate-spin" /> Verifying payment...</>
+            <><Loader2 className="w-4 h-4 animate-spin" /> Confirming payment on-chain...</>
           )}
           {step === 'select' && (
             <>
-              {isConnected
-                ? <>Pay {PLANS.find(p => p.id === selectedPlan)?.price} ETH <ChevronRight className="w-4 h-4" /></>
+              {!treasuryValid
+                ? 'Payment temporarily unavailable'
+                : !supportedChain
+                ? 'Switch to ETH, Base, or BNB'
+                : isConnected
+                ? <>Pay {PLANS.find(p => p.id === selectedPlan)?.priceEth} ETH <ChevronRight className="w-4 h-4" /></>
                 : 'Connect wallet to continue'
               }
             </>

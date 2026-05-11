@@ -17,6 +17,9 @@ create table if not exists public.audit_logs (
 alter table if exists public.subscriptions
   add column if not exists user_id uuid references auth.users(id) on delete set null;
 
+alter table if exists public.subscriptions
+  add column if not exists status text not null default 'active';
+
 alter table if exists public.whale_activity
   add column if not exists user_id uuid references auth.users(id) on delete cascade;
 
