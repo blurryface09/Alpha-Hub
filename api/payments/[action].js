@@ -97,13 +97,14 @@ async function createPayment(req, res, user) {
   if (plan.id === 'free') {
     const now = new Date()
     const expiresAt = new Date(now.getTime() + getPlanDurationDays(plan, billingCycle) * 24 * 60 * 60 * 1000)
+    const freeReference = `free_${user.id}_${Date.now()}`
     const { data, error } = await upsertSubscription(supabase, {
       user_id: user.id,
       wallet_address: walletAddress.toLowerCase(),
       plan: 'free',
       billing_cycle: billingCycle,
       status: 'free',
-      tx_hash: null,
+      tx_hash: freeReference,
       starts_at: now.toISOString(),
       started_at: now.toISOString(),
       expires_at: expiresAt.toISOString(),
