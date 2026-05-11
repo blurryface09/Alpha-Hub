@@ -1,26 +1,26 @@
 import React, { useState, useEffect, useCallback } from 'react'
 import { useAccount } from 'wagmi'
 import { getAuthToken } from '../lib/supabase'
-import { getPaymentChainKey, PRICING_PLANS } from '../lib/pricing'
+import { PAYMENT_CONFIG } from '../config/payments'
 import toast from 'react-hot-toast'
 import {
   Shield, Users, Plus, Trash2, RefreshCw,
   Wallet, Clock, CheckCircle2, XCircle, Loader2,
-  TrendingUp, Calendar, Copy, CreditCard, Database, Radio, Send, Server
+  TrendingUp, Calendar, Copy, CreditCard, Database, Radio, Send, Server, ExternalLink
 } from 'lucide-react'
 
 const ADMIN_WALLET = import.meta.env.VITE_ADMIN_WALLET?.toLowerCase()
 
-const PLAN_DAYS = Object.fromEntries(
-  PRICING_PLANS.filter(plan => plan.enabled).map(plan => [plan.id, plan.durationDays])
-)
+const PLAN_DAYS = {
+  free: 30,
+  pro: 30,
+  elite: 30,
+}
 
 const PLAN_COLORS = {
-  test: 'text-emerald-400 bg-emerald-500/10 border-emerald-500/20',
-  weekly: 'text-cyan-400 bg-cyan-500/10 border-cyan-500/20',
-  monthly: 'text-violet-400 bg-violet-500/10 border-violet-500/20',
-  quarterly: 'text-amber-400 bg-amber-500/10 border-amber-500/20',
-  founder: 'text-rose-400 bg-rose-500/10 border-rose-500/20',
+  free: 'text-slate-300 bg-slate-500/10 border-slate-500/20',
+  pro: 'text-cyan-400 bg-cyan-500/10 border-cyan-500/20',
+  elite: 'text-violet-400 bg-violet-500/10 border-violet-500/20',
 }
 
 function StatCard({ icon: Icon, label, value, sub, color }) {
@@ -43,15 +43,15 @@ export default function AdminPage() {
   const isAdmin = isConnected && address?.toLowerCase() === ADMIN_WALLET
 
   const [subscribers, setSubscribers] = useState([])
+  const [pendingPayments, setPendingPayments] = useState([])
   const [loading, setLoading] = useState(true)
   const [systemStatus, setSystemStatus] = useState(null)
   const [adding, setAdding] = useState(false)
   const [showAddForm, setShowAddForm] = useState(false)
 
   const [newWallet, setNewWallet] = useState('')
-  const [newPlan, setNewPlan] = useState('monthly')
+  const [newPlan, setNewPlan] = useState('pro')
   const [newNote, setNewNote] = useState('')
-  const testGrantsEnabled = getPaymentChainKey() === 'baseSepolia' || import.meta.env.DEV
 
   const fetchSubscribers = useCallback(async () => {
     setLoading(true)
@@ -64,6 +64,7 @@ export default function AdminPage() {
       const data = await res.json()
       if (!res.ok) throw new Error(data.error || 'Failed to load subscribers')
       setSubscribers(data.subscriptions || [])
+      setPendingPayments(data.pendingPayments || [])
     } catch (err) {
       toast.error(err.message || 'Failed to load subscribers')
     } finally {
@@ -80,18 +81,17 @@ export default function AdminPage() {
       .catch(() => setSystemStatus({ status: 'unreachable', checks: {} }))
   }, [isAdmin, fetchSubscribers])
 
-  const activeSubscribers = subscribers.filter(s => s.verified && new Date(s.expires_at) > new Date())
+  const activeSubscribers = subscribers.filter(s => s.status === 'active' && s.verified && new Date(s.expires_at) > new Date())
   const totalEth = subscribers.reduce((sum, s) => sum + parseFloat(s.amount_eth || 0), 0)
 
-  const handleAddSubscriber = async ({ testGrant = false } = {}) => {
+  const handleAddSubscriber = async () => {
     if (!newWallet || !newWallet.startsWith('0x') || newWallet.length !== 42) {
       toast.error('Enter a valid wallet address')
       return
     }
 
-    setAdding(true)
+      setAdding(true)
     try {
-      const planToGrant = testGrant ? 'test' : newPlan
       const token = await getAuthToken()
       if (!token) throw new Error('Sign in again to grant access')
       const res = await fetch('/api/admin-subscriptions', {
@@ -102,14 +102,14 @@ export default function AdminPage() {
         },
         body: JSON.stringify({
           walletAddress: newWallet,
-          plan: planToGrant,
-          reason: testGrant ? 'admin_test_grant' : 'manual_admin_grant',
+          plan: newPlan,
+          reason: 'manual_admin_grant',
         }),
       })
       const result = await res.json()
       if (!res.ok) throw new Error(result.error || 'Failed to add subscriber')
 
-      toast.success((testGrant ? 'Test access granted to ' : 'Access granted to ') + newWallet.slice(0, 6) + '...' + newWallet.slice(-4))
+      toast.success('Access granted to ' + newWallet.slice(0, 6) + '...' + newWallet.slice(-4))
       setNewWallet('')
       setNewNote('')
       setShowAddForm(false)
@@ -118,6 +118,31 @@ export default function AdminPage() {
       toast.error(err.message || 'Failed to add subscriber')
     } finally {
       setAdding(false)
+    }
+  }
+
+  const handlePaymentDecision = async (payment, action) => {
+    const label = action === 'approve' ? 'approve' : 'reject'
+    if (!confirm(`${label[0].toUpperCase() + label.slice(1)} payment ${payment.tx_hash.slice(0, 10)}...?`)) return
+
+    try {
+      const token = await getAuthToken()
+      if (!token) throw new Error('Sign in again to review payments')
+      const endpoint = action === 'approve' ? '/api/admin/payments/approve' : '/api/admin/payments/reject'
+      const res = await fetch(endpoint, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({ paymentId: payment.id }),
+      })
+      const result = await res.json()
+      if (!res.ok) throw new Error(result.error || `Failed to ${label} payment`)
+      toast.success(action === 'approve' ? 'Subscription activated' : 'Payment rejected')
+      fetchSubscribers()
+    } catch (err) {
+      toast.error(err.message || `Failed to ${label} payment`)
     }
   }
 
@@ -175,7 +200,7 @@ export default function AdminPage() {
     return Math.max(0, Math.ceil(diff / (1000 * 60 * 60 * 24)))
   }
 
-  const isActive = (s) => s.verified && new Date(s.expires_at) > new Date()
+  const isActive = (s) => s.status === 'active' && s.verified && new Date(s.expires_at) > new Date()
 
   const health = systemStatus?.checks || {}
   const healthItems = [
@@ -246,7 +271,7 @@ export default function AdminPage() {
           icon={CheckCircle2}
           label="Verified"
           value={subscribers.filter(s => s.verified).length}
-          sub="paid subscriptions"
+          sub={`${pendingPayments.length} pending`}
           color="bg-green-500/10 text-green-400"
         />
         <StatCard
@@ -312,7 +337,7 @@ export default function AdminPage() {
                 Plan
               </label>
               <div className="grid grid-cols-3 gap-2">
-                {Object.keys(PLAN_DAYS).filter(plan => plan !== 'test' || testGrantsEnabled).map(plan => (
+                {Object.keys(PLAN_DAYS).map(plan => (
                   <button
                     key={plan}
                     onClick={() => setNewPlan(plan)}
@@ -338,15 +363,6 @@ export default function AdminPage() {
                 {adding ? <Loader2 size={14} className="animate-spin" /> : <CheckCircle2 size={14} />}
                 {adding ? 'Granting...' : 'Grant Access'}
               </button>
-              {testGrantsEnabled && (
-                <button
-                  onClick={() => handleAddSubscriber({ testGrant: true })}
-                  disabled={adding}
-                  className="flex items-center justify-center gap-2 px-3 py-2.5 rounded-lg border border-emerald-500/30 bg-emerald-500/10 text-emerald-300 text-sm font-semibold hover:bg-emerald-500/15 disabled:opacity-50 transition-all"
-                >
-                  Grant Test Access
-                </button>
-              )}
               <button
                 onClick={() => { setShowAddForm(false); setNewWallet('') }}
                 className="px-4 py-2.5 rounded-lg border border-border text-muted text-sm hover:text-text transition-all"
@@ -357,6 +373,69 @@ export default function AdminPage() {
           </div>
         </div>
       )}
+
+      <div className="card overflow-hidden">
+        <div className="px-5 py-3 border-b border-border flex items-center justify-between">
+          <div>
+            <h3 className="text-sm font-semibold text-text">Pending Payments</h3>
+            <p className="text-xs text-muted mt-0.5">Manual review queue for Base ETH payments</p>
+          </div>
+          <span className="text-xs text-muted">{pendingPayments.length} pending</span>
+        </div>
+
+        {pendingPayments.length === 0 ? (
+          <div className="flex flex-col items-center justify-center py-10 gap-2">
+            <CreditCard size={28} className="text-muted" />
+            <p className="text-sm text-muted">No pending payments</p>
+          </div>
+        ) : (
+          <div className="divide-y divide-border">
+            {pendingPayments.map(payment => (
+              <div key={payment.id} className="px-5 py-4 grid grid-cols-1 xl:grid-cols-[1.3fr_.8fr_.8fr_.9fr_1fr_auto] gap-3 items-center hover:bg-surface2/50 transition-all">
+                <div>
+                  <div className="text-xs font-mono text-text">
+                    {payment.wallet_address.slice(0, 8)}...{payment.wallet_address.slice(-6)}
+                  </div>
+                  <div className="text-[10px] text-muted mt-1">
+                    {new Date(payment.created_at).toLocaleString()}
+                  </div>
+                </div>
+                <span className={`text-[10px] px-2 py-1 rounded-full border capitalize w-fit ${PLAN_COLORS[payment.plan] || PLAN_COLORS.pro}`}>
+                  {payment.plan}
+                </span>
+                <span className="text-xs text-muted capitalize">{payment.billing_cycle}</span>
+                <span className="text-xs text-text">{payment.amount_eth} ETH</span>
+                <div className="flex items-center gap-2">
+                  <span className="text-xs text-muted">${payment.amount_usd}</span>
+                  <a
+                    href={`${PAYMENT_CONFIG.explorerBaseUrl}/${payment.tx_hash}`}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="text-cyan-400 hover:text-cyan-300"
+                    title="View transaction"
+                  >
+                    <ExternalLink size={13} />
+                  </a>
+                </div>
+                <div className="flex items-center gap-2 justify-end">
+                  <button
+                    onClick={() => handlePaymentDecision(payment, 'approve')}
+                    className="px-3 py-1.5 rounded-lg bg-green-500/10 border border-green-500/20 text-green-300 text-xs font-semibold hover:bg-green-500/15"
+                  >
+                    Approve
+                  </button>
+                  <button
+                    onClick={() => handlePaymentDecision(payment, 'reject')}
+                    className="px-3 py-1.5 rounded-lg bg-red-500/10 border border-red-500/20 text-red-300 text-xs font-semibold hover:bg-red-500/15"
+                  >
+                    Reject
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
 
       {/* Subscribers list */}
       <div className="card overflow-hidden">
@@ -407,6 +486,8 @@ export default function AdminPage() {
                       <span className="text-[10px] text-green-400">
                         {daysRemaining(sub.expires_at)}d remaining
                       </span>
+                    ) : sub.status === 'pending_verification' ? (
+                      <span className="text-[10px] text-amber-400">Pending review</span>
                     ) : (
                       <span className="text-[10px] text-red-400">Expired</span>
                     )}

@@ -36,8 +36,14 @@ export function useSubscription() {
     checkSubscription()
   }, [checkSubscription])
 
-  const isActive = !!subscription && new Date(subscription.expires_at) > new Date()
-  const isExpired = !!subscription && !isActive
+  const isActive = !!subscription &&
+    subscription.status === 'active' &&
+    !!subscription.expires_at &&
+    new Date(subscription.expires_at) > new Date()
+  const isFree = subscription?.status === 'free' || subscription?.plan === 'free'
+  const isPending = subscription?.status === 'pending_verification'
+  const hasBasicAccess = isActive || isFree || isPending
+  const isExpired = !!subscription && !isActive && !isFree && !isPending
 
   const daysRemaining = subscription
     ? Math.max(0, Math.ceil(
@@ -48,6 +54,9 @@ export function useSubscription() {
   return {
     subscription,
     isActive,
+    isFree,
+    isPending,
+    hasBasicAccess,
     isExpired,
     daysRemaining,
     loading,

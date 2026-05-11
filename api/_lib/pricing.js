@@ -1,81 +1,69 @@
-export const PAYMENT_CHAINS = {
-  base: {
-    id: 8453,
-    key: 'base',
-    name: 'Base',
-    label: 'Base Mainnet',
-    testnet: false,
-  },
-  baseSepolia: {
-    id: 84532,
-    key: 'baseSepolia',
-    name: 'Base Sepolia',
-    label: 'Base Sepolia Testnet',
-    testnet: true,
-  },
+export const PAYMENT_CONFIG = {
+  receiverAddress: '0x73BB3FD47A67254635A86030c3Fd742219f155AB',
+  chainId: 8453,
+  chainName: 'Base',
+  tokenSymbol: 'ETH',
+  explorerBaseUrl: 'https://basescan.org/tx',
+  activationMode: process.env.PAYMENT_ACTIVATION_MODE || 'manual',
 }
 
 export const PRICING_PLANS = {
-  test: {
-    id: 'test',
-    name: 'Test Plan',
-    durationDays: 1,
-    priceEth: '0.000001',
+  free: {
+    id: 'free',
+    name: 'Free',
+    priceUsdMonthly: 0,
+    priceUsdAnnual: 0,
+    durationDaysMonthly: 30,
+    durationDaysAnnual: 365,
     enabled: true,
-    testOnly: true,
   },
-  weekly: {
-    id: 'weekly',
-    name: 'Starter',
-    durationDays: 7,
-    priceEth: '0.001',
+  pro: {
+    id: 'pro',
+    name: 'Pro',
+    priceUsdMonthly: 19,
+    priceUsdAnnual: 190,
+    durationDaysMonthly: 30,
+    durationDaysAnnual: 365,
     enabled: true,
-    testOnly: false,
   },
-  monthly: {
-    id: 'monthly',
-    name: 'Popular',
-    durationDays: 30,
-    priceEth: '0.0035',
+  elite: {
+    id: 'elite',
+    name: 'Elite',
+    priceUsdMonthly: 49,
+    priceUsdAnnual: 490,
+    durationDaysMonthly: 30,
+    durationDaysAnnual: 365,
     enabled: true,
-    testOnly: false,
-  },
-  quarterly: {
-    id: 'quarterly',
-    name: 'Best Value',
-    durationDays: 90,
-    priceEth: '0.009',
-    enabled: true,
-    testOnly: false,
-  },
-  founder: {
-    id: 'founder',
-    name: 'Founder',
-    durationDays: 3650,
-    priceEth: '0.025',
-    enabled: false,
-    testOnly: false,
   },
 }
 
 export function getPaymentChainKey() {
-  const key = process.env.NEXT_PUBLIC_PAYMENT_CHAIN || process.env.VITE_PAYMENT_CHAIN
-  return key === 'base' || key === 'baseSepolia' ? key : null
+  return 'base'
 }
 
 export function getPaymentChain() {
-  const key = getPaymentChainKey()
-  return key ? PAYMENT_CHAINS[key] : null
+  return {
+    id: PAYMENT_CONFIG.chainId,
+    key: 'base',
+    name: PAYMENT_CONFIG.chainName,
+    label: PAYMENT_CONFIG.chainName,
+    testnet: false,
+  }
 }
 
-export function isTestPaymentMode() {
-  return getPaymentChainKey() === 'baseSepolia' || process.env.NODE_ENV !== 'production'
+export function getActivationMode() {
+  return PAYMENT_CONFIG.activationMode === 'automatic' ? 'automatic' : 'manual'
 }
 
 export function getPlan(planId) {
   const plan = PRICING_PLANS[planId]
-  if (!plan || !plan.enabled) return null
-  if (plan.testOnly && !isTestPaymentMode()) return null
-  if (!plan.testOnly && getPaymentChainKey() === 'baseSepolia') return null
-  return plan
+  return plan?.enabled ? plan : null
+}
+
+export function getPlanPriceUsd(plan, billingCycle = 'monthly') {
+  return billingCycle === 'annual' ? plan.priceUsdAnnual : plan.priceUsdMonthly
+}
+
+export function getPlanDurationDays(plan, billingCycle = 'monthly') {
+  return billingCycle === 'annual' ? plan.durationDaysAnnual : plan.durationDaysMonthly
 }

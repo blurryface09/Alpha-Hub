@@ -24,7 +24,7 @@ const NAV_ITEMS = [
 export default function DashboardLayout() {
   const { user, profile, signOut } = useAuthStore()
   const { address, isConnected } = useAccount()
-  const { subscription, isActive } = useSubscription()
+  const { subscription, isActive, isPending, isFree } = useSubscription()
   const { notifications, unreadCount, fetch: fetchNotifs, subscribe, markAllRead } = useNotificationStore()
   const [sidebarOpen, setSidebarOpen] = useState(false)
   const [notifOpen, setNotifOpen] = useState(false)
@@ -125,9 +125,11 @@ export default function DashboardLayout() {
               </div>
               <div className="text-[10px] text-muted font-mono truncate flex items-center gap-1.5">
                 <span>{address ? address.slice(0, 6) + '...' + address.slice(-4) : ''}</span>
-                {isActive && (
-                  <span className="badge badge-green text-[9px] uppercase">
-                    {subscription?.plan || 'pro'}
+                {subscription && (
+                  <span className={`badge text-[9px] uppercase ${
+                    isActive ? 'badge-green' : isPending ? 'bg-amber-500/10 text-amber-400 border border-amber-500/20' : isFree ? 'bg-surface border border-border text-muted' : 'bg-red-500/10 text-red-400 border border-red-500/20'
+                  }`}>
+                    {isPending ? 'pending' : subscription?.plan || 'free'}
                   </span>
                 )}
               </div>

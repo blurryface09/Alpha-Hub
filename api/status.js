@@ -1,5 +1,5 @@
 import { createClient } from '@supabase/supabase-js'
-import { getPaymentChain } from './_lib/pricing.js'
+import { PAYMENT_CONFIG, getPaymentChain } from './_lib/pricing.js'
 
 const startedAt = Date.now()
 
@@ -58,19 +58,16 @@ export default async function handler(req, res) {
     process.env.UPSTASH_REDIS_REST_TOKEN
   )
   const rpcConfigured = Boolean(
+    process.env.BASE_RPC_URL ||
     process.env.ALCHEMY_API_KEY ||
-    process.env.VITE_ALCHEMY_API_KEY ||
-    process.env.BASE_SEPOLIA_RPC_URL
+    process.env.VITE_ALCHEMY_API_KEY
   )
   const paymentChain = getPaymentChain()
-  const publicTreasuryConfigured = isWalletAddress(process.env.NEXT_PUBLIC_TREASURY_ADDRESS || process.env.VITE_TREASURY_ADDRESS)
-  const serverTreasuryConfigured = isWalletAddress(process.env.TREASURY_ADDRESS || process.env.VITE_RECEIVER_WALLET)
-  const paymentConfigured = publicTreasuryConfigured && serverTreasuryConfigured
+  const receiverConfigured = isWalletAddress(PAYMENT_CONFIG.receiverAddress)
   const missingPaymentEnv = [
-    !paymentChain ? 'NEXT_PUBLIC_PAYMENT_CHAIN' : null,
-    !serverTreasuryConfigured ? 'TREASURY_ADDRESS' : null,
-    !publicTreasuryConfigured ? 'NEXT_PUBLIC_TREASURY_ADDRESS' : null,
-    !rpcConfigured ? 'RPC URL for selected chain' : null,
+    !receiverConfigured ? 'receiver wallet' : null,
+    !process.env.PAYMENT_ACTIVATION_MODE ? 'PAYMENT_ACTIVATION_MODE' : null,
+    !rpcConfigured ? 'BASE_RPC_URL or ALCHEMY_API_KEY' : null,
   ].filter(Boolean)
 
   const checks = {
@@ -79,9 +76,11 @@ export default async function handler(req, res) {
     telegram: { ok: telegramConfigured },
     cron: { ok: cronProtected },
     payment: {
-      ok: paymentConfigured && Boolean(paymentChain),
-      status: paymentConfigured && paymentChain ? 'healthy' : 'down',
+      ok: receiverConfigured,
+      status: receiverConfigured ? 'healthy' : 'down',
       chain: paymentChain?.key || null,
+      activationMode: PAYMENT_CONFIG.activationMode,
+      receiver: PAYMENT_CONFIG.receiverAddress,
       missing: missingPaymentEnv,
     },
     rpc: {

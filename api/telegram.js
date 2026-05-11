@@ -1,4 +1,6 @@
 import { createClient } from '@supabase/supabase-js'
+import { createServiceClient, requireUser } from './_lib/auth.js'
+import { rateLimit, sendRateLimit } from './_lib/redis.js'
 
 const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN
 const WEBHOOK_SECRET = process.env.TELEGRAM_WEBHOOK_SECRET
@@ -26,6 +28,77 @@ async function sendMessage(chatId, text, extra = {}) {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ chat_id: chatId, text, parse_mode: 'HTML', ...extra }),
   })
+}
+
+async function handleAppNotification(req, res) {
+  const user = await requireUser(req, res)
+  if (!user) return
+
+  const limited = await rateLimit(`rl:telegram-notify:${user.id}`, 30, 60)
+  if (!limited.allowed) return sendRateLimit(res, limited)
+
+  const { project, type } = req.body || {}
+  if (!project) return res.status(400).json({ error: 'Missing project' })
+
+  const appSupabase = createServiceClient()
+  const { data: profile } = await appSupabase
+    .from('profiles')
+    .select('telegram_chat_id')
+    .eq('id', user.id)
+    .single()
+
+  const chatId = profile?.telegram_chat_id
+  if (!chatId) return res.status(400).json({ error: 'Telegram is not linked' })
+
+  const chain = (project.chain || 'eth').toUpperCase()
+  const price = project.mint_price || 'Free'
+  let text = ''
+  let keyboard = null
+
+  switch (type) {
+    case 'reminder':
+      text =
+        `⏰ <b>Mint in 30 min: ${project.name}</b>\n\n` +
+        `${chain} · ${price} · ${project.wl_type}\n` +
+        `🕐 ${new Date(project.mint_date).toLocaleString()}`
+      break
+    case 'live': {
+      const isAuto = project.mint_mode === 'auto'
+      text =
+        `🚨 <b>LIVE NOW: ${project.name}</b>\n\n` +
+        `${chain} · ${price} · ${project.wl_type}\n` +
+        (isAuto ? `⚡ Auto-mint will fire shortly.` : `Tap below to confirm or skip.`)
+      if (!isAuto && project.contract_address) {
+        keyboard = {
+          inline_keyboard: [[
+            { text: '✅ Confirm Mint', callback_data: `confirm:${project.id}` },
+            { text: '❌ Skip', callback_data: `skip:${project.id}` },
+          ]],
+        }
+      }
+      break
+    }
+    case 'auto':
+      text =
+        `⚡ <b>Auto-minting: ${project.name}</b>\n\n` +
+        `${chain} · ${price}\nTransaction firing now...`
+      break
+    case 'success':
+      text =
+        `✅ <b>Mint Success: ${project.name}</b>\n\n` +
+        `TX: <code>${(project.tx_hash || '').slice(0, 20)}...</code>`
+      break
+    case 'failed':
+      text =
+        `❌ <b>Mint Failed: ${project.name}</b>\n\n` +
+        `${project.error || 'Transaction rejected'}`
+      break
+    default:
+      return res.status(400).json({ error: 'Unknown notification type' })
+  }
+
+  await sendMessage(chatId, text, keyboard ? { reply_markup: keyboard } : {})
+  return res.status(200).json({ ok: true })
 }
 
 async function answerCallback(queryId, text = '') {
@@ -213,6 +286,10 @@ async function handleCallback(queryId, data, chatId) {
 
 export default async function handler(req, res) {
   if (req.method !== 'POST') return res.status(405).end()
+
+  if (req.body?.project && req.body?.type) {
+    return handleAppNotification(req, res)
+  }
 
   supabase = getSupabase()
   if (!supabase) {

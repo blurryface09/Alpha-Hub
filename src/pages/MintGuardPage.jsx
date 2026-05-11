@@ -15,7 +15,7 @@ const STATUS_TABS = ['all', 'upcoming', 'live', 'minted', 'missed']
 async function notifyTelegram(project, type, userToken) {
   if (!userToken) return
   try {
-    await fetch('/api/telegram-notify', {
+    await fetch('/api/telegram', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',

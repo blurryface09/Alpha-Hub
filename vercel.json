@@ -3,6 +3,8 @@
   "outputDirectory": "dist",
   "framework": "vite",
   "rewrites": [
+    { "source": "/api/admin/payments/approve", "destination": "/api/admin-subscriptions?action=approve-payment" },
+    { "source": "/api/admin/payments/reject", "destination": "/api/admin-subscriptions?action=reject-payment" },
     { "source": "/((?!api/.*).*)", "destination": "/index.html" }
   ]
 }

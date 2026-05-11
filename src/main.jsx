@@ -32,7 +32,7 @@ if (import.meta.env.VITE_SENTRY_DSN) {
 function ProtectedRoute({ children }) {
   const { user, loading } = useAuthStore()
   const { address, isConnected } = useAccount()
-  const { isActive, loading: subLoading, refresh } = useSubscription()
+  const { subscription, hasBasicAccess, loading: subLoading, refresh } = useSubscription()
 
   const isAdmin = isConnected && address?.toLowerCase() === ADMIN_WALLET
 
@@ -47,8 +47,23 @@ function ProtectedRoute({ children }) {
 
   if (!user) return <Navigate to="/auth" replace />
   if (isAdmin) return children
-  if (!isActive) return <Paywall onSuccess={refresh} />
+  if (!subscription || !hasBasicAccess) return <Paywall onSuccess={refresh} />
   return children
+}
+
+function PremiumRoute({ children }) {
+  const { address, isConnected } = useAccount()
+  const { isActive, isPending, isExpired, loading, refresh } = useSubscription()
+  const isAdmin = isConnected && address?.toLowerCase() === ADMIN_WALLET
+
+  if (loading) return (
+    <div className="min-h-[40vh] flex items-center justify-center">
+      <div className="w-6 h-6 border-2 border-accent border-t-transparent rounded-full animate-spin" />
+    </div>
+  )
+
+  if (isAdmin || isActive) return children
+  return <Paywall onSuccess={refresh} expired={isExpired || isPending} />
 }
 
 function AdminRoute({ children }) {
@@ -76,9 +91,9 @@ function App() {
           <Route path="/auth" element={<AuthPage />} />
           <Route path="/" element={<ProtectedRoute><DashboardLayout /></ProtectedRoute>}>
             <Route index element={<OverviewPage />} />
-            <Route path="mintguard" element={<MintGuardPage />} />
-            <Route path="whaleradar" element={<WhaleRadarPage />} />
-            <Route path="alpha" element={<AlphaPage />} />
+            <Route path="mintguard" element={<PremiumRoute><MintGuardPage /></PremiumRoute>} />
+            <Route path="whaleradar" element={<PremiumRoute><WhaleRadarPage /></PremiumRoute>} />
+            <Route path="alpha" element={<PremiumRoute><AlphaPage /></PremiumRoute>} />
             <Route path="settings" element={<SettingsPage />} />
             <Route path="admin" element={<AdminRoute><AdminPage /></AdminRoute>} />
           </Route>
