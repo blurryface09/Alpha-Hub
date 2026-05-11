@@ -8,14 +8,10 @@
  */
 
 import crypto from 'crypto'
-import { createClient } from '@supabase/supabase-js'
 import { privateKeyToAccount } from 'viem/accounts'
+import { createAnonClient, createServiceClient } from './_lib/auth.js'
+import { writeAuditLog } from './_lib/audit.js'
 import { rateLimit, sendRateLimit } from './_lib/redis.js'
-
-const supabase = createClient(
-  process.env.VITE_SUPABASE_URL,
-  process.env.SUPABASE_SERVICE_KEY
-)
 
 // Derives a 32-byte encryption key per user so one leaked encrypted blob can't
 // be decrypted without knowing both WALLET_ENCRYPTION_KEY and the user's ID.
@@ -49,9 +45,7 @@ function decrypt(blob, userId) {
 async function authUser(req) {
   const token = (req.headers.authorization || '').replace('Bearer ', '').trim()
   if (!token) return null
-  // Use anon client to validate the user's JWT
-  const { createClient: cc } = await import('@supabase/supabase-js')
-  const anonClient = cc(process.env.VITE_SUPABASE_URL, process.env.VITE_SUPABASE_ANON_KEY)
+  const anonClient = createAnonClient()
   const { data: { user }, error } = await anonClient.auth.getUser(token)
   return error ? null : user
 }
@@ -62,6 +56,7 @@ export default async function handler(req, res) {
 
   const limited = await rateLimit(`rl:wallet:${user.id}`, req.method === 'GET' ? 60 : 10, 60)
   if (!limited.allowed) return sendRateLimit(res, limited)
+  const supabase = createServiceClient()
 
   // GET — return wallet address only
   if (req.method === 'GET') {
@@ -100,6 +95,11 @@ export default async function handler(req, res) {
     }, { onConflict: 'user_id' })
 
     if (error) return res.status(500).json({ error: error.message })
+    await writeAuditLog(supabase, {
+      action: 'minting_wallet.saved',
+      userId: user.id,
+      metadata: { walletAddress: account.address },
+    })
 
     // Return ONLY the address — never echo the key
     return res.status(200).json({ address: account.address })
@@ -108,6 +108,10 @@ export default async function handler(req, res) {
   // DELETE — remove wallet
   if (req.method === 'DELETE') {
     await supabase.from('minting_wallets').delete().eq('user_id', user.id)
+    await writeAuditLog(supabase, {
+      action: 'minting_wallet.deleted',
+      userId: user.id,
+    })
     return res.status(200).json({ ok: true })
   }
 

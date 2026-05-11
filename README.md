@@ -32,6 +32,7 @@ Required keys:
 - `VITE_WALLETCONNECT_PROJECT_ID` — public WalletConnect project ID
 - `VITE_RECEIVER_WALLET` — public wallet that receives subscription payments
 - `VITE_ADMIN_WALLET` — public admin wallet used for UI visibility only
+- `VITE_SENTRY_DSN` — optional public Sentry DSN for frontend error monitoring
 - `SUPABASE_SERVICE_KEY` or `SUPABASE_SERVICE_ROLE_KEY` — server-only Supabase service role key
 - `ETHERSCAN_API_KEY` — server-only Etherscan API key
 - `GROQ_API_KEY` — server-only Groq API key for AI analysis
