@@ -45,7 +45,9 @@ export const useAuthStore = create((set, get) => ({
       set({ signingIn: true })
 
       const domain = window.location.host
-      const origin = window.location.origin
+      const url = new URL(window.location.href)
+      url.hash = ''
+      const uri = url.href
       const issuedAt = new Date().toISOString()
       const nonce = crypto.randomUUID().replace(/-/g, '').slice(0, 16)
 
@@ -55,7 +57,7 @@ export const useAuthStore = create((set, get) => ({
         '',
         'Sign in to Alpha Hub',
         '',
-        'URI: ' + origin,
+        'URI: ' + uri,
         'Version: 1',
         'Chain ID: ' + chainId,
         'Nonce: ' + nonce,
