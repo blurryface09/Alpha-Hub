@@ -1,11 +1,11 @@
 import { useEffect, useMemo, useState } from 'react'
-import { useAccount, usePublicClient, useSendTransaction, useSwitchChain } from 'wagmi'
-import { base } from 'wagmi/chains'
+import { useAccount, useDisconnect, usePublicClient, useSendTransaction, useSwitchChain } from 'wagmi'
 import { parseEther } from 'viem'
 import toast from 'react-hot-toast'
-import { Check, CheckCircle2, ChevronRight, Clock, Loader2, Shield, Wallet, Zap } from 'lucide-react'
+import { Check, CheckCircle2, ChevronRight, Clock, Loader2, Repeat2, Shield, Wallet, Zap } from 'lucide-react'
 import ConnectWallet from './shared/ConnectWallet'
 import { getAuthToken } from '../lib/supabase'
+import { useAuthStore } from '../store'
 import { PAYMENT_CONFIG, getPlanPriceUsd, roundUpEthAmount } from '../config/payments'
 
 const PLAN_ORDER = ['free', 'pro', 'elite']
@@ -27,9 +27,11 @@ const STATE_LABELS = {
 
 export default function Paywall({ onSuccess, expired = false }) {
   const { address, chain, isConnected } = useAccount()
+  const { disconnect } = useDisconnect()
   const { sendTransactionAsync } = useSendTransaction()
   const { switchChainAsync } = useSwitchChain()
   const publicClient = usePublicClient()
+  const signOut = useAuthStore(s => s.signOut)
 
   const [billingCycle, setBillingCycle] = useState('monthly')
   const [selectedPlanId, setSelectedPlanId] = useState('pro')
@@ -194,6 +196,8 @@ export default function Paywall({ onSuccess, expired = false }) {
       setStep('pricing')
       if (err.code === 4001 || err.message?.toLowerCase().includes('rejected')) {
         toast.error('Transaction cancelled')
+      } else if (err.message?.toLowerCase().includes('wallet does not match')) {
+        toast.error('This session is signed in with another wallet. Sign out, then reconnect the right wallet.')
       } else if (err.message?.toLowerCase().includes('insufficient')) {
         toast.error('Insufficient ETH on Base')
       } else if (err.message?.toLowerCase().includes('chain') || err.message?.toLowerCase().includes('network')) {
@@ -202,6 +206,12 @@ export default function Paywall({ onSuccess, expired = false }) {
         toast.error(err.message || 'Payment failed. Please try again.')
       }
     }
+  }
+
+  async function handleSwitchSession() {
+    await signOut()
+    disconnect()
+    window.location.href = '/auth'
   }
 
   if (step === 'active') {
@@ -256,6 +266,25 @@ export default function Paywall({ onSuccess, expired = false }) {
         {!isConnected && (
           <div className="flex items-center justify-center">
             <ConnectWallet />
+          </div>
+        )}
+
+        {isConnected && (
+          <div className="mx-auto max-w-xl rounded-xl border border-white/10 bg-white/[0.03] p-3 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+            <div>
+              <p className="text-xs text-gray-500">Connected wallet</p>
+              <p className="text-sm font-mono text-cyan-200">{address?.slice(0, 8)}...{address?.slice(-6)}</p>
+            </div>
+            <div className="flex items-center gap-2">
+              <ConnectWallet />
+              <button
+                onClick={handleSwitchSession}
+                className="flex items-center gap-2 rounded-lg border border-white/10 px-3 py-2 text-xs text-gray-300 hover:border-cyan-400/40 hover:text-cyan-200"
+              >
+                <Repeat2 className="w-3.5 h-3.5" />
+                Sign out / switch
+              </button>
+            </div>
           </div>
         )}
 

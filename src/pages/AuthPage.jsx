@@ -2,14 +2,15 @@ import React, { useState } from 'react'
 import { Navigate } from 'react-router-dom'
 import { motion } from 'framer-motion'
 import toast from 'react-hot-toast'
-import { useAccount, useSignMessage } from 'wagmi'
+import { useAccount, useDisconnect, useSignMessage } from 'wagmi'
 import { useAuthStore } from '../store'
 import ConnectWallet from '../components/shared/ConnectWallet'
-import { Loader2, Wallet, ShieldCheck } from 'lucide-react'
+import { Loader2, ShieldCheck, Repeat2 } from 'lucide-react'
 
 export default function AuthPage() {
   const { user, signingIn, signInWithWallet } = useAuthStore()
   const { address, chain, isConnected } = useAccount()
+  const { disconnect } = useDisconnect()
   const { signMessageAsync } = useSignMessage()
   const [attempted, setAttempted] = useState(false)
   const [error, setError] = useState(null)
@@ -77,6 +78,18 @@ export default function AuthPage() {
                 <span className="text-xs font-mono text-green-400">{address.slice(0, 6)}...{address.slice(-4)}</span>
                 <span className="text-xs text-muted ml-auto">connected</span>
               </div>
+              <button
+                onClick={() => {
+                  disconnect()
+                  setAttempted(false)
+                  setError(null)
+                  toast.success('Wallet disconnected. Choose another wallet.')
+                }}
+                className="w-full flex items-center justify-center gap-2 py-2 rounded-lg border border-border text-xs text-muted hover:text-accent hover:border-accent/40 transition-all"
+              >
+                <Repeat2 className="w-3.5 h-3.5" />
+                Switch wallet
+              </button>
 
               <div className="flex items-center gap-2 text-xs text-muted">
                 <div className="w-5 h-5 rounded-full bg-accent/10 border border-accent/30 flex items-center justify-center text-accent font-bold text-[10px]">2</div>
