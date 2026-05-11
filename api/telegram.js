@@ -3,11 +3,21 @@ import { createClient } from '@supabase/supabase-js'
 const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN
 const WEBHOOK_SECRET = process.env.TELEGRAM_WEBHOOK_SECRET
 
-// Use service key on the server so we can read/write any user's data
-const supabase = createClient(
-  process.env.VITE_SUPABASE_URL,
-  process.env.SUPABASE_SERVICE_KEY
-)
+// Use service key on the server so we can read/write any user's data.
+// Create lazily so missing env vars return JSON instead of crashing the function at import time.
+let supabase
+
+function getSupabase() {
+  if (supabase) return supabase
+
+  const url = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL
+  const key = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_SERVICE_KEY
+
+  if (!url || !key) return null
+
+  supabase = createClient(url, key)
+  return supabase
+}
 
 async function sendMessage(chatId, text, extra = {}) {
   if (!BOT_TOKEN) return
@@ -203,6 +213,11 @@ async function handleCallback(queryId, data, chatId) {
 
 export default async function handler(req, res) {
   if (req.method !== 'POST') return res.status(405).end()
+
+  supabase = getSupabase()
+  if (!supabase) {
+    return res.status(500).json({ ok: false, error: 'Supabase env vars missing' })
+  }
 
   // Validate Telegram webhook secret
   if (WEBHOOK_SECRET) {

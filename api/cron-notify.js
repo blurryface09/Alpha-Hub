@@ -1,4 +1,4 @@
-const { createClient } = require('@supabase/supabase-js')
+import { createClient } from '@supabase/supabase-js'
 
 const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN
 
@@ -54,7 +54,7 @@ async function sendTelegram(
   text,
   replyMarkup
 ) {
-  if (!BOT_TOKEN || !chatId) return
+  if (!BOT_TOKEN || !chatId) return false
 
   try {
     const body = {
@@ -67,7 +67,7 @@ async function sendTelegram(
       body.reply_markup = replyMarkup
     }
 
-    await fetch(
+    const response = await fetch(
       `https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`,
       {
         method: 'POST',
@@ -77,12 +77,122 @@ async function sendTelegram(
         body: JSON.stringify(body),
       }
     )
+
+    const result = await response.json().catch(() => null)
+
+    if (!response.ok || result?.ok === false) {
+      console.error(
+        'telegram send failed:',
+        result?.description || response.statusText
+      )
+      return false
+    }
+
+    return true
   } catch (e) {
     console.error('telegram error:', e.message)
+    return false
   }
 }
 
-module.exports = async function handler(req, res) {
+async function markNotification(
+  supabase,
+  { userId, type, title, message, projectId }
+) {
+  await supabase
+    .from('notifications')
+    .insert({
+      user_id: userId,
+      type,
+      title,
+      message,
+      data: { project_id: projectId },
+    })
+    .then(() => {})
+    .catch((e) => {
+      console.error(
+        'cron-notify notification marker error:',
+        e.message
+      )
+    })
+}
+
+async function getSentNotificationKeys(
+  supabase,
+  userIds,
+  types,
+  since
+) {
+  if (!userIds.length) return new Set()
+
+  const { data, error } = await supabase
+    .from('notifications')
+    .select('user_id, type, data')
+    .in('user_id', userIds)
+    .in('type', types)
+    .gte('created_at', since)
+
+  if (error) {
+    console.error(
+      'cron-notify notification lookup error:',
+      error.message
+    )
+    return new Set()
+  }
+
+  return new Set(
+    (data || [])
+      .map((n) => {
+        const projectId =
+          n.data?.project_id ||
+          n.data?.projectId
+        return projectId
+          ? `${n.type}:${n.user_id}:${projectId}`
+          : null
+      })
+      .filter(Boolean)
+  )
+}
+
+async function updateProjectStatuses(
+  supabase,
+  now
+) {
+  const nowIso = now.toISOString()
+  const missedBefore = new Date(
+    now.getTime() - 2 * 60 * 60 * 1000
+  ).toISOString()
+
+  const { error: liveError } = await supabase
+    .from('wl_projects')
+    .update({ status: 'live' })
+    .eq('status', 'upcoming')
+    .not('mint_date', 'is', null)
+    .lte('mint_date', nowIso)
+
+  if (liveError) {
+    console.error(
+      'cron-notify live status update error:',
+      liveError.message
+    )
+  }
+
+  const { error: missedError } = await supabase
+    .from('wl_projects')
+    .update({ status: 'missed' })
+    .eq('status', 'live')
+    .not('mint_date', 'is', null)
+    .lt('mint_date', missedBefore)
+
+  if (missedError) {
+    console.error(
+      'cron-notify missed status update error:',
+      missedError.message
+    )
+  }
+}
+
+export default async function handler(req, res) {
   try {
     const cronSecret = process.env.CRON_SECRET
 
@@ -105,13 +215,18 @@ module.exports = async function handler(req, res) {
         'cron-notify: missing Supabase env vars'
       )
 
-      return res.status(500).json({
+      return res.status(200).json({
         ok: false,
         error: 'missing env vars',
       })
     }
 
     const now = new Date()
+
+    await updateProjectStatuses(
+      supabase,
+      now
+    )
 
     const from = new Date(
       now.getTime() + 29 * 60 * 1000
@@ -148,6 +263,16 @@ module.exports = async function handler(req, res) {
             )
             .in('id', userIds)
 
+        const sentKeys =
+          await getSentNotificationKeys(
+            supabase,
+            userIds,
+            ['mint_reminder_30m'],
+            new Date(
+              now.getTime() - 3 * 60 * 60 * 1000
+            ).toISOString()
+          )
+
         const chatMap = {}
 
         profiles?.forEach((p) => {
@@ -163,6 +288,13 @@ module.exports = async function handler(req, res) {
 
           if (!chatId) continue
 
+          const reminderKey =
+            `mint_reminder_30m:${p.user_id}:${p.id}`
+
+          if (sentKeys.has(reminderKey)) {
+            continue
+          }
+
           const chain = (
             p.chain || 'eth'
           ).toUpperCase()
@@ -170,14 +302,34 @@ module.exports = async function handler(req, res) {
           const price =
             p.mint_price || 'Free'
 
-          await sendTelegram(
+          const title =
+            `Mint in ~30 min: ${p.name}`
+
+          const message =
+            `${chain} · ${price} · ${p.wl_type} · ${fmtTime(
+              p.mint_date
+            )}`
+
+          const sent = await sendTelegram(
             chatId,
-            `⏰ <b>Mint in ~30 min: ${p.name}</b>\n\n${chain} · ${price} · ${p.wl_type}\n🕐 ${fmtTime(
+            `⏰ <b>${title}</b>\n\n${chain} · ${price} · ${p.wl_type}\n🕐 ${fmtTime(
               p.mint_date
             )}`
           )
 
-          notified++
+          if (sent) {
+            await markNotification(
+              supabase,
+              {
+                userId: p.user_id,
+                type: 'mint_reminder_30m',
+                title,
+                message,
+                projectId: p.id,
+              }
+            )
+            notified++
+          }
         }
       }
     } catch (e) {
@@ -189,7 +341,7 @@ module.exports = async function handler(req, res) {
 
     try {
       const liveFrom = new Date(
-        now.getTime() - 5 * 60 * 1000
+        now.getTime() - 2 * 60 * 60 * 1000
       ).toISOString()
 
       const { data: live } =
@@ -216,6 +368,16 @@ module.exports = async function handler(req, res) {
             )
             .in('id', userIds)
 
+        const sentKeys =
+          await getSentNotificationKeys(
+            supabase,
+            userIds,
+            ['mint_live'],
+            new Date(
+              now.getTime() - 3 * 60 * 60 * 1000
+            ).toISOString()
+          )
+
         const chatMap = {}
 
         profiles?.forEach((p) => {
@@ -231,6 +393,13 @@ module.exports = async function handler(req, res) {
 
           if (!chatId) continue
 
+          const liveKey =
+            `mint_live:${p.user_id}:${p.id}`
+
+          if (sentKeys.has(liveKey)) {
+            continue
+          }
+
           const chain = (
             p.chain || 'eth'
           ).toUpperCase()
@@ -241,12 +410,17 @@ module.exports = async function handler(req, res) {
           const isAuto =
             p.mint_mode === 'auto'
 
-          const text =
-            `🚨 <b>LIVE: ${p.name}</b>\n` +
+          const title = `LIVE: ${p.name}`
+
+          const message =
             `${chain} · ${price} · ${p.wl_type}\n` +
             (isAuto
               ? '⚡ Server auto-mint will fire shortly'
               : 'Tap below to confirm or skip')
+
+          const text =
+            `🚨 <b>${title}</b>\n` +
+            message
 
           let keyboard = null
 
@@ -272,13 +446,25 @@ module.exports = async function handler(req, res) {
             }
           }
 
-          await sendTelegram(
+          const sent = await sendTelegram(
             chatId,
             text,
             keyboard
           )
 
-          notified++
+          if (sent) {
+            await markNotification(
+              supabase,
+              {
+                userId: p.user_id,
+                type: 'mint_live',
+                title,
+                message,
+                projectId: p.id,
+              }
+            )
+            notified++
+          }
         }
       }
     } catch (e) {
@@ -299,7 +485,7 @@ module.exports = async function handler(req, res) {
       e.message
     )
 
-    return res.status(500).json({
+    return res.status(200).json({
       ok: false,
       error: e.message,
     })
