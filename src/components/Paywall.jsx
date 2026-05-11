@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { useAccount, useDisconnect, usePublicClient, useSendTransaction, useSwitchChain } from 'wagmi'
 import { parseEther } from 'viem'
 import toast from 'react-hot-toast'
-import { Check, CheckCircle2, ChevronRight, Clock, Loader2, Repeat2, Shield, Wallet, Zap } from 'lucide-react'
+import { ArrowLeft, Check, CheckCircle2, ChevronRight, Clock, Loader2, Repeat2, Shield, Wallet, Zap } from 'lucide-react'
 import ConnectWallet from './shared/ConnectWallet'
 import { getAuthToken } from '../lib/supabase'
 import { useAuthStore } from '../store'
@@ -25,7 +25,14 @@ const STATE_LABELS = {
   active: 'Subscription active',
 }
 
-export default function Paywall({ onSuccess, expired = false }) {
+export default function Paywall({
+  onSuccess,
+  expired = false,
+  showBack = false,
+  requiredPlan = null,
+  lockMessage = null,
+  currentPlan = null,
+}) {
   const { address, chain, isConnected } = useAccount()
   const { disconnect } = useDisconnect()
   const { sendTransactionAsync } = useSendTransaction()
@@ -34,7 +41,7 @@ export default function Paywall({ onSuccess, expired = false }) {
   const signOut = useAuthStore(s => s.signOut)
 
   const [billingCycle, setBillingCycle] = useState('monthly')
-  const [selectedPlanId, setSelectedPlanId] = useState('pro')
+  const [selectedPlanId, setSelectedPlanId] = useState(requiredPlan || 'pro')
   const [ethPrice, setEthPrice] = useState(null)
   const [priceLoading, setPriceLoading] = useState(false)
   const [step, setStep] = useState('pricing')
@@ -214,6 +221,14 @@ export default function Paywall({ onSuccess, expired = false }) {
     window.location.href = '/auth'
   }
 
+  function handleBack() {
+    if (window.history.length > 1) {
+      window.history.back()
+    } else {
+      window.location.href = '/'
+    }
+  }
+
   if (step === 'active') {
     return (
       <div className="min-h-screen bg-[#070a0f] flex items-center justify-center p-6">
@@ -231,6 +246,16 @@ export default function Paywall({ onSuccess, expired = false }) {
   return (
     <div className="min-h-screen bg-[#070a0f] text-white flex items-center justify-center p-4 lg:p-6">
       <div className="w-full max-w-6xl space-y-6">
+        {showBack && (
+          <button
+            onClick={handleBack}
+            className="inline-flex items-center gap-2 rounded-lg border border-white/10 px-3 py-2 text-sm text-gray-300 hover:border-cyan-400/40 hover:text-cyan-200"
+          >
+            <ArrowLeft className="w-4 h-4" />
+            Back to app
+          </button>
+        )}
+
         <div className="text-center space-y-3">
           <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-cyan-500/10 border border-cyan-500/20 text-cyan-300 text-xs font-mono uppercase tracking-widest">
             <Zap className="w-3 h-3" />
@@ -241,6 +266,11 @@ export default function Paywall({ onSuccess, expired = false }) {
             Real-time wallet intelligence, Telegram alerts, automint tools, and forensic reports.
           </p>
           {expired && <p className="text-amber-300 text-sm">Your access expired. Renew to continue.</p>}
+          {lockMessage && (
+            <div className="mx-auto max-w-xl rounded-xl border border-amber-500/20 bg-amber-500/10 px-4 py-3 text-sm text-amber-200">
+              {lockMessage} {currentPlan === 'pending' ? 'Your payment is pending admin approval.' : 'Upgrade to continue.'}
+            </div>
+          )}
         </div>
 
         <div className="flex flex-col sm:flex-row items-center justify-center gap-3">
@@ -288,7 +318,7 @@ export default function Paywall({ onSuccess, expired = false }) {
           </div>
         )}
 
-        {isConnected && !isBase && (
+        {isConnected && selectedPlanId !== 'free' && !isBase && (
           <button
             onClick={() => ensureBase().catch(() => toast.error('Switch to Base to pay'))}
             className="mx-auto flex items-center justify-center rounded-lg border border-amber-500/30 bg-amber-500/10 px-4 py-2 text-sm font-semibold text-amber-300 hover:bg-amber-500/15"
@@ -350,7 +380,9 @@ export default function Paywall({ onSuccess, expired = false }) {
                 {STATE_LABELS[step] || 'Payment'}
               </div>
               <p className="text-xs text-gray-500 mt-1">
-                {activationMode === 'manual'
+                {selectedPlanId === 'free'
+                  ? 'Free access unlocks the basic dashboard. Upgrade when you need alerts, automint, and forensic tools.'
+                  : activationMode === 'manual'
                   ? 'After payment, your subscription enters review and will be activated after confirmation.'
                   : 'Payment will activate automatically after on-chain verification.'}
               </p>

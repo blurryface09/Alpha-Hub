@@ -18,6 +18,7 @@ import AdminPage from './pages/AdminPage'
 import Paywall from './components/Paywall'
 import { useSubscription } from './hooks/useSubscription'
 import { useAccount } from 'wagmi'
+import { planLabel } from './lib/access'
 
 const ADMIN_WALLET = import.meta.env.VITE_ADMIN_WALLET?.toLowerCase()
 
@@ -51,9 +52,9 @@ function ProtectedRoute({ children }) {
   return children
 }
 
-function PremiumRoute({ children }) {
+function PremiumRoute({ children, requiredPlan = 'pro', featureName = 'this feature' }) {
   const { address, isConnected } = useAccount()
-  const { isActive, isPending, isExpired, loading, refresh } = useSubscription()
+  const { subscription, isPending, isExpired, loading, refresh, hasAccess } = useSubscription()
   const isAdmin = isConnected && address?.toLowerCase() === ADMIN_WALLET
 
   if (loading) return (
@@ -62,8 +63,17 @@ function PremiumRoute({ children }) {
     </div>
   )
 
-  if (isAdmin || isActive) return children
-  return <Paywall onSuccess={refresh} expired={isExpired || isPending} />
+  if (isAdmin || hasAccess(requiredPlan)) return children
+  return (
+    <Paywall
+      onSuccess={refresh}
+      expired={isExpired || isPending}
+      showBack
+      requiredPlan={requiredPlan}
+      lockMessage={`${featureName} requires ${planLabel(requiredPlan)}.`}
+      currentPlan={subscription?.status === 'pending_verification' ? 'pending' : subscription?.plan || 'free'}
+    />
+  )
 }
 
 function AdminRoute({ children }) {
@@ -91,9 +101,9 @@ function App() {
           <Route path="/auth" element={<AuthPage />} />
           <Route path="/" element={<ProtectedRoute><DashboardLayout /></ProtectedRoute>}>
             <Route index element={<OverviewPage />} />
-            <Route path="mintguard" element={<PremiumRoute><MintGuardPage /></PremiumRoute>} />
-            <Route path="whaleradar" element={<PremiumRoute><WhaleRadarPage /></PremiumRoute>} />
-            <Route path="alpha" element={<PremiumRoute><AlphaPage /></PremiumRoute>} />
+            <Route path="mintguard" element={<PremiumRoute requiredPlan="pro" featureName="MintGuard"><MintGuardPage /></PremiumRoute>} />
+            <Route path="whaleradar" element={<PremiumRoute requiredPlan="pro" featureName="WhaleRadar"><WhaleRadarPage /></PremiumRoute>} />
+            <Route path="alpha" element={<PremiumRoute requiredPlan="pro" featureName="Wallet forensics"><AlphaPage /></PremiumRoute>} />
             <Route path="settings" element={<SettingsPage />} />
             <Route path="admin" element={<AdminRoute><AdminPage /></AdminRoute>} />
           </Route>

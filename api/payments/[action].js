@@ -36,14 +36,21 @@ function calculateExpectedEth(amountUsd, ethUsd) {
 }
 
 async function upsertSubscription(supabase, payload) {
-  const attempts = [
-    payload,
-    Object.fromEntries(Object.entries(payload).filter(([key]) => key !== 'starts_at')),
-    Object.fromEntries(Object.entries(payload).filter(([key]) => !['starts_at', 'billing_cycle'].includes(key))),
+  const optionalColumns = [
+    [],
+    ['amount_usd'],
+    ['starts_at', 'amount_usd'],
+    ['starts_at', 'billing_cycle', 'amount_usd'],
+    ['starts_at', 'billing_cycle', 'amount_usd', 'chain_id'],
+    ['starts_at', 'billing_cycle', 'amount_usd', 'chain_id', 'updated_at'],
+    ['starts_at', 'billing_cycle', 'amount_usd', 'chain_id', 'updated_at', 'status'],
   ]
 
   let result
-  for (const row of attempts) {
+  for (const omitColumns of optionalColumns) {
+    const row = Object.fromEntries(
+      Object.entries(payload).filter(([key]) => !omitColumns.includes(key))
+    )
     result = await supabase
       .from('subscriptions')
       .upsert(row, { onConflict: 'wallet_address' })
