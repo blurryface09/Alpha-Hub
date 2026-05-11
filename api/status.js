@@ -1,4 +1,5 @@
 import { createClient } from '@supabase/supabase-js'
+import { getPaymentChain } from './_lib/pricing.js'
 
 const startedAt = Date.now()
 
@@ -14,16 +15,6 @@ function getSupabase() {
   return createClient(url, key, {
     auth: { persistSession: false, autoRefreshToken: false },
   })
-}
-
-function getTreasuryAddress() {
-  return (
-    process.env.TREASURY_ADDRESS ||
-    process.env.NEXT_PUBLIC_TREASURY_ADDRESS ||
-    process.env.VITE_TREASURY_ADDRESS ||
-    process.env.VITE_RECEIVER_WALLET ||
-    ''
-  )
 }
 
 function isWalletAddress(value) {
@@ -69,10 +60,18 @@ export default async function handler(req, res) {
   const rpcConfigured = Boolean(
     process.env.ALCHEMY_API_KEY ||
     process.env.VITE_ALCHEMY_API_KEY ||
-    process.env.ETHERSCAN_API_KEY ||
-    process.env.VITE_ETHERSCAN_API_KEY
+    process.env.BASE_SEPOLIA_RPC_URL
   )
-  const paymentConfigured = isWalletAddress(getTreasuryAddress())
+  const paymentChain = getPaymentChain()
+  const publicTreasuryConfigured = isWalletAddress(process.env.NEXT_PUBLIC_TREASURY_ADDRESS || process.env.VITE_TREASURY_ADDRESS)
+  const serverTreasuryConfigured = isWalletAddress(process.env.TREASURY_ADDRESS || process.env.VITE_RECEIVER_WALLET)
+  const paymentConfigured = publicTreasuryConfigured && serverTreasuryConfigured
+  const missingPaymentEnv = [
+    !paymentChain ? 'NEXT_PUBLIC_PAYMENT_CHAIN' : null,
+    !serverTreasuryConfigured ? 'TREASURY_ADDRESS' : null,
+    !publicTreasuryConfigured ? 'NEXT_PUBLIC_TREASURY_ADDRESS' : null,
+    !rpcConfigured ? 'RPC URL for selected chain' : null,
+  ].filter(Boolean)
 
   const checks = {
     api: { ok: true },
@@ -80,8 +79,10 @@ export default async function handler(req, res) {
     telegram: { ok: telegramConfigured },
     cron: { ok: cronProtected },
     payment: {
-      ok: paymentConfigured,
-      status: paymentConfigured ? 'healthy' : 'down',
+      ok: paymentConfigured && Boolean(paymentChain),
+      status: paymentConfigured && paymentChain ? 'healthy' : 'down',
+      chain: paymentChain?.key || null,
+      missing: missingPaymentEnv,
     },
     rpc: {
       ok: rpcConfigured,

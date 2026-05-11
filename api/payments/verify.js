@@ -1,14 +1,9 @@
 import { createPublicClient, formatEther, http, isAddress, parseEther } from 'viem'
-import { mainnet, base, bsc } from 'viem/chains'
+import { base, baseSepolia } from 'viem/chains'
 import { createServiceClient, requireUser, userOwnsWallet } from '../_lib/auth.js'
 import { rateLimit, sendRateLimit } from '../_lib/redis.js'
 import { writeAuditLog } from '../_lib/audit.js'
-
-const PLAN_CONFIG = {
-  weekly: { days: 7, priceEth: '0.0015' },
-  monthly: { days: 30, priceEth: '0.005' },
-  quarterly: { days: 90, priceEth: '0.012' },
-}
+import { getPaymentChain, getPaymentChainKey, getPlan } from '../_lib/pricing.js'
 
 function getTreasuryAddress() {
   return (
@@ -23,27 +18,23 @@ function getTreasuryAddress() {
 function getRpcUrl(chainId) {
   const alchemy = process.env.ALCHEMY_API_KEY || process.env.VITE_ALCHEMY_API_KEY
 
-  if (chainId === 1) {
-    return alchemy
-      ? `https://eth-mainnet.g.alchemy.com/v2/${alchemy}`
-      : 'https://ethereum-rpc.publicnode.com'
-  }
-
   if (chainId === 8453) {
     return alchemy
       ? `https://base-mainnet.g.alchemy.com/v2/${alchemy}`
       : 'https://mainnet.base.org'
   }
 
-  if (chainId === 56) return 'https://bsc-dataseed.binance.org'
+  if (chainId === 84532) {
+    return process.env.BASE_SEPOLIA_RPC_URL ||
+      (alchemy ? `https://base-sepolia.g.alchemy.com/v2/${alchemy}` : 'https://sepolia.base.org')
+  }
 
   return null
 }
 
 function getChain(chainId) {
-  if (chainId === 1) return mainnet
   if (chainId === 8453) return base
-  if (chainId === 56) return bsc
+  if (chainId === 84532) return baseSepolia
   return null
 }
 
@@ -54,24 +45,20 @@ function getClient(chainId) {
   return createPublicClient({ chain, transport: http(rpc) })
 }
 
-async function findTransaction(txHash, preferredChainId) {
-  const chainIds = preferredChainId ? [preferredChainId] : [1, 8453, 56]
+async function findTransaction(txHash, chainId) {
+  const client = getClient(chainId)
+  if (!client) return null
 
-  for (const chainId of chainIds) {
-    const client = getClient(chainId)
-    if (!client) continue
+  try {
+    const [transaction, receipt] = await Promise.all([
+      client.getTransaction({ hash: txHash }),
+      client.getTransactionReceipt({ hash: txHash }),
+    ])
 
-    try {
-      const [transaction, receipt] = await Promise.all([
-        client.getTransaction({ hash: txHash }),
-        client.getTransactionReceipt({ hash: txHash }),
-      ])
-
-      if (transaction && receipt) {
-        return { chainId, transaction, receipt }
-      }
-    } catch {}
-  }
+    if (transaction && receipt) {
+      return { chainId, transaction, receipt }
+    }
+  } catch {}
 
   return null
 }
@@ -107,7 +94,9 @@ export default async function handler(req, res) {
 
   const { txHash, walletAddress, planId, plan, chainId } = req.body || {}
   const selectedPlan = planId || plan
-  const planConfig = PLAN_CONFIG[selectedPlan]
+  const planConfig = getPlan(selectedPlan)
+  const paymentChain = getPaymentChain()
+  const paymentChainKey = getPaymentChainKey()
   const treasury = getTreasuryAddress()
 
   if (!txHash || !walletAddress || !selectedPlan) {
@@ -126,6 +115,10 @@ export default async function handler(req, res) {
     return res.status(400).json({ error: 'Invalid plan' })
   }
 
+  if (!paymentChain) {
+    return res.status(503).json({ error: 'Payment config incomplete: NEXT_PUBLIC_PAYMENT_CHAIN is required' })
+  }
+
   if (!treasury || !isAddress(treasury)) {
     return res.status(503).json({ error: 'Payment is temporarily unavailable. Please try again later.' })
   }
@@ -134,9 +127,17 @@ export default async function handler(req, res) {
     return res.status(403).json({ error: 'Wallet does not match authenticated session' })
   }
 
-  const preferredChainId = Number(chainId) || null
-  if (preferredChainId && !getChain(preferredChainId)) {
-    return res.status(400).json({ error: 'Unsupported payment network' })
+  const submittedChainId = Number(chainId)
+  if (!submittedChainId) {
+    return res.status(400).json({ error: 'Payment chain is required' })
+  }
+
+  if (submittedChainId !== paymentChain.id) {
+    return res.status(400).json({
+      error: paymentChainKey === 'baseSepolia'
+        ? 'Test payments must be sent on Base Sepolia'
+        : 'Production payments must be sent on Base',
+    })
   }
 
   const supabase = createServiceClient()
@@ -151,9 +152,9 @@ export default async function handler(req, res) {
     return res.status(409).json({ error: 'Transaction already used' })
   }
 
-  const verified = await findTransaction(txHash, preferredChainId)
+  const verified = await findTransaction(txHash, paymentChain.id)
   if (!verified) {
-    return res.status(404).json({ error: 'Transaction not found or not confirmed yet' })
+    return res.status(404).json({ error: `Transaction not found or not confirmed yet on ${paymentChain.label}` })
   }
 
   const { chainId: verifiedChainId, transaction, receipt } = verified
@@ -178,7 +179,7 @@ export default async function handler(req, res) {
   }
 
   const now = new Date()
-  const expiresAt = new Date(now.getTime() + planConfig.days * 24 * 60 * 60 * 1000)
+  const expiresAt = new Date(now.getTime() + planConfig.durationDays * 24 * 60 * 60 * 1000)
   const amountEth = Number(formatEther(transaction.value))
 
   const { data: subscription, error: upsertError } = await activateSubscription(supabase, {
@@ -207,6 +208,7 @@ export default async function handler(req, res) {
       txHash,
       plan: selectedPlan,
       chainId: verifiedChainId,
+      paymentChain: paymentChain.key,
       amountEth,
       expiresAt: expiresAt.toISOString(),
     },
@@ -218,8 +220,9 @@ export default async function handler(req, res) {
     txHash,
     plan: selectedPlan,
     chainId: verifiedChainId,
+    paymentChain: paymentChain.key,
     amount: amountEth,
     expiresAt: expiresAt.toISOString(),
-    daysGranted: planConfig.days,
+    daysGranted: planConfig.durationDays,
   })
 }

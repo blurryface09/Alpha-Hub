@@ -1,12 +1,11 @@
 import { createServiceClient, requireAdmin } from './_lib/auth.js'
 import { writeAuditLog } from './_lib/audit.js'
 import { rateLimit, sendRateLimit } from './_lib/redis.js'
+import { getPaymentChainKey, getPlan, PRICING_PLANS } from './_lib/pricing.js'
 
-const PLAN_DAYS = {
-  weekly: 7,
-  monthly: 30,
-  quarterly: 90,
-}
+const PLAN_DAYS = Object.fromEntries(
+  Object.values(PRICING_PLANS).map(plan => [plan.id, plan.durationDays])
+)
 
 function validWallet(wallet) {
   return /^0x[a-fA-F0-9]{40}$/.test(String(wallet || ''))
@@ -32,12 +31,18 @@ export default async function handler(req, res) {
   }
 
   if (req.method === 'POST') {
-    const { walletAddress, plan = 'monthly' } = req.body || {}
+    const { walletAddress, plan = 'monthly', reason } = req.body || {}
     if (!validWallet(walletAddress)) return res.status(400).json({ error: 'Valid walletAddress is required' })
-    if (!PLAN_DAYS[plan]) return res.status(400).json({ error: 'Invalid plan' })
+
+    const planConfig = getPlan(plan)
+    if (!planConfig) return res.status(400).json({ error: 'Invalid plan' })
+
+    if (reason === 'admin_test_grant' && getPaymentChainKey() !== 'baseSepolia' && process.env.NODE_ENV === 'production') {
+      return res.status(403).json({ error: 'Test grants are disabled in production payment mode' })
+    }
 
     const now = new Date()
-    const expiresAt = new Date(now.getTime() + PLAN_DAYS[plan] * 24 * 60 * 60 * 1000)
+    const expiresAt = new Date(now.getTime() + planConfig.durationDays * 24 * 60 * 60 * 1000)
     const txHash = `manual_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`
 
     const { data, error } = await supabase
@@ -51,6 +56,7 @@ export default async function handler(req, res) {
         started_at: now.toISOString(),
         expires_at: expiresAt.toISOString(),
         verified: true,
+        status: 'active',
       }, { onConflict: 'wallet_address' })
       .select()
       .single()
@@ -59,7 +65,7 @@ export default async function handler(req, res) {
     await writeAuditLog(supabase, {
       action: 'admin.subscription.created',
       userId: admin.id,
-      metadata: { walletAddress: walletAddress.toLowerCase(), plan, subscriptionId: data.id },
+      metadata: { walletAddress: walletAddress.toLowerCase(), plan, subscriptionId: data.id, reason: reason || 'manual_admin_grant' },
     })
     return res.status(200).json({ subscription: data })
   }

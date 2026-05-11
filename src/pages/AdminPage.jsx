@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react'
 import { useAccount } from 'wagmi'
 import { getAuthToken } from '../lib/supabase'
-import { useSubscription } from '../hooks/useSubscription'
+import { getPaymentChainKey, PRICING_PLANS } from '../lib/pricing'
 import toast from 'react-hot-toast'
 import {
   Shield, Users, Plus, Trash2, RefreshCw,
@@ -11,16 +11,16 @@ import {
 
 const ADMIN_WALLET = import.meta.env.VITE_ADMIN_WALLET?.toLowerCase()
 
-const PLAN_DAYS = {
-  weekly: 7,
-  monthly: 30,
-  quarterly: 90,
-}
+const PLAN_DAYS = Object.fromEntries(
+  PRICING_PLANS.filter(plan => plan.enabled).map(plan => [plan.id, plan.durationDays])
+)
 
 const PLAN_COLORS = {
+  test: 'text-emerald-400 bg-emerald-500/10 border-emerald-500/20',
   weekly: 'text-cyan-400 bg-cyan-500/10 border-cyan-500/20',
   monthly: 'text-violet-400 bg-violet-500/10 border-violet-500/20',
   quarterly: 'text-amber-400 bg-amber-500/10 border-amber-500/20',
+  founder: 'text-rose-400 bg-rose-500/10 border-rose-500/20',
 }
 
 function StatCard({ icon: Icon, label, value, sub, color }) {
@@ -51,6 +51,7 @@ export default function AdminPage() {
   const [newWallet, setNewWallet] = useState('')
   const [newPlan, setNewPlan] = useState('monthly')
   const [newNote, setNewNote] = useState('')
+  const testGrantsEnabled = getPaymentChainKey() === 'baseSepolia' || import.meta.env.DEV
 
   const fetchSubscribers = useCallback(async () => {
     setLoading(true)
@@ -82,7 +83,7 @@ export default function AdminPage() {
   const activeSubscribers = subscribers.filter(s => s.verified && new Date(s.expires_at) > new Date())
   const totalEth = subscribers.reduce((sum, s) => sum + parseFloat(s.amount_eth || 0), 0)
 
-  const handleAddSubscriber = async () => {
+  const handleAddSubscriber = async ({ testGrant = false } = {}) => {
     if (!newWallet || !newWallet.startsWith('0x') || newWallet.length !== 42) {
       toast.error('Enter a valid wallet address')
       return
@@ -90,6 +91,7 @@ export default function AdminPage() {
 
     setAdding(true)
     try {
+      const planToGrant = testGrant ? 'test' : newPlan
       const token = await getAuthToken()
       if (!token) throw new Error('Sign in again to grant access')
       const res = await fetch('/api/admin-subscriptions', {
@@ -98,12 +100,16 @@ export default function AdminPage() {
           'Content-Type': 'application/json',
           Authorization: `Bearer ${token}`,
         },
-        body: JSON.stringify({ walletAddress: newWallet, plan: newPlan }),
+        body: JSON.stringify({
+          walletAddress: newWallet,
+          plan: planToGrant,
+          reason: testGrant ? 'admin_test_grant' : 'manual_admin_grant',
+        }),
       })
       const result = await res.json()
       if (!res.ok) throw new Error(result.error || 'Failed to add subscriber')
 
-      toast.success('Access granted to ' + newWallet.slice(0, 6) + '...' + newWallet.slice(-4))
+      toast.success((testGrant ? 'Test access granted to ' : 'Access granted to ') + newWallet.slice(0, 6) + '...' + newWallet.slice(-4))
       setNewWallet('')
       setNewNote('')
       setShowAddForm(false)
@@ -306,7 +312,7 @@ export default function AdminPage() {
                 Plan
               </label>
               <div className="grid grid-cols-3 gap-2">
-                {Object.keys(PLAN_DAYS).map(plan => (
+                {Object.keys(PLAN_DAYS).filter(plan => plan !== 'test' || testGrantsEnabled).map(plan => (
                   <button
                     key={plan}
                     onClick={() => setNewPlan(plan)}
@@ -325,13 +331,22 @@ export default function AdminPage() {
 
             <div className="flex gap-2">
               <button
-                onClick={handleAddSubscriber}
+                onClick={() => handleAddSubscriber()}
                 disabled={adding}
                 className="flex-1 flex items-center justify-center gap-2 py-2.5 rounded-lg bg-accent text-white text-sm font-semibold hover:bg-accent/90 disabled:opacity-50 transition-all"
               >
                 {adding ? <Loader2 size={14} className="animate-spin" /> : <CheckCircle2 size={14} />}
                 {adding ? 'Granting...' : 'Grant Access'}
               </button>
+              {testGrantsEnabled && (
+                <button
+                  onClick={() => handleAddSubscriber({ testGrant: true })}
+                  disabled={adding}
+                  className="flex items-center justify-center gap-2 px-3 py-2.5 rounded-lg border border-emerald-500/30 bg-emerald-500/10 text-emerald-300 text-sm font-semibold hover:bg-emerald-500/15 disabled:opacity-50 transition-all"
+                >
+                  Grant Test Access
+                </button>
+              )}
               <button
                 onClick={() => { setShowAddForm(false); setNewWallet('') }}
                 className="px-4 py-2.5 rounded-lg border border-border text-muted text-sm hover:text-text transition-all"
