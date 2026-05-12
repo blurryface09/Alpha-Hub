@@ -4,6 +4,7 @@ import { X, Link2, Shield, Loader, Sparkles } from 'lucide-react'
 import toast from 'react-hot-toast'
 import { extractProjectMetadata } from '../../lib/ai'
 import { friendlyError } from '../../lib/errors'
+import { getAuthToken } from '../../lib/supabase'
 import DateTimePicker from '../shared/DateTimePicker'
 
 const WL_TYPES = [
@@ -15,14 +16,17 @@ const WL_TYPES = [
 ]
 
 const MINT_MODES = [
-  { val: 'confirm', label: 'Confirm', icon: '✓', desc: 'App asks you before minting' },
+  { val: 'confirm', label: 'Confirm Mode', icon: '✓', desc: '1-click mint assist' },
   { val: 'auto',    label: 'Auto Beta',    icon: '⚡', desc: 'Opt-in bot fires when live' },
 ]
+const CHAIN_IDS = { eth: 1, base: 8453, bnb: 56 }
 
 export default function AddProjectModal({ onAdd, onClose }) {
   const [step, setStep] = useState(1)
   const [url, setUrl] = useState('')
   const [loading, setLoading] = useState(false)
+  const [detectingTime, setDetectingTime] = useState(false)
+  const [detectedTime, setDetectedTime] = useState(null)
   const [form, setForm] = useState({
     name: '',
     source_url: '',
@@ -33,8 +37,17 @@ export default function AddProjectModal({ onAdd, onClose }) {
     mint_price: '',
     wl_type: 'UNKNOWN',
     mint_mode: 'confirm',
+    automint_enabled: false,
+    auto_beta_ack: false,
     max_mint: 1,
     gas_limit: 200000,
+    max_mint_price: '',
+    max_gas_fee: '',
+    max_total_spend: '',
+    mint_time_source: 'manual',
+    mint_time_confidence: 'manual',
+    mint_time_confirmed: false,
+    mint_time_confirmed_at: null,
     notes: '',
   })
 
@@ -87,13 +100,29 @@ export default function AddProjectModal({ onAdd, onClose }) {
       toast.error('Auto-mint needs a contract address')
       return
     }
+    if (form.mint_mode === 'auto' && !form.auto_beta_ack) {
+      toast.error('Confirm that you understand Auto Beta can execute real blockchain transactions')
+      return
+    }
+    if (form.mint_mode === 'auto' && form.mint_date && !form.mint_time_confirmed) {
+      toast.error('Confirm the mint time before enabling Auto Beta')
+      return
+    }
     const cleanForm = {
       ...form,
       gas_limit: parseInt(form.gas_limit) || 200000,
       max_mint: parseInt(form.max_mint) || 1,
+      automint_enabled: form.mint_mode === 'auto' && form.auto_beta_ack,
       contract_address: form.contract_address?.trim() || null,
       mint_date: form.mint_date || null,
       mint_price: form.mint_price?.trim() || null,
+      max_mint_price: form.max_mint_price?.trim() || null,
+      max_gas_fee: form.max_gas_fee?.trim() || null,
+      max_total_spend: form.max_total_spend?.trim() || null,
+      mint_time_source: form.mint_date ? (form.mint_time_source || 'manual') : null,
+      mint_time_confidence: form.mint_date ? (form.mint_time_confidence || 'manual') : null,
+      mint_time_confirmed: Boolean(form.mint_date),
+      mint_time_confirmed_at: form.mint_date ? (form.mint_time_confirmed_at || new Date().toISOString()) : null,
       notes: form.notes?.trim() || null,
     }
     setLoading(true)
@@ -104,6 +133,56 @@ export default function AddProjectModal({ onAdd, onClose }) {
     } finally {
       setLoading(false)
     }
+  }
+
+  const detectMintTime = async () => {
+    if (!form.contract_address?.trim() && !form.source_url?.trim()) {
+      toast.error('Add a contract address or mint page URL first')
+      return
+    }
+    setDetectingTime(true)
+    try {
+      const token = await getAuthToken()
+      if (!token) throw new Error('Sign in again before scanning')
+      const res = await fetch('/api/mint-time/detect', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({
+          contractAddress: form.contract_address?.trim() || null,
+          chainId: CHAIN_IDS[form.chain] || 1,
+          mintUrl: form.source_url || url || null,
+          projectName: form.name,
+        }),
+      })
+      const data = await res.json()
+      if (!res.ok) throw new Error(data.error || 'Mint time scan failed')
+      if (!data.detected) {
+        setDetectedTime(null)
+        toast('No reliable mint time found. Please enter manually.')
+        return
+      }
+      setDetectedTime(data)
+    } catch (error) {
+      toast.error(friendlyError(error, 'Mint time scan failed. Please enter manually.'))
+    } finally {
+      setDetectingTime(false)
+    }
+  }
+
+  const confirmDetectedTime = () => {
+    if (!detectedTime?.mintDate) return
+    setForm(f => ({
+      ...f,
+      mint_date: detectedTime.mintDate,
+      mint_time_source: detectedTime.source,
+      mint_time_confidence: detectedTime.confidence,
+      mint_time_confirmed: true,
+      mint_time_confirmed_at: new Date().toISOString(),
+    }))
+    toast.success('Mint time confirmed')
   }
 
   return (
@@ -186,8 +265,45 @@ export default function AddProjectModal({ onAdd, onClose }) {
 
               <DateTimePicker
                 value={form.mint_date}
-                onChange={val => set('mint_date', val)}
+                onChange={val => setForm(f => ({
+                  ...f,
+                  mint_date: val,
+                  mint_time_source: 'manual',
+                  mint_time_confidence: 'manual',
+                  mint_time_confirmed: Boolean(val),
+                  mint_time_confirmed_at: val ? new Date().toISOString() : null,
+                }))}
               />
+              <div className="flex gap-2">
+                <button onClick={detectMintTime} disabled={detectingTime} className="btn-ghost flex items-center gap-2 text-xs">
+                  {detectingTime ? <Loader size={13} className="animate-spin" /> : <Sparkles size={13} />}
+                  {detectingTime ? 'Scanning...' : 'Detect mint time'}
+                </button>
+                {detectedTime && (
+                  <button onClick={confirmDetectedTime} className="btn-primary text-xs">
+                    Confirm detected time
+                  </button>
+                )}
+              </div>
+              {detectedTime && (
+                <div className="rounded-lg border border-accent/20 bg-accent/8 p-3 text-xs text-muted space-y-1">
+                  <div className="font-mono text-accent">Detected mint time</div>
+                  <div>Local: {new Date(detectedTime.mintDate).toLocaleString()}</div>
+                  <div>UTC: {new Date(detectedTime.mintDate).toISOString()}</div>
+                  <div>Source: {detectedTime.source}</div>
+                  <div>Confidence: {detectedTime.confidence}</div>
+                  {detectedTime.confidence !== 'high' && (
+                    <div className="text-amber-200">Please verify this time from the official project source.</div>
+                  )}
+                </div>
+              )}
+              {form.mint_date && (
+                <div className="rounded-lg border border-accent/20 bg-accent/8 p-3 text-xs text-muted">
+                  <div className="font-mono text-accent mb-1">Mint time confirmed</div>
+                  <div>Local: {new Date(form.mint_date).toLocaleString()}</div>
+                  <div>UTC: {new Date(form.mint_date).toISOString()}</div>
+                </div>
+              )}
 
               <div>
                 <label className="text-xs font-mono text-muted uppercase tracking-wider block mb-1.5">Mint Price</label>
@@ -218,8 +334,17 @@ export default function AddProjectModal({ onAdd, onClose }) {
                   ))}
                 </div>
                 {form.mint_mode === 'auto' && (
-                  <div className="mt-2 rounded-lg border border-amber-500/25 bg-amber-500/10 p-3 text-xs text-amber-200">
-                    Auto-mint is beta and opt-in. It can submit a real transaction from your saved minting wallet when the mint goes live.
+                  <div className="mt-2 rounded-lg border border-amber-500/25 bg-amber-500/10 p-3 text-xs text-amber-200 space-y-3">
+                    <p>Auto Beta can execute real blockchain transactions from your configured wallet. Use an isolated wallet and set max spend limits.</p>
+                    <label className="flex items-start gap-2">
+                      <input
+                        type="checkbox"
+                        checked={form.auto_beta_ack}
+                        onChange={e => set('auto_beta_ack', e.target.checked)}
+                        className="mt-0.5"
+                      />
+                      <span>I understand Auto Beta may execute real blockchain transactions.</span>
+                    </label>
                   </div>
                 )}
               </div>
@@ -234,6 +359,22 @@ export default function AddProjectModal({ onAdd, onClose }) {
                   <input className="input" type="number" value={form.gas_limit} onChange={e => set('gas_limit', parseInt(e.target.value) || 200000)} />
                 </div>
               </div>
+              {form.mint_mode === 'auto' && (
+                <div className="grid grid-cols-3 gap-3">
+                  <div>
+                    <label className="text-xs font-mono text-muted uppercase tracking-wider block mb-1.5">Max Mint ETH</label>
+                    <input className="input" placeholder="0.05" value={form.max_mint_price} onChange={e => set('max_mint_price', e.target.value)} />
+                  </div>
+                  <div>
+                    <label className="text-xs font-mono text-muted uppercase tracking-wider block mb-1.5">Max Gas ETH</label>
+                    <input className="input" placeholder="0.01" value={form.max_gas_fee} onChange={e => set('max_gas_fee', e.target.value)} />
+                  </div>
+                  <div>
+                    <label className="text-xs font-mono text-muted uppercase tracking-wider block mb-1.5">Max Total ETH</label>
+                    <input className="input" placeholder="0.06" value={form.max_total_spend} onChange={e => set('max_total_spend', e.target.value)} />
+                  </div>
+                </div>
+              )}
 
               <div>
                 <label className="text-xs font-mono text-muted uppercase tracking-wider block mb-1.5">Notes</label>

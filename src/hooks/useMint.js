@@ -1,4 +1,4 @@
-import { useAccount, useWriteContract, useSwitchChain } from 'wagmi'
+import { useAccount, useWriteContract, useSwitchChain, useSendTransaction } from 'wagmi'
 import { parseEther, parseAbi } from 'viem'
 import { mainnet, base, bsc } from 'wagmi/chains'
 import toast from 'react-hot-toast'
@@ -63,6 +63,7 @@ function isHardStop(e) {
 export function useMint() {
   const { address, isConnected, chain } = useAccount()
   const { writeContractAsync } = useWriteContract()
+  const { sendTransactionAsync } = useSendTransaction()
   const { switchChainAsync } = useSwitchChain()
 
   const executeMint = async (project, userId) => {
@@ -95,10 +96,20 @@ export function useMint() {
       const gasLimit = BigInt(project.gas_limit || 200000)
 
       let txHash
+      if (project.prepared_to && project.prepared_data && project.prepared_chain_id === targetChainId) {
+        toast.loading('Using prepared mint transaction...', { id: 'mint-tx' })
+        txHash = await sendTransactionAsync({
+          to: project.prepared_to,
+          data: project.prepared_data,
+          value: BigInt(project.prepared_value || '0'),
+          chainId: targetChainId,
+          gas: project.gas_estimate ? BigInt(project.gas_estimate) : undefined,
+        })
+      }
 
       // --- Step 1: Try verified ABI from Etherscan ---
-      toast.loading('Checking contract...', { id: 'mint-tx' })
-      const verifiedAbi = await fetchContractAbi(project.contract_address, project.chain || 'eth')
+      if (!txHash) toast.loading('Checking contract...', { id: 'mint-tx' })
+      const verifiedAbi = txHash ? null : await fetchContractAbi(project.contract_address, project.chain || 'eth')
 
       if (verifiedAbi) {
         const mintFn = findMintFn(verifiedAbi)

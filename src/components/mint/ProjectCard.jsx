@@ -105,8 +105,7 @@ export default function ProjectCard({ project, isMinting, onMint, onDelete, onSt
                     {(project.status === "upcoming" || project.status === "live")
                       ? <Countdown
                     mintDate={project.mint_date}
-                    isAuto={project.mint_mode === 'auto' && (project.status === 'upcoming' || project.status === 'live')}
-                    onLive={() => onMint(true)}
+                    isAuto={false}
                   />
                       : <span className="font-mono text-xs text-muted">{new Date(project.mint_date).toLocaleDateString()}</span>
                     }
@@ -138,15 +137,13 @@ export default function ProjectCard({ project, isMinting, onMint, onDelete, onSt
                 {project.mint_mode === "auto" ? "Auto Beta" : "Confirm"}
               </button>
               {project.contract_address && project.mint_mode === 'auto' && project.status !== 'minted' && (
-                <button
-                  onClick={() => onMint(true)}
-                  disabled={isMinting}
-                  title="Test fire — triggers auto-mint regardless of status"
-                  className="text-xs px-2 py-1.5 rounded-md border border-accent3/40 text-accent3 hover:bg-accent3/10 transition-all flex items-center gap-1"
+                <span
+                  title="Server Auto Beta runs safety checks before sending any transaction"
+                  className="text-xs px-2 py-1.5 rounded-md border border-amber-500/25 text-amber-300 bg-amber-500/10 flex items-center gap-1"
                 >
                   {React.createElement(Zap, { size: 11 })}
-                  Test
-                </button>
+                  Queued
+                </span>
               )}
               {(project.status === "live" || project.status === "upcoming") && project.contract_address && (
                 <button onClick={() => onMint(false)} disabled={isMinting} className="btn-primary text-xs px-3 py-1.5 flex items-center gap-1.5">

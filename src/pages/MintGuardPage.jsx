@@ -13,6 +13,21 @@ import MintConfirmModal from '../components/mint/MintConfirmModal'
 import ProjectCard from '../components/mint/ProjectCard'
 
 const STATUS_TABS = ['all', 'upcoming', 'live', 'minted', 'missed']
+const OPTIONAL_PROJECT_FIELDS = [
+  'automint_enabled',
+  'max_mint_price',
+  'max_gas_fee',
+  'max_total_spend',
+  'mint_time_source',
+  'mint_time_confidence',
+  'mint_time_confirmed',
+  'mint_time_confirmed_at',
+  'prepared_to',
+  'prepared_data',
+  'prepared_value',
+  'prepared_chain_id',
+  'execution_status',
+]
 
 // Send a notification to the user's Telegram (fire-and-forget)
 async function notifyTelegram(project, type, userToken) {
@@ -110,6 +125,7 @@ export default function MintGuardPage() {
 
   // First load with spinner, subsequent interval refreshes silent
   const initialLoad = React.useRef(false)
+  const lastVisibilityRefresh = React.useRef(0)
 
   useEffect(() => {
     if (!initialLoad.current) {
@@ -121,7 +137,10 @@ export default function MintGuardPage() {
 
     // Re-fetch when tab/app becomes visible — small delay lets Supabase finish token refresh first
     const onVisibility = () => {
-      if (document.visibilityState === 'visible') setTimeout(() => fetchProjects(false), 800)
+      if (document.visibilityState !== 'visible') return
+      if (Date.now() - lastVisibilityRefresh.current < 4 * 60 * 1000) return
+      lastVisibilityRefresh.current = Date.now()
+      setTimeout(() => fetchProjects(false), 800)
     }
     document.addEventListener('visibilitychange', onVisibility)
 
@@ -159,13 +178,14 @@ export default function MintGuardPage() {
     const autoProjects = projects.filter(p =>
       p.status === 'live' &&
       p.mint_mode === 'auto' &&
+      p.automint_enabled !== false &&
       p.contract_address &&
       !p.auto_mint_fired  // skip if server-side cron already fired it
     )
     autoProjects.forEach(p => {
       if (!autoFired.current.has(p.id)) {
         autoFired.current.add(p.id)
-        handleMint(p, true)
+        toast.success(`${p.name} is queued for Auto Beta. Server safety checks will run before any transaction.`)
       }
     })
   }, [projects])
@@ -234,15 +254,33 @@ export default function MintGuardPage() {
       mint_price: projectData.mint_price || null,
       wl_type: projectData.wl_type || 'UNKNOWN',
       mint_mode: projectData.mint_mode || 'confirm',
+      automint_enabled: projectData.automint_enabled ?? false,
       max_mint: projectData.max_mint || 1,
       gas_limit: projectData.gas_limit || 200000,
+      max_mint_price: projectData.max_mint_price || null,
+      max_gas_fee: projectData.max_gas_fee || null,
+      max_total_spend: projectData.max_total_spend || null,
+      mint_time_source: projectData.mint_time_source || null,
+      mint_time_confidence: projectData.mint_time_confidence || null,
+      mint_time_confirmed: projectData.mint_time_confirmed ?? Boolean(projectData.mint_date),
+      mint_time_confirmed_at: projectData.mint_time_confirmed_at || null,
+      execution_status: 'queued',
       notes: projectData.notes || null,
       user_id: user.id,
       status: 'upcoming',
     }
     toast.loading('Saving...', { id: 'save-project' })
     try {
-      const data = await directInsert('wl_projects', insertData)
+      let data
+      try {
+        data = await directInsert('wl_projects', insertData)
+      } catch (schemaError) {
+        if (!String(schemaError.message || '').includes('schema cache')) throw schemaError
+        const fallbackData = { ...insertData }
+        OPTIONAL_PROJECT_FIELDS.forEach((field) => delete fallbackData[field])
+        data = await directInsert('wl_projects', fallbackData)
+        console.warn('Saved project without optional automint safety columns. Apply the automint schema migration before launch.')
+      }
       setProjects(prev => [data, ...prev])
       toast.success(`${data.name} added!`, { id: 'save-project' })
       setShowAddModal(false)
@@ -289,12 +327,31 @@ export default function MintGuardPage() {
       return
     }
     const newMode = currentMode === 'confirm' ? 'auto' : 'confirm'
-    await supabase.from('wl_projects').update({ mint_mode: newMode }).eq('id', id)
-    setProjects(prev => prev.map(p => p.id === id ? { ...p, mint_mode: newMode } : p))
-    toast.success(`Switched to ${newMode === 'auto' ? '⚡ Auto-Mint' : '✓ Confirm-Mint'}`)
+    if (newMode === 'auto') {
+      const accepted = window.confirm('Auto Beta can execute real blockchain transactions from your configured wallet. Use an isolated wallet and set max spend limits. Continue?')
+      if (!accepted) return
+    }
+    let { error } = await supabase
+      .from('wl_projects')
+      .update({ mint_mode: newMode, automint_enabled: newMode === 'auto' })
+      .eq('id', id)
+    if (error && String(error.message || '').includes('schema cache')) {
+      const fallback = await supabase.from('wl_projects').update({ mint_mode: newMode }).eq('id', id)
+      error = fallback.error
+    }
+    if (error) {
+      toast.error(friendlyError(error, 'Could not update mint mode.'))
+      return
+    }
+    setProjects(prev => prev.map(p => p.id === id ? { ...p, mint_mode: newMode, automint_enabled: newMode === 'auto' } : p))
+    toast.success(`Switched to ${newMode === 'auto' ? '⚡ Auto Beta' : '✓ Confirm Mode'}`)
   }
 
   const handleMint = async (project, isAuto = false) => {
+    if (isAuto) {
+      toast.success(`${project.name} is queued for Auto Beta server execution.`)
+      return
+    }
     if (!hasAccess('pro')) {
       setUpgradeRequired('Mint execution and automint tools require Pro.')
       toast.error('Mint execution requires Pro.')

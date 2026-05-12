@@ -5,6 +5,7 @@
   "rewrites": [
     { "source": "/api/admin/payments/approve", "destination": "/api/admin-subscriptions?action=approve-payment" },
     { "source": "/api/admin/payments/reject", "destination": "/api/admin-subscriptions?action=reject-payment" },
+    { "source": "/api/ai-analysis", "destination": "/api/etherscan?tool=ai-analysis" },
     { "source": "/((?!api/.*).*)", "destination": "/index.html" }
   ]
 }

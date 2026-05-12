@@ -62,7 +62,7 @@ export default async function handler(req, res) {
     process.env.ALCHEMY_API_KEY ||
     process.env.VITE_ALCHEMY_API_KEY
   )
-  const automintEnabled = String(process.env.AUTOMINT_ENABLED || 'true').trim().toLowerCase() !== 'false'
+  const automintEnabled = String(process.env.AUTOMINT_ENABLED || '').trim().toLowerCase() === 'true'
   const paymentChain = getPaymentChain()
   const receiverConfigured = isWalletAddress(PAYMENT_CONFIG.receiverAddress)
   const missingPaymentEnv = [

@@ -155,12 +155,10 @@ export default function OverviewPage() {
     const interval = setInterval(safeLoad, 30000)
     const onResume = () => safeLoad()
     window.addEventListener('alphahub:resume', onResume)
-    window.addEventListener('focus', onResume)
     return () => {
       cancelled = true
       clearInterval(interval)
       window.removeEventListener('alphahub:resume', onResume)
-      window.removeEventListener('focus', onResume)
     }
   }, [user, loadCommandCenter])
 

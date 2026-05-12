@@ -41,10 +41,8 @@ export function useSubscription() {
 
   useEffect(() => {
     const refreshOnResume = () => checkSubscription()
-    window.addEventListener('focus', refreshOnResume)
     window.addEventListener('alphahub:resume', refreshOnResume)
     return () => {
-      window.removeEventListener('focus', refreshOnResume)
       window.removeEventListener('alphahub:resume', refreshOnResume)
     }
   }, [checkSubscription])

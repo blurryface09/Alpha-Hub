@@ -3,6 +3,8 @@ import { persist } from 'zustand/middleware'
 import { supabase } from '../lib/supabase'
 
 let resumeListenerAttached = false
+let lastResumeRefreshAt = 0
+const RESUME_REFRESH_MS = 4 * 60 * 1000
 
 // --- Auth Store --------------------------------------------------
 export const useAuthStore = create((set, get) => ({
@@ -39,6 +41,8 @@ export const useAuthStore = create((set, get) => ({
         resumeListenerAttached = true
         const recover = async () => {
           if (document.visibilityState !== 'visible') return
+          if (Date.now() - lastResumeRefreshAt < RESUME_REFRESH_MS) return
+          lastResumeRefreshAt = Date.now()
           try {
             await supabase.auth.refreshSession()
           } catch {}
@@ -50,7 +54,6 @@ export const useAuthStore = create((set, get) => ({
           window.dispatchEvent(new CustomEvent('alphahub:resume'))
         }
         document.addEventListener('visibilitychange', recover)
-        window.addEventListener('focus', recover)
       }
     } catch (err) {
       console.error('Auth init error:', err)

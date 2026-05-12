@@ -11,9 +11,10 @@
 
 import crypto from 'crypto'
 import { createClient } from '@supabase/supabase-js'
-import { createWalletClient, createPublicClient, http, parseEther, parseAbi } from 'viem'
+import { createWalletClient, createPublicClient, parseEther, parseAbi, encodeFunctionData, isAddress } from 'viem'
 import { privateKeyToAccount } from 'viem/accounts'
 import { mainnet, base, bsc } from 'viem/chains'
+import { fallbackTransport, sanitizeRpcError } from './_lib/rpc.js'
 
 let supabase
 
@@ -32,12 +33,25 @@ function getSupabase() {
 const ALCHEMY_KEY = process.env.ALCHEMY_API_KEY || process.env.VITE_ALCHEMY_API_KEY
 const ETHERSCAN_KEY = process.env.ETHERSCAN_API_KEY || process.env.VITE_ETHERSCAN_API_KEY
 const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN
-const AUTOMINT_ENABLED = String(process.env.AUTOMINT_ENABLED || 'true').trim().toLowerCase() !== 'false'
+const AUTOMINT_ENABLED = String(process.env.AUTOMINT_ENABLED || '').trim().toLowerCase() === 'true'
 
 const CHAIN_CONFIG = {
-  eth:  { chain: mainnet, rpc: `https://eth-mainnet.g.alchemy.com/v2/${ALCHEMY_KEY}`,  id: 1    },
-  base: { chain: base,    rpc: `https://base-mainnet.g.alchemy.com/v2/${ALCHEMY_KEY}`, id: 8453 },
-  bnb:  { chain: bsc,     rpc: `https://bnb-mainnet.g.alchemy.com/v2/${ALCHEMY_KEY}`,  id: 56   },
+  eth:  { chain: mainnet, id: 1    },
+  base: { chain: base,    id: 8453 },
+  bnb:  { chain: bsc,     id: 56   },
+}
+
+const EXECUTION_STATUS = {
+  QUEUED: 'queued',
+  PREPARING: 'preparing',
+  PREPARED: 'prepared',
+  SIMULATING: 'simulating',
+  READY: 'ready',
+  EXECUTING: 'executing',
+  SUBMITTED: 'submitted',
+  CONFIRMED: 'confirmed',
+  FAILED: 'failed',
+  SKIPPED: 'skipped',
 }
 
 // ---- crypto helpers -------------------------------------------------------
@@ -97,6 +111,156 @@ function findMintFn(abi) {
   return null
 }
 
+function nowIso() {
+  return new Date().toISOString()
+}
+
+function safeEth(value, fallback = '0') {
+  const clean = String(value ?? fallback).replace(/[^0-9.]/g, '') || fallback
+  try {
+    return parseEther(clean)
+  } catch {
+    return parseEther(fallback)
+  }
+}
+
+function msSince(started) {
+  return Math.max(0, Date.now() - started)
+}
+
+function buildArgs(fn, quantity, account) {
+  const inputs = fn.inputs || []
+  if (inputs.length === 0) return []
+  if (inputs.length === 1) {
+    const input = inputs[0]
+    if (input.type?.startsWith('uint')) return [quantity]
+    if (input.type === 'address') return [account.address]
+  }
+  throw new Error('Unsupported mint function inputs')
+}
+
+async function safeProjectUpdate(projectId, updates) {
+  if (!Object.keys(updates).length) return
+  const { error } = await supabase.from('wl_projects').update(updates).eq('id', projectId)
+  if (error) console.error('automint project update failed:', error.message)
+}
+
+async function markProject(projectId, updates) {
+  await safeProjectUpdate(projectId, updates)
+}
+
+function safeUserMessage(kind) {
+  if (kind === 'simulation') return 'Mint simulation failed. Transaction was not sent.'
+  if (kind === 'spend') return 'Mint skipped because max spend was exceeded.'
+  if (kind === 'prepare') return 'Mint preparation failed.'
+  return 'Automint is temporarily unavailable.'
+}
+
+function createClients(chainKey, account) {
+  const chainCfg = CHAIN_CONFIG[chainKey || 'eth']
+  if (!chainCfg) throw new Error(`Unsupported chain: ${chainKey}`)
+  const transport = fallbackTransport(chainKey || 'eth')
+  return {
+    chainCfg,
+    walletClient: createWalletClient({ account, chain: chainCfg.chain, transport }),
+    publicClient: createPublicClient({ chain: chainCfg.chain, transport }),
+  }
+}
+
+async function prepareMintTransaction(project, account) {
+  const started = Date.now()
+  const chainKey = project.chain || 'eth'
+  const chainCfg = CHAIN_CONFIG[chainKey]
+  if (!chainCfg) throw new Error('Unsupported chain')
+  if (!project.contract_address || !isAddress(project.contract_address)) throw new Error('Invalid contract address')
+
+  const quantity = BigInt(project.max_mint || 1)
+  const mintPrice = safeEth(project.mint_price || '0')
+  const totalValue = mintPrice * quantity
+  const attempts = []
+
+  const verifiedAbi = await fetchVerifiedAbi(project.contract_address, chainCfg.id)
+  if (verifiedAbi) {
+    const mintFn = findMintFn(verifiedAbi)
+    if (mintFn) {
+      attempts.push({
+        abi: verifiedAbi,
+        functionName: mintFn.name,
+        args: buildArgs(mintFn, quantity, account),
+        source: `abi.${mintFn.name}`,
+      })
+    }
+  }
+
+  attempts.push(
+    { abi: parseAbi(['function mint(uint256 quantity) payable']), functionName: 'mint', args: [quantity], source: 'common.mint(uint256)' },
+    { abi: parseAbi(['function publicMint(uint256 quantity) payable']), functionName: 'publicMint', args: [quantity], source: 'common.publicMint(uint256)' },
+    { abi: parseAbi(['function mintPublic(uint256 quantity) payable']), functionName: 'mintPublic', args: [quantity], source: 'common.mintPublic(uint256)' },
+    { abi: parseAbi(['function mint() payable']), functionName: 'mint', args: [], source: 'common.mint()' },
+    { abi: parseAbi(['function purchase(uint256 numberOfTokens) payable']), functionName: 'purchase', args: [quantity], source: 'common.purchase(uint256)' },
+    { abi: parseAbi(['function presaleMint(uint256 quantity) payable']), functionName: 'presaleMint', args: [quantity], source: 'common.presaleMint(uint256)' },
+    { abi: parseAbi(['function allowlistMint(uint256 quantity) payable']), functionName: 'allowlistMint', args: [quantity], source: 'common.allowlistMint(uint256)' },
+    { abi: parseAbi(['function safeMint(address to) payable']), functionName: 'safeMint', args: [account.address], source: 'common.safeMint(address)' },
+  )
+
+  let lastError
+  for (const attempt of attempts) {
+    try {
+      const data = encodeFunctionData({
+        abi: attempt.abi,
+        functionName: attempt.functionName,
+        args: attempt.args,
+      })
+      return {
+        to: project.contract_address,
+        data,
+        value: totalValue,
+        chainId: chainCfg.id,
+        source: attempt.source,
+        timeToPrepareMs: msSince(started),
+      }
+    } catch (error) {
+      lastError = error
+    }
+  }
+
+  throw lastError || new Error('No supported mint function found')
+}
+
+async function simulatePreparedTransaction(project, account, publicClient, prepared) {
+  const started = Date.now()
+  await publicClient.call({
+    account: account.address,
+    to: prepared.to,
+    data: prepared.data,
+    value: prepared.value,
+  })
+  const gas = await publicClient.estimateGas({
+    account: account.address,
+    to: prepared.to,
+    data: prepared.data,
+    value: prepared.value,
+  })
+  const gasPrice = await publicClient.getGasPrice()
+  return {
+    gas,
+    gasPrice,
+    totalGasCost: gas * gasPrice,
+    totalCost: prepared.value + (gas * gasPrice),
+    timeToSimulateMs: msSince(started),
+  }
+}
+
+function assertSpendWithinLimits(project, prepared, simulation) {
+  const maxMintPrice = project.max_mint_price ? safeEth(project.max_mint_price) : null
+  const maxGasFee = project.max_gas_fee ? safeEth(project.max_gas_fee) : null
+  const maxTotalSpend = project.max_total_spend ? safeEth(project.max_total_spend) : null
+
+  if (maxMintPrice && prepared.value > maxMintPrice) throw new Error('max_spend_exceeded')
+  if (maxGasFee && simulation.totalGasCost > maxGasFee) throw new Error('max_spend_exceeded')
+  if (maxTotalSpend && simulation.totalCost > maxTotalSpend) throw new Error('max_spend_exceeded')
+}
+
 // ---- mint execution --------------------------------------------------------
 
 async function executeMintServerSide(project, privateKey, chatId) {
@@ -104,76 +268,45 @@ async function executeMintServerSide(project, privateKey, chatId) {
   if (!chainCfg) throw new Error(`Unsupported chain: ${project.chain}`)
 
   const account = privateKeyToAccount(privateKey)
-  const walletClient = createWalletClient({
+  const { walletClient, publicClient } = createClients(project.chain || 'eth', account)
+
+  const prepared = await prepareMintTransaction(project, account)
+  await markProject(project.id, {
+    execution_status: EXECUTION_STATUS.PREPARED,
+    prepared_to: prepared.to,
+    prepared_data: prepared.data,
+    prepared_value: prepared.value.toString(),
+    prepared_chain_id: prepared.chainId,
+    prepared_at: nowIso(),
+    time_to_prepare_ms: prepared.timeToPrepareMs,
+  })
+
+  await markProject(project.id, { execution_status: EXECUTION_STATUS.SIMULATING, simulation_started_at: nowIso() })
+  const simulation = await simulatePreparedTransaction(project, account, publicClient, prepared)
+  assertSpendWithinLimits(project, prepared, simulation)
+  await markProject(project.id, {
+    execution_status: EXECUTION_STATUS.READY,
+    simulation_status: 'passed',
+    simulation_error: null,
+    simulated_at: nowIso(),
+    gas_estimate: simulation.gas.toString(),
+    time_to_simulate_ms: simulation.timeToSimulateMs,
+  })
+
+  await markProject(project.id, { execution_status: EXECUTION_STATUS.EXECUTING, execution_started_at: nowIso() })
+  const started = Date.now()
+  const txHash = await walletClient.sendTransaction({
     account,
-    chain: chainCfg.chain,
-    transport: http(chainCfg.rpc),
+    to: prepared.to,
+    data: prepared.data,
+    value: prepared.value,
+    gas: simulation.gas,
   })
-  const publicClient = createPublicClient({
-    chain: chainCfg.chain,
-    transport: http(chainCfg.rpc),
+  await markProject(project.id, {
+    execution_status: EXECUTION_STATUS.SUBMITTED,
+    submitted_at: nowIso(),
+    time_to_submit_ms: msSince(started),
   })
-
-  const priceStr = (project.mint_price || '0').replace(/[^0-9.]/g, '') || '0'
-  const mintPrice = parseEther(priceStr)
-  const quantity = BigInt(project.max_mint || 1)
-  const gasLimit = BigInt(project.gas_limit || 200000)
-  const totalValue = mintPrice * quantity
-
-  let txHash
-
-  // Try verified ABI first
-  const verifiedAbi = await fetchVerifiedAbi(project.contract_address, chainCfg.id)
-  if (verifiedAbi) {
-    const mintFn = findMintFn(verifiedAbi)
-    if (mintFn) {
-      const args = mintFn.inputs?.length > 0 ? [quantity] : []
-      try {
-        txHash = await walletClient.writeContract({
-          address: project.contract_address,
-          abi: verifiedAbi,
-          functionName: mintFn.name,
-          args,
-          value: totalValue,
-          gas: gasLimit,
-        })
-      } catch (e) {
-        if (e.message?.includes('rejected') || e.message?.includes('reverted')) throw e
-        // Fall through to guessing
-      }
-    }
-  }
-
-  // Fallback — try common signatures
-  if (!txHash) {
-    const attempts = [
-      { sig: 'function mint(uint256 quantity) payable',           name: 'mint',        args: [quantity] },
-      { sig: 'function publicMint(uint256 quantity) payable',     name: 'publicMint',  args: [quantity] },
-      { sig: 'function mintPublic(uint256 quantity) payable',     name: 'mintPublic',  args: [quantity] },
-      { sig: 'function mint() payable',                           name: 'mint',        args: []         },
-      { sig: 'function purchase(uint256 numberOfTokens) payable', name: 'purchase',    args: [quantity] },
-      { sig: 'function presaleMint(uint256 quantity) payable',    name: 'presaleMint', args: [quantity] },
-    ]
-
-    for (const a of attempts) {
-      try {
-        txHash = await walletClient.writeContract({
-          address: project.contract_address,
-          abi: parseAbi([a.sig]),
-          functionName: a.name,
-          args: a.args,
-          value: totalValue,
-          gas: gasLimit,
-        })
-        break
-      } catch (e) {
-        if (e.message?.includes('reverted')) throw e
-        continue
-      }
-    }
-  }
-
-  if (!txHash) throw new Error('No supported mint function found on contract')
   return { txHash, publicClient }
 }
 
@@ -190,7 +323,7 @@ export default async function handler(req, res) {
       ok: true,
       dryRun: true,
       fired: 0,
-      message: 'Auto-mint runner is disabled. Set AUTOMINT_ENABLED=true to allow opt-in project transactions.',
+      message: 'Automint disabled by global safety switch',
     })
   }
 
@@ -205,10 +338,11 @@ export default async function handler(req, res) {
     return res.status(200).json({ ok: false, error: 'Supabase env vars missing' })
   }
 
-  // Find all live projects with auto-mint enabled and a contract address
+  // Find all live projects with auto-mint enabled and a contract address.
+  // Select * so new safety columns can be used when present without breaking older schemas.
   const { data: projects, error } = await supabase
     .from('wl_projects')
-    .select('id, name, chain, contract_address, mint_price, max_mint, gas_limit, wl_type, user_id, auto_mint_fired')
+    .select('*')
     .eq('status', 'live')
     .eq('mint_mode', 'auto')
     .not('contract_address', 'is', null)
@@ -243,8 +377,38 @@ export default async function handler(req, res) {
     const walletRow = walletMap[project.user_id]
     const chatId = chatMap[project.user_id]
 
+    if (project.automint_enabled === false) {
+      await markProject(project.id, {
+        execution_status: EXECUTION_STATUS.SKIPPED,
+        execution_reason: 'automint_not_enabled',
+      })
+      continue
+    }
+
+    if (project.mint_time_confirmed === false) {
+      await markProject(project.id, {
+        execution_status: EXECUTION_STATUS.SKIPPED,
+        execution_reason: 'mint_time_not_confirmed',
+      })
+      await tgNotify(chatId, `⚠️ <b>Auto-mint skipped: ${project.name}</b>\n\nMint time not confirmed.`)
+      continue
+    }
+
+    if (!project.contract_address || !isAddress(project.contract_address)) {
+      await markProject(project.id, {
+        execution_status: EXECUTION_STATUS.SKIPPED,
+        execution_reason: 'missing_contract',
+      })
+      await tgNotify(chatId, `⚠️ <b>Auto-mint skipped: ${project.name}</b>\n\nMissing contract address.`)
+      continue
+    }
+
     if (!walletRow) {
       // No server wallet configured — skip and optionally notify
+      await markProject(project.id, {
+        execution_status: EXECUTION_STATUS.SKIPPED,
+        execution_reason: 'missing_minting_wallet',
+      })
       await tgNotify(chatId,
         `⚡ <b>Auto-mint skipped: ${project.name}</b>\n\nNo minting wallet set up. Go to <b>Settings → Minting Wallet</b> in Alpha-Hub to enable server-side auto-mint.`
       )
@@ -261,6 +425,7 @@ export default async function handler(req, res) {
       const chain = (project.chain || 'eth').toUpperCase()
       const price = project.mint_price || 'Free'
 
+      await markProject(project.id, { execution_status: EXECUTION_STATUS.PREPARING, prepare_started_at: nowIso() })
       await tgNotify(chatId,
         `⚡ <b>Auto-minting: ${project.name}</b>\n${chain} · ${price}\nFiring transaction from ${walletRow.wallet_address.slice(0, 10)}...`
       )
@@ -282,6 +447,10 @@ export default async function handler(req, res) {
 
       if (!confirmed) {
         await supabase.from('wl_projects').update({ auto_mint_fired: false }).eq('id', project.id)
+        await markProject(project.id, {
+          execution_status: EXECUTION_STATUS.SUBMITTED,
+          execution_reason: 'confirmation_timeout',
+        })
         await tgNotify(chatId,
           `⏳ <b>TX submitted but unconfirmed: ${project.name}</b>\n\nTX: <code>${txHash.slice(0, 20)}...</code>\nCheck on-chain and mark manually if needed.`
         )
@@ -292,6 +461,10 @@ export default async function handler(req, res) {
       await supabase.from('wl_projects')
         .update({ status: 'minted' })
         .eq('id', project.id)
+      await markProject(project.id, {
+        execution_status: EXECUTION_STATUS.CONFIRMED,
+        confirmed_at: nowIso(),
+      })
 
       await supabase.from('mint_log').insert({
         user_id: project.user_id,
@@ -320,11 +493,19 @@ export default async function handler(req, res) {
     } catch (e) {
       const msg = e.shortMessage || e.message || 'Unknown error'
       console.error(`auto-mint failed for ${project.id}:`, msg)
+      const isSpend = msg === 'max_spend_exceeded'
+      const publicMsg = isSpend ? safeUserMessage('spend') : sanitizeRpcError(e)
 
       // Always unmark fired so the cron can retry on next run.
       // The project remains 'live' so it will be picked up again.
       // Once it succeeds, status becomes 'minted' and it exits the queue permanently.
       await supabase.from('wl_projects').update({ auto_mint_fired: false }).eq('id', project.id)
+      await markProject(project.id, {
+        execution_status: isSpend ? EXECUTION_STATUS.SKIPPED : EXECUTION_STATUS.FAILED,
+        execution_reason: isSpend ? 'max_spend_exceeded' : 'execution_failed',
+        simulation_status: isSpend ? 'passed' : 'failed',
+        simulation_error: publicMsg,
+      })
 
       await supabase.from('mint_log').insert({
         user_id: project.user_id,
@@ -337,7 +518,7 @@ export default async function handler(req, res) {
       }).then(() => {}).catch(() => {})
 
       await tgNotify(chatMap[project.user_id],
-        `❌ <b>Auto-Mint Failed: ${project.name}</b>\n\n${msg.slice(0, 150)}`
+        `❌ <b>Auto-Mint Failed: ${project.name}</b>\n\n${publicMsg}`
       )
     }
   }
