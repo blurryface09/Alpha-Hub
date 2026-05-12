@@ -10,6 +10,7 @@ import { friendlyError } from '../lib/errors'
 import Paywall from '../components/Paywall'
 import AddWalletModal from '../components/whale/AddWalletModal'
 import ActivityFeed from '../components/whale/ActivityFeed'
+import { demoActivity } from '../lib/demoData'
 
 const EXPLORER_HOSTS = {
   eth: 'etherscan.io',
@@ -27,6 +28,8 @@ export default function WhaleRadarPage() {
   const [showAddModal, setShowAddModal] = useState(false)
   const [activeChain, setActiveChain] = useState('all')
   const [upgradeRequired, setUpgradeRequired] = useState(false)
+  const [showDemoFeed, setShowDemoFeed] = useState(() => localStorage.getItem('alphahub:hideDemoWhaleFeed') !== 'true')
+  const isAdmin = plan === 'admin'
 
   const fetchWatchlist = useCallback(async () => {
     if (!user) return
@@ -104,6 +107,10 @@ export default function WhaleRadarPage() {
   }
 
   const copyMint = async (activityItem) => {
+    if (activityItem?.demo) {
+      toast('Demo Copy Mint preview: real whale activity will create a MintGuard project in Confirm Mode.')
+      return
+    }
     if (!hasAccess('pro')) {
       setUpgradeRequired(true)
       toast.error('Copy minting requires Pro.')
@@ -162,9 +169,13 @@ export default function WhaleRadarPage() {
     }
   }
 
-  const filteredActivity = activeChain === 'all'
+  const realActivity = activeChain === 'all'
     ? activity
     : activity.filter(a => a.chain === activeChain)
+  const demoFiltered = activeChain === 'all'
+    ? demoActivity
+    : demoActivity.filter(a => a.chain === activeChain)
+  const filteredActivity = realActivity.length || !showDemoFeed || !isAdmin ? realActivity : demoFiltered
 
   const mintActivity = activity.filter(a => a.is_mint)
   const largeMovers = activity.filter(a => parseFloat(a.value_eth) > 1)
@@ -195,7 +206,7 @@ export default function WhaleRadarPage() {
             {hasAccess('pro') ? 'Server-monitored smart money alerts with realtime updates.' : 'Limited wallet tracking. Upgrade for realtime whale alerts.'}
             <span className="ml-2 text-xs text-accent">
               {plan === 'admin'
-                ? 'Admin access: unlimited'
+                ? 'Admin Mode'
                 : plan === 'free' || !plan
                 ? `Free limit: ${watchlist.length}/${limits.trackedWallets}`
                 : `${plan?.toUpperCase()} limit: ${watchlist.length}/${limits.trackedWallets}`}
@@ -237,7 +248,9 @@ export default function WhaleRadarPage() {
             ) : watchlist.length === 0 ? (
               <div className="text-center py-8">
                 <Eye size={28} className="text-muted mx-auto mb-2" />
-                <p className="text-muted text-sm">No wallets being tracked</p>
+                <p className="text-text text-sm font-semibold">Track smart wallets before the timeline reacts</p>
+                <p className="text-xs text-muted mt-1">Add whales, deployers, or sniper wallets. Alpha Hub monitors mint activity and alerts you when something moves.</p>
+                <button onClick={() => setShowAddModal(true)} className="btn-ghost mt-4 text-xs">Watch Wallet</button>
               </div>
             ) : (
               <div className="space-y-2">
@@ -282,7 +295,12 @@ export default function WhaleRadarPage() {
         <div className="lg:col-span-3">
           <div className="card">
             <div className="flex items-center justify-between mb-3">
-              <div className="section-label mb-0">Live Activity Feed</div>
+              <div>
+                <div className="section-label mb-0">Live Activity Feed</div>
+                {!realActivity.length && showDemoFeed && isAdmin && (
+                  <p className="text-[11px] text-muted mt-1">Admin demo activity shown until real wallet events arrive.</p>
+                )}
+              </div>
               <div className="flex gap-1">
                 {['all', 'eth', 'base', 'bnb'].map(c => (
                   <button
@@ -297,6 +315,24 @@ export default function WhaleRadarPage() {
                 ))}
               </div>
             </div>
+            {!realActivity.length && isAdmin && (
+              <div className="mb-3 flex flex-col gap-2 rounded-lg border border-accent/20 bg-accent/8 p-3 sm:flex-row sm:items-center sm:justify-between">
+                <div>
+                  <div className="text-sm font-semibold text-text">Copy Mint turns whale activity into MintGuard projects.</div>
+                  <div className="text-xs text-muted">Demo rows are labeled and never execute automint.</div>
+                </div>
+                <button
+                  onClick={() => {
+                    const next = !showDemoFeed
+                    setShowDemoFeed(next)
+                    localStorage.setItem('alphahub:hideDemoWhaleFeed', next ? 'false' : 'true')
+                  }}
+                  className="btn-ghost text-xs whitespace-nowrap"
+                >
+                  {showDemoFeed ? 'Hide demo activity' : 'View Demo Feed'}
+                </button>
+              </div>
+            )}
             <ActivityFeed activity={filteredActivity} onCopyMint={copyMint} />
           </div>
         </div>

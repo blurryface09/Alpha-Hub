@@ -70,27 +70,30 @@ ${recentPattern}
 FAILED TRANSACTIONS:
 ${failedContext || 'None'}
 
-Write a forensic report with EXACTLY these sections:
+Write a forensic report with EXACTLY these sections and concrete signals only:
 
-**VERDICT**
-One line classification: whale / degen / jeet / diamond hands / bot / normie / rug deployer. One sentence why.
+**WALLET SUMMARY**
+Age window, tx count, chains used, volume, activity pattern, and likely user type: collector / sniper / deployer / trader / inactive wallet / bot-like wallet.
 
-**BEHAVIOR PATTERN**
-What does this wallet actually do? Which protocols, which strategies, how they move money. Specific.
+**RISK SCORE**
+0-100 with label Low Risk / Medium Risk / High Risk / Unknown. Explain the score in one sentence.
 
-**JEET ANALYSIS**
-Based on ${jeetScore}/100 score and token activity. Do they dump early? Hold through dips? Evidence from data.
-
-**FAILED TX FORENSICS**
-Explain each failed tx in plain English. Was it bad slippage? Sandwich attack? Honeypot trap? Gas too low? Out-competed? If none, say so.
+**BEHAVIORAL SIGNALS**
+Recent activity velocity, repeated contract interactions, failed tx rate, NFT mint frequency, token swap frequency, gas aggression, interaction diversity, and funding clues if visible.
 
 **RED FLAGS**
-Any suspicious patterns, bot-like regularity, rug connections, wash trading, or anything the community must know.
+Specific risks only: fresh high-value activity, failed tx rate, risky contracts, suspicious funding, concentration, bot-like timing, unknown deployer interaction.
 
-**BOTTOM LINE**
-One punchy sentence: trust this wallet, copy their moves, or stay away?
+**GREEN FLAGS**
+Specific positives only: wallet age, diversified activity, verified marketplace interactions, low failed tx rate, organic history.
 
-Max 400 words. Be direct. Crypto language.`
+**ACTIONABLE RECOMMENDATION**
+Pick one: Safe to monitor / Track but do not auto-copy / Avoid automint without manual review / High-confidence smart wallet candidate. Add one reason.
+
+**CONFIDENCE**
+High / Medium / Low with reason. Mention data source: on-chain transaction sample from ${chain.name}, last updated now.
+
+No vague DYOR filler. Max 450 words.`
 
   return callAI('wallet', prompt)
 }
@@ -136,25 +139,25 @@ READ THE CODE for: hidden mint functions, owner withdraw backdoors, blacklist/pa
 
 Write an audit with EXACTLY these sections:
 
-**VERDICT**
-SAFE / CAUTION / HARD AVOID — one sentence biggest reason.
+**CONTRACT INTELLIGENCE**
+Verified status, likely type, chain, owner/deployer clues if visible, supply/max supply if visible, mint price/start time if visible, and marketplace presence if inferable.
 
-**WHAT THIS CONTRACT DOES**
-Plain English: token, NFT, DEX, vault? What's its purpose?
+**RISK SIGNALS**
+List concrete risks: unverified source, owner pause/price control, suspicious mint function, no supply cap, no launch time, low holder diversity, high fail rate.
 
-**CODE VULNERABILITIES**
-${srcSnippet ? 'List dangerous functions found: owner drain, hidden mint, blacklist, pause, fee manipulation. Quote function names.' : 'Explain unverified contract risks in detail.'}
+**LAUNCH READINESS**
+Choose one: Ready to track / Needs manual review / Unsafe for Auto Beta. Explain why.
 
-**OWNERSHIP & CONTROL**
-Renounced or not? What can the deployer still do? Rug risk level.
+**AUTOMINT RECOMMENDATION**
+Choose one: Confirm Mode recommended / Auto Beta not recommended / Auto Beta allowed after user confirmation / Missing required data.
 
 **TRANSACTION PATTERN**
-What do recent calls reveal? Normal activity or suspicious?
+What recent calls reveal: minting, transfers, approvals, failed interactions, or quiet contract.
 
-**COMMUNITY VERDICT**
-One sentence: ape in, proceed careful, or hard avoid?
+**CONFIDENCE**
+High / Medium / Low with reason. Mention data source: contract metadata and recent on-chain calls from ${chain.name}, last updated now.
 
-Max 350 words. Direct. No fluff.`
+No vague DYOR filler. Max 400 words.`
 
   return callAI('contract', prompt)
 }
@@ -211,7 +214,7 @@ Mint Date: ${project.mint_date || 'not set'}
 Notes: ${project.notes || 'none'}
 
 Respond with ONLY valid JSON, no markdown:
-{"summary":"2 sentence description","wl_giveaway_likely":false,"giveaway_note":"","red_flags":[],"green_flags":[],"hype_score":5,"hype_reason":"one sentence","advice":"one sharp sentence","discord_tip":"what to look for","twitter_tip":"search terms for X"}`
+{"summary":"2 sentence execution-focused description","wl_giveaway_likely":false,"giveaway_note":"","red_flags":[],"green_flags":[],"hype_score":5,"hype_reason":"one sentence","mint_interest_label":"Low/Medium/High","launch_readiness":"Ready to track/Needs manual review/Unsafe for Auto Beta","automint_recommendation":"Confirm Mode recommended/Auto Beta not recommended/Auto Beta allowed after user confirmation/Missing required data","confidence":"Low/Medium/High","confidence_reason":"one sentence","advice":"one sharp action","discord_tip":"what to verify","twitter_tip":"search terms for X"}`
 
   try {
     const text = await callAI('project', prompt)

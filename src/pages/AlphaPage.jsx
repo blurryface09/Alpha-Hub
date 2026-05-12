@@ -4,6 +4,7 @@ import { Search, Shield, RefreshCw } from 'lucide-react'
 import toast from 'react-hot-toast'
 import { getWalletData, getContractData, CHAINS, decodeMethodName } from '../lib/blockchain'
 import { analyzeWallet, auditContract } from '../lib/ai'
+import { useSubscription } from '../hooks/useSubscription'
 
 const TABS = ['wallet', 'contract']
 
@@ -26,6 +27,7 @@ function renderAiText(text) {
 }
 
 export default function AlphaPage() {
+  const { plan } = useSubscription()
   const [activeTab, setActiveTab] = useState('wallet')
   const [chain, setChain] = useState('eth')
   const [address, setAddress] = useState('')
@@ -146,6 +148,22 @@ export default function AlphaPage() {
         {error && <p className="text-accent2 text-sm mt-2">⚠ {error}</p>}
       </div>
 
+      {plan === 'admin' && !walletData && !contractData && !loading && (
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-3 mb-4">
+          {[
+            { title: 'Wallet intelligence', body: 'Paste a wallet to classify behavior, risk, failed txs, and copy-trading suitability.' },
+            { title: 'Contract readiness', body: 'Paste a contract to check verification, risk signals, launch readiness, and automint fit.' },
+            { title: 'Confidence labels', body: 'Reports include data source, last updated, confidence level, and why confidence is limited.' },
+          ].map((item) => (
+            <div key={item.title} className="card border-accent/10 bg-accent/5">
+              <div className="section-label">Admin demo preview</div>
+              <div className="text-sm font-semibold">{item.title}</div>
+              <p className="text-xs text-muted mt-2">{item.body}</p>
+            </div>
+          ))}
+        </div>
+      )}
+
       {/* Wallet Results */}
       {walletData && (
         <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} className="space-y-4">
@@ -253,7 +271,10 @@ export default function AlphaPage() {
           {/* AI */}
           <div className="card">
             <div className="flex items-center justify-between mb-3">
-              <div className="section-label mb-0">Forensic AI Analysis</div>
+              <div>
+                <div className="section-label mb-0">Forensic AI Analysis</div>
+                <p className="text-[11px] text-muted mt-1">Source: on-chain sample · Last updated now · Confidence shown in report</p>
+              </div>
               {(aiAnalysis || aiLoading) && (
                 <button
                   onClick={async () => {
@@ -334,7 +355,10 @@ export default function AlphaPage() {
 
           <div className="card">
             <div className="flex items-center justify-between mb-3">
-              <div className="section-label mb-0">AI Security Audit</div>
+              <div>
+                <div className="section-label mb-0">AI Security Audit</div>
+                <p className="text-[11px] text-muted mt-1">Source: contract metadata + recent calls · Last updated now · Confidence shown in report</p>
+              </div>
               {(aiAnalysis || aiLoading) && (
                 <button
                   onClick={async () => {
