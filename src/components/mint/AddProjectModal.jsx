@@ -1,5 +1,4 @@
-import React, { useState } from 'react'
-import { motion } from 'framer-motion'
+import React, { useCallback, useState } from 'react'
 import { X, Link2, Shield, Loader, Sparkles } from 'lucide-react'
 import toast from 'react-hot-toast'
 import { extractProjectMetadata } from '../../lib/ai'
@@ -53,6 +52,46 @@ export default function AddProjectModal({ onAdd, onClose }) {
 
   const set = (key, val) => setForm(f => ({ ...f, [key]: val }))
 
+  const scanMintTime = useCallback(async (sourceForm, { quiet = false } = {}) => {
+    if (!sourceForm.contract_address?.trim() && !sourceForm.source_url?.trim()) {
+      if (!quiet) toast.error('Add a contract address or mint page URL first')
+      return null
+    }
+    setDetectingTime(true)
+    try {
+      const token = await getAuthToken()
+      if (!token) throw new Error('Sign in again before scanning')
+      const res = await fetch('/api/mint-time/detect', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({
+          contractAddress: sourceForm.contract_address?.trim() || null,
+          chainId: CHAIN_IDS[sourceForm.chain] || 1,
+          mintUrl: sourceForm.source_url || url || null,
+          projectName: sourceForm.name,
+        }),
+      })
+      const data = await res.json()
+      if (!res.ok) throw new Error(data.error || 'Mint time scan failed')
+      if (!data.detected) {
+        setDetectedTime(null)
+        if (!quiet) toast('No reliable mint time found. Please enter manually.')
+        return null
+      }
+      setDetectedTime(data)
+      if (!quiet) toast.success('Mint time detected. Confirm or edit it before saving.')
+      return data
+    } catch (error) {
+      if (!quiet) toast.error(friendlyError(error, 'Mint time scan failed. Please enter manually.'))
+      return null
+    } finally {
+      setDetectingTime(false)
+    }
+  }, [url])
+
   const handleUrlSubmit = async () => {
     if (!url.trim()) { toast.error('Paste a URL first'); return }
     setLoading(true)
@@ -83,12 +122,16 @@ export default function AddProjectModal({ onAdd, onClose }) {
         }
       }
 
-      setForm(f => ({ ...f, ...autoFill }))
+      const nextForm = { ...form, ...autoFill }
+      setForm(nextForm)
       setStep(2)
+      scanMintTime(nextForm, { quiet: true })
     } catch (e) {
       // Silent fallback
-      setForm(f => ({ ...f, source_url: url }))
+      const nextForm = { ...form, source_url: url }
+      setForm(nextForm)
       setStep(2)
+      scanMintTime(nextForm, { quiet: true })
     } finally {
       setLoading(false)
     }
@@ -136,40 +179,7 @@ export default function AddProjectModal({ onAdd, onClose }) {
   }
 
   const detectMintTime = async () => {
-    if (!form.contract_address?.trim() && !form.source_url?.trim()) {
-      toast.error('Add a contract address or mint page URL first')
-      return
-    }
-    setDetectingTime(true)
-    try {
-      const token = await getAuthToken()
-      if (!token) throw new Error('Sign in again before scanning')
-      const res = await fetch('/api/mint-time/detect', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${token}`,
-        },
-        body: JSON.stringify({
-          contractAddress: form.contract_address?.trim() || null,
-          chainId: CHAIN_IDS[form.chain] || 1,
-          mintUrl: form.source_url || url || null,
-          projectName: form.name,
-        }),
-      })
-      const data = await res.json()
-      if (!res.ok) throw new Error(data.error || 'Mint time scan failed')
-      if (!data.detected) {
-        setDetectedTime(null)
-        toast('No reliable mint time found. Please enter manually.')
-        return
-      }
-      setDetectedTime(data)
-    } catch (error) {
-      toast.error(friendlyError(error, 'Mint time scan failed. Please enter manually.'))
-    } finally {
-      setDetectingTime(false)
-    }
+    await scanMintTime(form)
   }
 
   const confirmDetectedTime = () => {
@@ -187,13 +197,10 @@ export default function AddProjectModal({ onAdd, onClose }) {
 
   return (
     <div
-      className="fixed inset-0 bg-black/70 backdrop-blur-sm z-50 flex items-center justify-center p-4"
+      className="fixed inset-0 bg-black/80 z-50 flex items-center justify-center p-4"
       onClick={e => e.target === e.currentTarget && onClose()}
     >
-      <motion.div
-        initial={{ opacity: 0, scale: 0.95, y: 10 }}
-        animate={{ opacity: 1, scale: 1, y: 0 }}
-        exit={{ opacity: 0, scale: 0.95 }}
+      <div
         className="bg-surface border border-border rounded-2xl w-full max-w-md max-h-[90vh] overflow-y-auto"
       >
         <div className="flex items-center justify-between p-5 border-b border-border">
@@ -390,7 +397,7 @@ export default function AddProjectModal({ onAdd, onClose }) {
             </div>
           )}
         </div>
-      </motion.div>
+      </div>
     </div>
   )
 }

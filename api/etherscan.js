@@ -59,6 +59,53 @@ function normalizeTimestamp(value) {
   return date.toISOString()
 }
 
+function decodeHtml(value) {
+  return String(value || '')
+    .replace(/&quot;/g, '"')
+    .replace(/&#x27;|&#39;/g, "'")
+    .replace(/&amp;/g, '&')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+}
+
+function extractJsonScript(html, id) {
+  const match = String(html || '').match(new RegExp(`<script[^>]+id=["']${id}["'][^>]*>([\\s\\S]*?)<\\/script>`, 'i'))
+  if (!match?.[1]) return null
+  try {
+    return JSON.parse(decodeHtml(match[1]))
+  } catch {
+    return null
+  }
+}
+
+function findDatesInObject(value, depth = 0, path = 'page') {
+  if (!value || depth > 8) return []
+  if (typeof value === 'string') {
+    const trimmed = value.trim()
+    const looksDateLike = /\b(20\d{2}|jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec|utc|gmt|am|pm|starts?|launch|sale|mint|countdown)\b/i.test(trimmed)
+    const parsed = looksDateLike ? Date.parse(trimmed) : NaN
+    if (Number.isFinite(parsed)) return [{ date: new Date(parsed), raw: trimmed, path }]
+    return []
+  }
+  if (typeof value === 'number') {
+    const iso = normalizeTimestamp(value)
+    if (iso) return [{ date: new Date(iso), raw: String(value), path }]
+    return []
+  }
+  if (Array.isArray(value)) {
+    return value.flatMap((item, index) => findDatesInObject(item, depth + 1, `${path}[${index}]`))
+  }
+  if (typeof value === 'object') {
+    return Object.entries(value).flatMap(([key, item]) => {
+      const nextPath = `${path}.${key}`
+      const keyRelevant = /(start|sale|mint|launch|countdown|date|time|event|drop)/i.test(key)
+      if (!keyRelevant && depth > 2) return []
+      return findDatesInObject(item, depth + 1, nextPath)
+    })
+  }
+  return []
+}
+
 async function detectContractTime(contractAddress, chainId) {
   const cfg = CHAIN_MAP[chainId]
   const rpcUrl = rpcUrlFor(chainId)
@@ -89,11 +136,51 @@ async function detectContractTime(contractAddress, chainId) {
 }
 
 function detectPageTime(text) {
-  const haystack = String(text || '').replace(/\s+/g, ' ').slice(0, 80_000)
-  const labelPattern = /(mint starts|public sale|whitelist|allowlist|sale begins|launch date|countdown)[^.!?]{0,120}/ig
+  const html = String(text || '')
+  const nextData = extractJsonScript(html, '__NEXT_DATA__')
+  const nextDates = findDatesInObject(nextData)
+    .filter((item) => item.date.getTime() > Date.now() - 60 * 60 * 1000)
+    .sort((a, b) => a.date - b.date)
+  if (nextDates[0]) {
+    return {
+      mintDate: nextDates[0].date.toISOString(),
+      source: `page.${nextDates[0].path}`,
+      confidence: 'medium',
+      rawValue: nextDates[0].raw,
+      notes: 'Detected from page metadata. Verify from the official project source.',
+    }
+  }
+
+  const jsonLdMatches = [...html.matchAll(/<script[^>]+type=["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/ig)]
+  for (const match of jsonLdMatches) {
+    try {
+      const parsed = JSON.parse(decodeHtml(match[1]))
+      const dates = findDatesInObject(parsed)
+        .filter((item) => item.date.getTime() > Date.now() - 60 * 60 * 1000)
+        .sort((a, b) => a.date - b.date)
+      if (dates[0]) {
+        return {
+          mintDate: dates[0].date.toISOString(),
+          source: `page.structuredData.${dates[0].path}`,
+          confidence: 'medium',
+          rawValue: dates[0].raw,
+          notes: 'Detected from structured page metadata. Verify from the official project source.',
+        }
+      }
+    } catch {}
+  }
+
+  const haystack = decodeHtml(html.replace(/<script[\s\S]*?<\/script>/ig, ' ').replace(/<style[\s\S]*?<\/style>/ig, ' '))
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/\s+/g, ' ')
+    .slice(0, 160_000)
+  const labelPattern = /(mint starts|mint start|public sale|whitelist|allowlist|sale begins|sale starts|launch date|launches|countdown|drop starts)[^.!?<>]{0,180}/ig
   const matches = haystack.match(labelPattern) || []
-  for (const match of matches.slice(0, 12)) {
-    const cleaned = match.replace(/countdown/ig, '').trim()
+  for (const match of matches.slice(0, 20)) {
+    const cleaned = match
+      .replace(/countdown|mint starts?|public sale|whitelist|allowlist|sale begins|sale starts|launch date|launches|drop starts/ig, '')
+      .replace(/\bat\b/ig, ' ')
+      .trim()
     const parsed = Date.parse(cleaned)
     if (Number.isFinite(parsed)) {
       return {
