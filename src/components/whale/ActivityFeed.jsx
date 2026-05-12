@@ -1,5 +1,5 @@
 import React from 'react'
-import { Zap, ArrowRight, Activity, ExternalLink } from 'lucide-react'
+import { Zap, ArrowRight, Activity, ExternalLink, CopyPlus } from 'lucide-react'
 
 function timeAgo(ts) {
   if (!ts) return '—'
@@ -24,7 +24,7 @@ const CHAIN_SYMBOL = {
   bnb: 'BNB',
 }
 
-export default function ActivityFeed({ activity }) {
+export default function ActivityFeed({ activity, onCopyMint }) {
   if (!activity || !activity.length) {
     return (
       <div className="text-center py-10">
@@ -82,14 +82,24 @@ export default function ActivityFeed({ activity }) {
                 </div>
 
                 {txUrl && (
-                  <a
-                    href={txUrl}
-                    target="_blank"
-                    rel="noreferrer"
-                    className="text-[10px] text-accent hover:underline flex items-center gap-1 mt-0.5"
-                  >
-                    View tx <ExternalLink size={9} />
-                  </a>
+                  <div className="flex items-center gap-3 mt-0.5">
+                    <a
+                      href={txUrl}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="text-[10px] text-accent hover:underline flex items-center gap-1"
+                    >
+                      View tx <ExternalLink size={9} />
+                    </a>
+                    {isMint && a.contract_address && onCopyMint && (
+                      <button
+                        onClick={() => onCopyMint(a)}
+                        className="text-[10px] text-green hover:underline flex items-center gap-1"
+                      >
+                        Copy Mint <CopyPlus size={9} />
+                      </button>
+                    )}
+                  </div>
                 )}
               </div>
 

@@ -117,6 +117,11 @@ export default function ProjectCard({ project, isMinting, onMint, onDelete, onSt
                     {project.mint_price} {project.chain === 'bnb' ? 'BNB' : 'ETH'}
                   </span>
                 )}
+                {project.mint_mode === 'auto' && (
+                  <span className="text-xs font-mono font-semibold text-amber-300 bg-amber-500/10 border border-amber-500/25 px-1.5 py-0.5 rounded">
+                    AUTO BETA OPT-IN
+                  </span>
+                )}
                 {intel && intel.hype_score && (
                   <span className={"text-xs font-mono " + (intel.hype_score >= 7 ? "text-green" : intel.hype_score >= 4 ? "text-accent3" : "text-muted")}>
                     Hype: {intel.hype_score}/10
@@ -130,7 +135,7 @@ export default function ProjectCard({ project, isMinting, onMint, onDelete, onSt
                 className={"flex items-center gap-1.5 text-xs px-2 py-1 rounded-md border transition-all " + (project.mint_mode === "auto" ? "border-green/40 text-green bg-green/8" : "border-border2 text-muted hover:border-accent hover:text-accent")}
               >
                 {project.mint_mode === "auto" ? React.createElement(ToggleRight, { size: 12 }) : React.createElement(ToggleLeft, { size: 12 })}
-                {project.mint_mode === "auto" ? "Auto" : "Confirm"}
+                {project.mint_mode === "auto" ? "Auto Beta" : "Confirm"}
               </button>
               {project.contract_address && project.mint_mode === 'auto' && project.status !== 'minted' && (
                 <button

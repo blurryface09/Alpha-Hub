@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react'
 import { motion } from 'framer-motion'
 import { X, Shield, Loader } from 'lucide-react'
 import toast from 'react-hot-toast'
+import { friendlyError } from '../../lib/errors'
 import DateTimePicker from '../shared/DateTimePicker'
 
 const WL_TYPES = [
@@ -13,7 +14,7 @@ const WL_TYPES = [
 ]
 const MINT_MODES = [
   { val: 'confirm', label: 'Confirm', icon: '✓', desc: 'App asks you before minting' },
-  { val: 'auto', label: 'Auto', icon: '⚡', desc: 'Fires immediately when live' },
+  { val: 'auto', label: 'Auto Beta', icon: '⚡', desc: 'Opt-in bot fires when live' },
 ]
 
 const STATUS_OPTIONS = ['upcoming', 'live', 'minted', 'missed', 'cancelled']
@@ -38,6 +39,10 @@ export default function EditProjectModal({ project, onSave, onClose }) {
 
   const handleSave = async () => {
     if (!form.name.trim()) { toast.error('Project name is required'); return }
+    if (form.mint_mode === 'auto' && !form.contract_address?.trim()) {
+      toast.error('Auto-mint needs a contract address')
+      return
+    }
     setLoading(true)
     try {
       await onSave({
@@ -50,7 +55,7 @@ export default function EditProjectModal({ project, onSave, onClose }) {
         notes: form.notes?.trim() || null,
       })
     } catch(err) {
-      toast.error('Update failed: ' + err.message)
+      toast.error(friendlyError(err, 'Could not update this project. Please try again.'))
     } finally {
       setLoading(false)
     }
@@ -102,6 +107,11 @@ export default function EditProjectModal({ project, onSave, onClose }) {
                 {STATUS_OPTIONS.map(s => <option key={s} value={s}>{s.charAt(0).toUpperCase() + s.slice(1)}</option>)}
               </select>
             </div>
+            {form.mint_mode === 'auto' && (
+              <div className="mt-2 rounded-lg border border-amber-500/25 bg-amber-500/10 p-3 text-xs text-amber-200">
+                Auto-mint is beta and opt-in. It can submit a real transaction from your saved minting wallet when the mint goes live.
+              </div>
+            )}
           </div>
 
           <DateTimePicker

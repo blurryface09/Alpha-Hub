@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react'
 import { motion } from 'framer-motion'
+import { useNavigate } from 'react-router-dom'
 import { Radar, Plus, Trash2, Eye } from 'lucide-react'
 import toast from 'react-hot-toast'
 import { supabase } from '../lib/supabase'
@@ -10,7 +11,14 @@ import Paywall from '../components/Paywall'
 import AddWalletModal from '../components/whale/AddWalletModal'
 import ActivityFeed from '../components/whale/ActivityFeed'
 
+const EXPLORER_HOSTS = {
+  eth: 'etherscan.io',
+  base: 'basescan.org',
+  bnb: 'bscscan.com',
+}
+
 export default function WhaleRadarPage() {
+  const navigate = useNavigate()
   const { user } = useAuthStore()
   const { activity, fetch: fetchActivity, subscribe } = useWhaleStore()
   const { plan, limits, hasAccess, refresh } = useSubscription()
@@ -82,6 +90,65 @@ export default function WhaleRadarPage() {
     await supabase.from('whale_watchlist').delete().eq('id', id)
     setWatchlist(prev => prev.filter(w => w.id !== id))
     toast.success(`Removed ${label || 'wallet'}`)
+  }
+
+  const copyMint = async (activityItem) => {
+    if (!hasAccess('pro')) {
+      setUpgradeRequired(true)
+      toast.error('Copy minting requires Pro.')
+      return
+    }
+    if (!user?.id) {
+      toast.error('Sign in again before copying this mint.')
+      return
+    }
+    if (!activityItem?.contract_address) {
+      toast.error('This whale mint does not include a contract address.')
+      return
+    }
+
+    const chain = activityItem.chain || 'eth'
+    const contract = activityItem.contract_address
+    const projectName = activityItem.contract_name ||
+      `Whale Mint ${contract.slice(0, 6)}...${contract.slice(-4)}`
+
+    try {
+      const { count } = await supabase
+        .from('wl_projects')
+        .select('id', { count: 'exact', head: true })
+        .eq('user_id', user.id)
+
+      if ((count || 0) >= limits.mintProjects) {
+        setUpgradeRequired(true)
+        toast.error(`Your ${plan || 'current'} plan tracks ${limits.mintProjects} mint projects. Upgrade to copy more.`)
+        return
+      }
+
+      const { error } = await supabase
+        .from('wl_projects')
+        .insert({
+          user_id: user.id,
+          name: projectName,
+          source_url: activityItem.tx_hash ? `https://${EXPLORER_HOSTS[chain] || EXPLORER_HOSTS.eth}/tx/${activityItem.tx_hash}` : null,
+          source_type: 'whale_copy',
+          chain,
+          contract_address: contract,
+          mint_price: activityItem.value_eth ? String(activityItem.value_eth) : null,
+          wl_type: 'PUBLIC',
+          mint_mode: 'confirm',
+          max_mint: 1,
+          gas_limit: 200000,
+          notes: `Copied from whale ${activityItem.wallet_label || activityItem.wallet_address || 'activity'}. Confirm mode is enabled by default.`,
+          status: 'live',
+        })
+
+      if (error) throw error
+      toast.success('Copied to MintGuard. Review it before minting.')
+      navigate('/mintguard')
+    } catch (err) {
+      console.error('copy mint error:', err)
+      toast.error(friendlyError(err, 'Could not copy this mint. Please try again.'))
+    }
   }
 
   const filteredActivity = activeChain === 'all'
@@ -215,7 +282,7 @@ export default function WhaleRadarPage() {
                 ))}
               </div>
             </div>
-            <ActivityFeed activity={filteredActivity} />
+            <ActivityFeed activity={filteredActivity} onCopyMint={copyMint} />
           </div>
         </div>
       </div>

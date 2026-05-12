@@ -3,6 +3,7 @@ import { motion } from 'framer-motion'
 import { X, Link2, Shield, Loader, Sparkles } from 'lucide-react'
 import toast from 'react-hot-toast'
 import { extractProjectMetadata } from '../../lib/ai'
+import { friendlyError } from '../../lib/errors'
 import DateTimePicker from '../shared/DateTimePicker'
 
 const WL_TYPES = [
@@ -15,7 +16,7 @@ const WL_TYPES = [
 
 const MINT_MODES = [
   { val: 'confirm', label: 'Confirm', icon: '✓', desc: 'App asks you before minting' },
-  { val: 'auto',    label: 'Auto',    icon: '⚡', desc: 'Fires immediately when live' },
+  { val: 'auto',    label: 'Auto Beta',    icon: '⚡', desc: 'Opt-in bot fires when live' },
 ]
 
 export default function AddProjectModal({ onAdd, onClose }) {
@@ -82,6 +83,10 @@ export default function AddProjectModal({ onAdd, onClose }) {
 
   const handleSubmit = async () => {
     if (!form.name.trim()) { toast.error('Project name is required'); return }
+    if (form.mint_mode === 'auto' && !form.contract_address?.trim()) {
+      toast.error('Auto-mint needs a contract address')
+      return
+    }
     const cleanForm = {
       ...form,
       gas_limit: parseInt(form.gas_limit) || 200000,
@@ -95,7 +100,7 @@ export default function AddProjectModal({ onAdd, onClose }) {
     try {
       await onAdd(cleanForm)
     } catch(err) {
-      toast.error('Save failed: ' + err.message)
+      toast.error(friendlyError(err, 'Could not save this project. Please try again.'))
     } finally {
       setLoading(false)
     }
@@ -212,6 +217,11 @@ export default function AddProjectModal({ onAdd, onClose }) {
                     </button>
                   ))}
                 </div>
+                {form.mint_mode === 'auto' && (
+                  <div className="mt-2 rounded-lg border border-amber-500/25 bg-amber-500/10 p-3 text-xs text-amber-200">
+                    Auto-mint is beta and opt-in. It can submit a real transaction from your saved minting wallet when the mint goes live.
+                  </div>
+                )}
               </div>
 
               <div className="grid grid-cols-3 gap-3">
