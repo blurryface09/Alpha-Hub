@@ -54,6 +54,7 @@ export default function OverviewPage() {
     activeAutomints: 0,
     activeAlerts: 0,
     activeProjects: 0,
+    totalProjects: 0,
     walletsTracked: 0,
     minted: 0,
     telegramConnected: false,
@@ -62,90 +63,106 @@ export default function OverviewPage() {
   const [projects, setProjects] = useState([])
   const [loading, setLoading] = useState(true)
 
+  const loadCommandCenter = React.useCallback(async () => {
+    if (!user) return
+    setLoading(true)
+
+    try {
+      const [
+        projectResult,
+        watchlistResult,
+        activeAlertResult,
+        mintedResult,
+        profileResult,
+      ] = await Promise.all([
+        supabase
+          .from('wl_projects')
+          .select('id, name, status, mint_date, mint_mode, auto_mint_fired, contract_address, chain')
+          .eq('user_id', user.id)
+          .order('mint_date', { ascending: true, nullsFirst: false })
+          .limit(12),
+        supabase
+          .from('whale_watchlist')
+          .select('id, last_checked', { count: 'exact' })
+          .eq('user_id', user.id)
+          .eq('is_active', true),
+        supabase
+          .from('notifications')
+          .select('id', { count: 'exact', head: true })
+          .eq('user_id', user.id)
+          .eq('read', false),
+        supabase
+          .from('wl_projects')
+          .select('id', { count: 'exact', head: true })
+          .eq('user_id', user.id)
+          .eq('status', 'minted'),
+        supabase
+          .from('profiles')
+          .select('telegram_chat_id')
+          .eq('id', user.id)
+          .maybeSingle(),
+      ])
+
+      await Promise.all([
+        fetchNotifications(user.id),
+        fetchWhaleActivity(user.id),
+      ])
+
+      if (projectResult.error) console.error('overview projects error:', projectResult.error.message)
+      if (watchlistResult.error) console.error('overview watchlist error:', watchlistResult.error.message)
+      if (activeAlertResult.error) console.error('overview alerts error:', activeAlertResult.error.message)
+      if (mintedResult.error) console.error('overview minted error:', mintedResult.error.message)
+      if (profileResult.error) console.error('overview profile error:', profileResult.error.message)
+
+      const userProjects = projectResult.data || []
+      const watchlist = watchlistResult.data || []
+      const latestWalletSync = watchlist
+        .map((wallet) => wallet.last_checked)
+        .filter(Boolean)
+        .sort()
+        .at(-1)
+
+      setProjects(userProjects)
+      setStats({
+        activeAutomints: userProjects.filter((p) =>
+          p.status === 'live' &&
+          p.mint_mode === 'auto' &&
+          p.contract_address &&
+          !p.auto_mint_fired
+        ).length,
+        activeAlerts: activeAlertResult.count || 0,
+        activeProjects: userProjects.filter((p) => ['upcoming', 'live'].includes(p.status)).length,
+        totalProjects: userProjects.length,
+        walletsTracked: watchlistResult.count || 0,
+        minted: mintedResult.count || 0,
+        telegramConnected: Boolean(profileResult.data?.telegram_chat_id),
+        lastSync: latestWalletSync || new Date().toISOString(),
+      })
+    } finally {
+      setLoading(false)
+    }
+  }, [fetchNotifications, fetchWhaleActivity, user])
+
   useEffect(() => {
     if (!user) return
 
     let cancelled = false
-
-    async function loadCommandCenter() {
-      try {
-        const [
-          projectResult,
-          watchlistResult,
-          activeAlertResult,
-          mintedResult,
-          profileResult,
-        ] = await Promise.all([
-          supabase
-            .from('wl_projects')
-            .select('id, name, status, mint_date, mint_mode, auto_mint_fired, contract_address, chain')
-            .eq('user_id', user.id)
-            .order('mint_date', { ascending: true, nullsFirst: false })
-            .limit(12),
-          supabase
-            .from('whale_watchlist')
-            .select('id, last_checked', { count: 'exact' })
-            .eq('user_id', user.id)
-            .eq('is_active', true),
-          supabase
-            .from('notifications')
-            .select('id', { count: 'exact', head: true })
-            .eq('user_id', user.id)
-            .eq('read', false),
-          supabase
-            .from('wl_projects')
-            .select('id', { count: 'exact', head: true })
-            .eq('user_id', user.id)
-            .eq('status', 'minted'),
-          supabase
-            .from('profiles')
-            .select('telegram_chat_id')
-            .eq('id', user.id)
-            .single(),
-        ])
-
-        await Promise.all([
-          fetchNotifications(user.id),
-          fetchWhaleActivity(user.id),
-        ])
-
-        if (cancelled) return
-
-        const userProjects = projectResult.data || []
-        const watchlist = watchlistResult.data || []
-        const latestWalletSync = watchlist
-          .map((wallet) => wallet.last_checked)
-          .filter(Boolean)
-          .sort()
-          .at(-1)
-
-        setProjects(userProjects)
-        setStats({
-          activeAutomints: userProjects.filter((p) =>
-            p.status === 'live' &&
-            p.mint_mode === 'auto' &&
-            p.contract_address &&
-            !p.auto_mint_fired
-          ).length,
-          activeAlerts: activeAlertResult.count || 0,
-          activeProjects: userProjects.filter((p) => ['upcoming', 'live'].includes(p.status)).length,
-          walletsTracked: watchlistResult.count || 0,
-          minted: mintedResult.count || 0,
-          telegramConnected: Boolean(profileResult.data?.telegram_chat_id),
-          lastSync: latestWalletSync || new Date().toISOString(),
-        })
-      } finally {
-        if (!cancelled) setLoading(false)
-      }
+    const safeLoad = async () => {
+      if (!cancelled) await loadCommandCenter()
     }
 
-    loadCommandCenter()
-    const interval = setInterval(loadCommandCenter, 30000)
+    safeLoad()
+    const interval = setInterval(safeLoad, 30000)
+    const onResume = () => safeLoad()
+    window.addEventListener('alphahub:resume', onResume)
+    window.addEventListener('focus', onResume)
     return () => {
       cancelled = true
       clearInterval(interval)
+      window.removeEventListener('alphahub:resume', onResume)
+      window.removeEventListener('focus', onResume)
     }
-  }, [user, fetchNotifications, fetchWhaleActivity])
+  }, [user, loadCommandCenter])
 
   const liveFeed = useMemo(() => {
     const notificationEvents = notifications.slice(0, 12).map((n) => ({
@@ -185,7 +202,7 @@ export default function OverviewPage() {
     { label: 'Active Automints', value: stats.activeAutomints, icon: Zap, tone: 'text-green' },
     { label: 'Active Alerts', value: stats.activeAlerts, icon: Bell, tone: stats.activeAlerts ? 'text-accent2' : 'text-muted' },
     { label: 'Wallets Tracked', value: stats.walletsTracked, icon: Wallet, tone: 'text-accent' },
-    { label: 'Active Mints', value: stats.activeProjects, icon: Clock, tone: 'text-accent3' },
+    { label: 'Saved Projects', value: stats.totalProjects, icon: Clock, tone: 'text-accent3' },
     { label: 'Telegram', value: stats.telegramConnected ? 'On' : 'Off', icon: Send, tone: stats.telegramConnected ? 'text-green' : 'text-muted' },
     { label: 'Last Sync', value: timeAgo(stats.lastSync), icon: Signal, tone: 'text-accent' },
   ]

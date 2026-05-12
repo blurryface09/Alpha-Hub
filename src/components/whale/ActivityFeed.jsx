@@ -30,7 +30,7 @@ export default function ActivityFeed({ activity, onCopyMint }) {
       <div className="text-center py-10">
         <Activity size={28} className="text-muted mx-auto mb-2" />
         <p className="text-muted text-sm">No activity yet</p>
-        <p className="text-xs text-muted2 mt-1">Add wallets and hit Refresh to see their moves</p>
+        <p className="text-xs text-muted2 mt-1">Copy Mint appears automatically when a tracked whale mint includes a contract address.</p>
       </div>
     )
   }
@@ -81,8 +81,9 @@ export default function ActivityFeed({ activity, onCopyMint }) {
                   )}
                 </div>
 
-                {txUrl && (
-                  <div className="flex items-center gap-3 mt-0.5">
+                {(txUrl || (isMint && a.contract_address && onCopyMint)) && (
+                  <div className="flex items-center gap-3 mt-1">
+                    {txUrl && (
                     <a
                       href={txUrl}
                       target="_blank"
@@ -91,6 +92,7 @@ export default function ActivityFeed({ activity, onCopyMint }) {
                     >
                       View tx <ExternalLink size={9} />
                     </a>
+                    )}
                     {isMint && a.contract_address && onCopyMint && (
                       <button
                         onClick={() => onCopyMint(a)}

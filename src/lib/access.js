@@ -23,9 +23,9 @@ export const FEATURE_ACCESS = {
 
 export const PLAN_LIMITS = {
   free: {
-    trackedWallets: 1,
-    mintProjects: 1,
-    walletChecksPerDay: 3,
+    trackedWallets: 2,
+    mintProjects: 2,
+    walletChecksPerDay: 5,
     aiReportsPerDay: 0,
   },
   pro: {

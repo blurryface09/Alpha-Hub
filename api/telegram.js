@@ -22,12 +22,18 @@ function getSupabase() {
 }
 
 async function sendMessage(chatId, text, extra = {}) {
-  if (!BOT_TOKEN) return
-  await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`, {
+  if (!BOT_TOKEN) return false
+  const response = await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ chat_id: chatId, text, parse_mode: 'HTML', ...extra }),
   })
+  const result = await response.json().catch(() => null)
+  if (!response.ok || result?.ok === false) {
+    console.error('telegram sendMessage failed:', result?.description || response.statusText)
+    return false
+  }
+  return true
 }
 
 async function handleAppNotification(req, res) {
@@ -154,6 +160,12 @@ async function handleStart(chatId, linkCode) {
     `/upcoming — next mints\n` +
     `/help — show this menu`
   )
+}
+
+function normalizeCommand(text) {
+  const [rawCommand = '', ...args] = String(text || '').trim().split(/\s+/)
+  const command = rawCommand.split('@')[0].toLowerCase()
+  return { command, args }
 }
 
 async function resolveProfile(chatId) {
@@ -313,8 +325,7 @@ export default async function handler(req, res) {
 
     if (message) {
       const chatId = message.chat.id
-      const text = (message.text || '').trim()
-      const [cmd, ...args] = text.split(' ')
+      const { command: cmd, args } = normalizeCommand(message.text)
 
       if (cmd === '/start') {
         await handleStart(chatId, args[0])
@@ -330,7 +341,11 @@ export default async function handler(req, res) {
       if (cmd === '/dashboard' || cmd === '/status') await handleDashboard(chatId, profile.id)
       else if (cmd === '/live') await handleLive(chatId, profile.id)
       else if (cmd === '/upcoming') await handleUpcoming(chatId, profile.id)
-      else await sendMessage(chatId, `Commands:\n/dashboard · /live · /upcoming`)
+      else if (cmd === '/help' || cmd === '/start') {
+        await sendMessage(chatId, `Commands:\n/dashboard · /live · /upcoming · /help`)
+      } else {
+        await sendMessage(chatId, `Commands:\n/dashboard · /live · /upcoming · /help`)
+      }
     }
   } catch (e) {
     console.error('telegram webhook error:', e)

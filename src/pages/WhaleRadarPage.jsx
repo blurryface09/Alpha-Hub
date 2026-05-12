@@ -47,6 +47,19 @@ export default function WhaleRadarPage() {
     return unsub
   }, [fetchWatchlist, fetchActivity, hasAccess, subscribe, user?.id])
 
+  useEffect(() => {
+    const refreshOnResume = () => {
+      fetchWatchlist()
+      fetchActivity(user?.id)
+    }
+    window.addEventListener('alphahub:resume', refreshOnResume)
+    window.addEventListener('focus', refreshOnResume)
+    return () => {
+      window.removeEventListener('alphahub:resume', refreshOnResume)
+      window.removeEventListener('focus', refreshOnResume)
+    }
+  }, [fetchActivity, fetchWatchlist, user?.id])
+
   const addWallet = async ({ address, label, chain }) => {
     try {
       if (!user?.id) { toast.error('Not logged in -- please sign out and back in'); return }

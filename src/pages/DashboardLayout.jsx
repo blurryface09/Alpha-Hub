@@ -41,6 +41,17 @@ export default function DashboardLayout() {
     }
   }, [user])
 
+  useEffect(() => {
+    if (!user) return
+    const refreshOnResume = () => fetchNotifs(user.id)
+    window.addEventListener('alphahub:resume', refreshOnResume)
+    window.addEventListener('focus', refreshOnResume)
+    return () => {
+      window.removeEventListener('alphahub:resume', refreshOnResume)
+      window.removeEventListener('focus', refreshOnResume)
+    }
+  }, [fetchNotifs, user])
+
   const handleSignOut = async () => {
     await signOut()
     navigate('/auth')

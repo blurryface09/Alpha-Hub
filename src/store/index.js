@@ -2,6 +2,8 @@ import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
 import { supabase } from '../lib/supabase'
 
+let resumeListenerAttached = false
+
 // --- Auth Store --------------------------------------------------
 export const useAuthStore = create((set, get) => ({
   user: null,
@@ -32,6 +34,24 @@ export const useAuthStore = create((set, get) => ({
 
       get()._authSubscription?.unsubscribe()
       set({ _authSubscription: subscription })
+
+      if (!resumeListenerAttached) {
+        resumeListenerAttached = true
+        const recover = async () => {
+          if (document.visibilityState !== 'visible') return
+          try {
+            await supabase.auth.refreshSession()
+          } catch {}
+          const { data: { session } } = await supabase.auth.getSession()
+          if (session?.user) {
+            set({ user: session.user })
+            get().fetchProfile(session.user.id).catch(() => {})
+          }
+          window.dispatchEvent(new CustomEvent('alphahub:resume'))
+        }
+        document.addEventListener('visibilitychange', recover)
+        window.addEventListener('focus', recover)
+      }
     } catch (err) {
       console.error('Auth init error:', err)
       set({ loading: false })

@@ -39,6 +39,16 @@ export function useSubscription() {
     checkSubscription()
   }, [checkSubscription])
 
+  useEffect(() => {
+    const refreshOnResume = () => checkSubscription()
+    window.addEventListener('focus', refreshOnResume)
+    window.addEventListener('alphahub:resume', refreshOnResume)
+    return () => {
+      window.removeEventListener('focus', refreshOnResume)
+      window.removeEventListener('alphahub:resume', refreshOnResume)
+    }
+  }, [checkSubscription])
+
   const isActive = !!subscription &&
     subscription.status === 'active' &&
     !!subscription.expires_at &&
