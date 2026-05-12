@@ -6,6 +6,7 @@ export const PLAN_RANK = {
   elite: 2,
   quarterly: 2,
   founder: 2,
+  admin: 99,
 }
 
 export const FEATURE_ACCESS = {
@@ -40,6 +41,12 @@ export const PLAN_LIMITS = {
     walletChecksPerDay: 250,
     aiReportsPerDay: 100,
   },
+  admin: {
+    trackedWallets: 999999,
+    mintProjects: 999999,
+    walletChecksPerDay: 999999,
+    aiReportsPerDay: 999999,
+  },
 }
 
 export function normalizedPlan(subscription) {
@@ -63,6 +70,7 @@ export function planLimits(plan = 'free') {
 }
 
 export function planLabel(plan) {
+  if (plan === 'admin') return 'Admin'
   if (plan === 'elite') return 'Elite'
   if (plan === 'pro') return 'Pro'
   return 'Free'

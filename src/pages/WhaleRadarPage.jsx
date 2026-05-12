@@ -194,7 +194,11 @@ export default function WhaleRadarPage() {
           <p className="text-sm text-muted">
             {hasAccess('pro') ? 'Server-monitored smart money alerts with realtime updates.' : 'Limited wallet tracking. Upgrade for realtime whale alerts.'}
             <span className="ml-2 text-xs text-accent">
-              {plan === 'free' || !plan ? `Free limit: ${watchlist.length}/${limits.trackedWallets}` : `${plan?.toUpperCase()} limit: ${watchlist.length}/${limits.trackedWallets}`}
+              {plan === 'admin'
+                ? 'Admin access: unlimited'
+                : plan === 'free' || !plan
+                ? `Free limit: ${watchlist.length}/${limits.trackedWallets}`
+                : `${plan?.toUpperCase()} limit: ${watchlist.length}/${limits.trackedWallets}`}
             </span>
           </p>
         </div>

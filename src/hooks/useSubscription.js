@@ -3,6 +3,8 @@ import { useAccount } from 'wagmi'
 import { getAuthToken } from '../lib/supabase'
 import { hasPlanAccess, normalizedPlan, planLimits } from '../lib/access'
 
+const ADMIN_WALLET = import.meta.env.VITE_ADMIN_WALLET?.toLowerCase()
+
 export function useSubscription() {
   const { address, isConnected } = useAccount()
   const [subscription, setSubscription] = useState(null)
@@ -47,14 +49,15 @@ export function useSubscription() {
     }
   }, [checkSubscription])
 
-  const isActive = !!subscription &&
+  const isAdmin = isConnected && !!address && address.toLowerCase() === ADMIN_WALLET
+  const isActive = isAdmin || (!!subscription &&
     subscription.status === 'active' &&
     !!subscription.expires_at &&
-    new Date(subscription.expires_at) > new Date()
+    new Date(subscription.expires_at) > new Date())
   const isFree = subscription?.status === 'free' || subscription?.plan === 'free'
   const isPending = subscription?.status === 'pending_verification'
-  const hasBasicAccess = isActive || isFree || isPending
-  const isExpired = !!subscription && !isActive && !isFree && !isPending
+  const hasBasicAccess = isAdmin || isActive || isFree || isPending
+  const isExpired = !isAdmin && !!subscription && !isActive && !isFree && !isPending
 
   const daysRemaining = subscription
     ? Math.max(0, Math.ceil(
@@ -62,13 +65,14 @@ export function useSubscription() {
       ))
     : 0
 
-  const plan = normalizedPlan(subscription)
-  const hasAccess = useCallback((requiredPlan) => hasPlanAccess(subscription, requiredPlan), [subscription])
+  const plan = isAdmin ? 'admin' : normalizedPlan(subscription)
+  const hasAccess = useCallback((requiredPlan) => isAdmin || hasPlanAccess(subscription, requiredPlan), [isAdmin, subscription])
 
   return {
     subscription,
     plan,
     limits: planLimits(plan),
+    isAdmin,
     isActive,
     isFree,
     isPending,

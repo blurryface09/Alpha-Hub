@@ -457,7 +457,11 @@ export default function MintGuardPage() {
           <p className="text-sm text-muted">
             Track your WL projects. Get alerted. Auto-mint when ready.
             <span className="ml-2 text-xs text-accent">
-              {plan === 'free' || !plan ? `Free limit: ${projects.length}/${limits.mintProjects}` : `${plan?.toUpperCase()} limit: ${projects.length}/${limits.mintProjects}`}
+              {plan === 'admin'
+                ? 'Admin access: unlimited'
+                : plan === 'free' || !plan
+                ? `Free limit: ${projects.length}/${limits.mintProjects}`
+                : `${plan?.toUpperCase()} limit: ${projects.length}/${limits.mintProjects}`}
             </span>
           </p>
         </div>
