@@ -28,9 +28,52 @@ function shouldRetrySubscriptionWrite(error) {
 function publicSubscriptionError(error) {
   const message = `${error?.message || ''} ${error?.details || ''} ${error?.hint || ''}`.toLowerCase()
   if (message.includes('schema cache') || message.includes('column') || message.includes('check constraint')) {
-    return 'Subscription schema mismatch. The app retried the safe write paths but Supabase still rejected the grant.'
+    return 'Could not update subscription. Access fallback was not available.'
   }
   return 'Could not update subscription. Please try again.'
+}
+
+function subscriptionFromPayment(payment) {
+  const plan = getPlan(payment.plan)
+  const startsAt = payment.verified_at || payment.created_at || new Date().toISOString()
+  const expiresAt = new Date(new Date(startsAt).getTime() + getPlanDurationDays(plan, payment.billing_cycle) * 24 * 60 * 60 * 1000)
+
+  return {
+    id: `payment_${payment.id}`,
+    user_id: payment.user_id,
+    wallet_address: payment.wallet_address,
+    plan: payment.plan,
+    billing_cycle: payment.billing_cycle || 'monthly',
+    status: 'active',
+    tx_hash: payment.tx_hash,
+    starts_at: startsAt,
+    started_at: startsAt,
+    expires_at: expiresAt.toISOString(),
+    verified: true,
+    source: 'payment',
+  }
+}
+
+async function createVerifiedManualPayment(supabase, { walletAddress, plan, txHash }) {
+  const planConfig = getPlan(plan)
+  const now = new Date().toISOString()
+  return supabase
+    .from('payments')
+    .insert({
+      wallet_address: walletAddress.toLowerCase(),
+      plan: planConfig.id,
+      billing_cycle: 'monthly',
+      tx_hash: txHash,
+      chain_id: PAYMENT_CONFIG.chainId,
+      amount_eth: 0,
+      amount_usd: 0,
+      token: PAYMENT_CONFIG.tokenSymbol,
+      receiver_address: PAYMENT_CONFIG.receiverAddress,
+      status: 'verified',
+      verified_at: now,
+    })
+    .select()
+    .single()
 }
 
 async function upsertSubscription(supabase, payload) {
@@ -107,7 +150,7 @@ export default async function handler(req, res) {
   const supabase = createServiceClient()
 
   if (req.method === 'GET') {
-    const [{ data, error }, paymentsResult] = await Promise.all([
+    const [{ data, error }, paymentsResult, verifiedPaymentsResult] = await Promise.all([
       supabase
       .from('subscriptions')
       .select('*')
@@ -117,11 +160,23 @@ export default async function handler(req, res) {
         .select('*')
         .eq('status', 'pending_verification')
         .order('created_at', { ascending: false }),
+      supabase
+        .from('payments')
+        .select('*')
+        .eq('status', 'verified')
+        .order('verified_at', { ascending: false, nullsFirst: false })
+        .order('created_at', { ascending: false }),
     ])
 
     if (error) return res.status(500).json({ error: error.message })
+    const existingKeys = new Set((data || []).map(item => `${item.wallet_address}:${item.tx_hash}`))
+    const paymentSubscriptions = (verifiedPaymentsResult.error ? [] : verifiedPaymentsResult.data || [])
+      .map(payment => subscriptionFromPayment(payment))
+      .filter(Boolean)
+      .filter(item => !existingKeys.has(`${item.wallet_address}:${item.tx_hash}`))
+
     return res.status(200).json({
-      subscriptions: data || [],
+      subscriptions: [...(data || []), ...paymentSubscriptions],
       pendingPayments: paymentsResult.error ? [] : paymentsResult.data || [],
       paymentsError: paymentsResult.error?.message || null,
     })
@@ -173,14 +228,20 @@ export default async function handler(req, res) {
       if (updateError) return res.status(500).json({ error: updateError.message })
 
       const { data: subscription, error: subscriptionError, expiresAt } = await activateSubscriptionFromPayment(supabase, updatedPayment)
-      if (subscriptionError) return res.status(500).json({ error: publicSubscriptionError(subscriptionError) })
+      const resolvedSubscription = subscriptionError ? subscriptionFromPayment(updatedPayment) : subscription
 
       await writeAuditLog(supabase, {
         action: 'admin.payment.approved',
         userId: admin.id,
-        metadata: { paymentId: payment.id, txHash: payment.tx_hash, walletAddress: payment.wallet_address, expiresAt: expiresAt?.toISOString() },
+        metadata: {
+          paymentId: payment.id,
+          txHash: payment.tx_hash,
+          walletAddress: payment.wallet_address,
+          expiresAt: expiresAt?.toISOString() || resolvedSubscription.expires_at,
+          subscriptionFallback: !!subscriptionError,
+        },
       })
-      return res.status(200).json({ payment: updatedPayment, subscription })
+      return res.status(200).json({ payment: updatedPayment, subscription: resolvedSubscription })
     }
 
     const { walletAddress, plan = 'monthly', reason } = req.body || {}
@@ -208,13 +269,35 @@ export default async function handler(req, res) {
       status: 'active',
     })
 
-    if (error) return res.status(500).json({ error: publicSubscriptionError(error) })
+    let subscription = data
+    let usedFallback = false
+    if (error) {
+      const paymentResult = await createVerifiedManualPayment(supabase, {
+        walletAddress,
+        plan: planConfig.id,
+        txHash,
+      })
+
+      if (paymentResult.error) {
+        return res.status(500).json({ error: publicSubscriptionError(error) })
+      }
+
+      subscription = subscriptionFromPayment(paymentResult.data)
+      usedFallback = true
+    }
+
     await writeAuditLog(supabase, {
       action: 'admin.subscription.created',
       userId: admin.id,
-      metadata: { walletAddress: walletAddress.toLowerCase(), plan, subscriptionId: data.id, reason: reason || 'manual_admin_grant' },
+      metadata: {
+        walletAddress: walletAddress.toLowerCase(),
+        plan,
+        subscriptionId: subscription.id,
+        reason: reason || 'manual_admin_grant',
+        subscriptionFallback: usedFallback,
+      },
     })
-    return res.status(200).json({ subscription: data })
+    return res.status(200).json({ subscription })
   }
 
   if (req.method === 'PATCH') {

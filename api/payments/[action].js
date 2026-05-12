@@ -93,6 +93,29 @@ async function upsertSubscription(supabase, payload) {
   return result
 }
 
+function subscriptionFromPayment(payment) {
+  const plan = getPlan(payment.plan)
+  if (!plan) return null
+  const startsAt = payment.verified_at || payment.created_at || new Date().toISOString()
+  const billingCycle = normalizeBillingCycle(payment.billing_cycle)
+  const expiresAt = new Date(new Date(startsAt).getTime() + getPlanDurationDays(plan, billingCycle) * 24 * 60 * 60 * 1000)
+
+  return {
+    id: `payment_${payment.id}`,
+    user_id: payment.user_id,
+    wallet_address: payment.wallet_address,
+    plan: plan.id,
+    billing_cycle: billingCycle,
+    status: 'active',
+    tx_hash: payment.tx_hash,
+    starts_at: startsAt,
+    started_at: startsAt,
+    expires_at: expiresAt.toISOString(),
+    verified: true,
+    source: 'payment',
+  }
+}
+
 async function createPayment(req, res, user) {
   const limited = await rateLimit(`rl:payments:create:${user.id}`, 10, 60)
   if (!limited.allowed) return sendRateLimit(res, limited)
@@ -147,7 +170,24 @@ async function createPayment(req, res, user) {
       updated_at: now.toISOString(),
     })
 
-    if (error) return res.status(500).json({ error: error.message })
+    if (error) {
+      return res.status(200).json({
+        subscription: {
+          user_id: user.id,
+          wallet_address: walletAddress.toLowerCase(),
+          plan: 'free',
+          billing_cycle: billingCycle,
+          status: 'free',
+          tx_hash: freeReference,
+          starts_at: now.toISOString(),
+          started_at: now.toISOString(),
+          expires_at: expiresAt.toISOString(),
+          verified: true,
+          source: 'default_free',
+        },
+        free: true,
+      })
+    }
     return res.status(200).json({ subscription: data, free: true })
   }
 
@@ -215,7 +255,13 @@ async function createPayment(req, res, user) {
     updated_at: now.toISOString(),
   })
 
-  if (subscriptionError) return res.status(500).json({ error: subscriptionError.message })
+  if (subscriptionError) {
+    await writeAuditLog(supabase, {
+      action: 'payment.subscription_pending_fallback',
+      userId: user.id,
+      metadata: { txHash, walletAddress: walletAddress.toLowerCase(), plan: plan.id, billingCycle },
+    })
+  }
 
   await writeAuditLog(supabase, {
     action: 'payment.submitted',
@@ -316,7 +362,14 @@ async function verifyPayment(req, res, user) {
       updated_at: now.toISOString(),
     })
 
-    if (error) return res.status(500).json({ error: error.message })
+    if (error) {
+      return res.status(200).json({
+        subscription: subscriptionFromPayment({ ...payment, status: 'verified', verified_at: now.toISOString() }),
+        status: 'active',
+        expiresAt: expiresAt.toISOString(),
+        subscriptionFallback: true,
+      })
+    }
     return res.status(200).json({ subscription, status: 'active', expiresAt: expiresAt.toISOString() })
   }
 
