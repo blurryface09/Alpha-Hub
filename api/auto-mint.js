@@ -116,6 +116,7 @@ function nowIso() {
 }
 
 function safeEth(value, fallback = '0') {
+  if (/^0x[a-fA-F0-9]{40}$/.test(String(value || '').trim())) return parseEther(fallback)
   const clean = String(value ?? fallback).replace(/[^0-9.]/g, '') || fallback
   try {
     return parseEther(clean)

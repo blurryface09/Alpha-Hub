@@ -15,6 +15,38 @@ function tzLabel() {
   } catch { return 'local' }
 }
 
+function tzName() {
+  try {
+    return Intl.DateTimeFormat().resolvedOptions().timeZone || 'Local time'
+  } catch { return 'Local time' }
+}
+
+function formatLocalPreview(date, time) {
+  const utc = localPartsToUtc(date, time)
+  if (!utc) return null
+  return new Date(utc).toLocaleString([], {
+    year: 'numeric',
+    month: 'short',
+    day: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+  })
+}
+
+function formatUtcPreview(date, time) {
+  const utc = localPartsToUtc(date, time)
+  if (!utc) return null
+  return new Date(utc).toLocaleString([], {
+    timeZone: 'UTC',
+    year: 'numeric',
+    month: 'short',
+    day: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+    timeZoneName: 'short',
+  })
+}
+
 // UTC ISO string → { date: 'YYYY-MM-DD', time: 'HH:MM' } in user's LOCAL time
 function utcToLocalParts(utcStr) {
   if (!utcStr) return { date: '', time: '' }
@@ -40,6 +72,9 @@ export default function DateTimePicker({ value, onChange, label = 'Mint Date & T
   const [localDate, setLocalDate] = useState(initial.date)
   const [localTime, setLocalTime] = useState(initial.time)
   const tz = tzLabel()
+  const timezone = tzName()
+  const localPreview = formatLocalPreview(localDate, localTime)
+  const utcPreview = formatUtcPreview(localDate, localTime)
 
   // Sync inbound value changes (e.g. when EditModal loads project data)
   useEffect(() => {
@@ -84,8 +119,15 @@ export default function DateTimePicker({ value, onChange, label = 'Mint Date & T
       </div>
       <p className="text-[10px] text-muted mt-1 flex items-center gap-1">
         <Clock size={9} />
-        Your timezone · <span className="text-accent font-mono">{tz}</span>
+        Enter local time · <span className="text-accent font-mono">{timezone} / {tz}</span>
       </p>
+      {utcPreview && (
+        <div className="mt-2 rounded-lg border border-border bg-surface2/70 p-2 text-[10px] text-muted leading-relaxed">
+          <div><span className="text-text">Local:</span> {localPreview}</div>
+          <div><span className="text-text">Saved as UTC:</span> {utcPreview}</div>
+          <div className="text-muted2 mt-1">Confirm this against the official mint page before enabling Auto Beta.</div>
+        </div>
+      )}
     </div>
   )
 }

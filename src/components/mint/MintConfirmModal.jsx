@@ -2,11 +2,18 @@ import React, { useState } from 'react'
 import { motion } from 'framer-motion'
 import { Zap, AlertTriangle, X, Flame } from 'lucide-react'
 
+function cleanPrice(value) {
+  const raw = String(value || '').trim()
+  if (!raw || /^0x[a-fA-F0-9]{40}$/.test(raw)) return null
+  const parsed = parseFloat(raw.replace(/[^0-9.]/g, ''))
+  return Number.isFinite(parsed) ? parsed : null
+}
+
 export default function MintConfirmModal({ project, onConfirm, onCancel }) {
   const [gas, setGas] = useState(project.gas_limit || 200000)
   const gasWarning = gas < 21000 ? 'Too low — minimum is 21,000' : gas > 2_000_000 ? 'Very high — double-check this value' : null
 
-  const price = parseFloat(project.mint_price) || 0
+  const price = cleanPrice(project.mint_price) || 0
   const qty = parseInt(project.max_mint) || 1
   const estimatedTotal = price > 0 ? (price * qty).toFixed(4) : null
   const symbol = project.chain === 'bnb' ? 'BNB' : 'ETH'
@@ -42,10 +49,10 @@ export default function MintConfirmModal({ project, onConfirm, onCancel }) {
               <span className="text-muted">Chain</span>
               <span className="font-mono">{project.chain?.toUpperCase()}</span>
             </div>
-            {project.mint_price && (
+            {price > 0 && (
               <div className="flex justify-between text-sm">
                 <span className="text-muted">Price per mint</span>
-                <span className="font-mono text-green font-semibold">{project.mint_price} {symbol}</span>
+                <span className="font-mono text-green font-semibold">{price} {symbol}</span>
               </div>
             )}
             <div className="flex justify-between text-sm">

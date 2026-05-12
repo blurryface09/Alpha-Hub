@@ -49,6 +49,12 @@ function fmtTime(utcStr) {
   )
 }
 
+function cleanPriceText(value) {
+  const clean = String(value || '').trim()
+  if (!clean || /^0x[a-fA-F0-9]{40}$/.test(clean)) return 'Free'
+  return clean
+}
+
 async function sendTelegram(
   chatId,
   text,
@@ -300,7 +306,7 @@ export default async function handler(req, res) {
           ).toUpperCase()
 
           const price =
-            p.mint_price || 'Free'
+            cleanPriceText(p.mint_price)
 
           const title =
             `Mint in ~30 min: ${p.name}`
@@ -405,7 +411,7 @@ export default async function handler(req, res) {
           ).toUpperCase()
 
           const price =
-            p.mint_price || 'Free'
+            cleanPriceText(p.mint_price)
 
           const isAuto =
             p.mint_mode === 'auto'

@@ -57,7 +57,7 @@ async function handleAppNotification(req, res) {
   if (!chatId) return res.status(400).json({ error: 'Telegram is not linked' })
 
   const chain = (project.chain || 'eth').toUpperCase()
-  const price = project.mint_price || 'Free'
+  const price = cleanPriceText(project.mint_price)
   let text = ''
   let keyboard = null
 
@@ -168,22 +168,38 @@ function normalizeCommand(text) {
   return { command, args }
 }
 
+function commandMenu() {
+  return `Commands:\n/dashboard — all projects\n/live — live mints right now\n/upcoming — next mints\n/help — show this menu`
+}
+
+function cleanPriceText(value) {
+  const clean = String(value || '').trim()
+  if (!clean || /^0x[a-fA-F0-9]{40}$/.test(clean)) return 'Free'
+  return clean
+}
+
 async function resolveProfile(chatId) {
-  const { data } = await supabase
+  const { data, error } = await supabase
     .from('profiles')
     .select('id, username')
     .eq('telegram_chat_id', String(chatId))
-    .single()
+    .maybeSingle()
+  if (error) console.error('telegram resolveProfile failed:', error.message)
   return data
 }
 
 async function handleDashboard(chatId, userId) {
-  const { data: projects } = await supabase
+  const { data: projects, error } = await supabase
     .from('wl_projects')
     .select('name, status, mint_date, mint_price, wl_type, chain')
     .eq('user_id', userId)
     .order('mint_date', { ascending: true, nullsFirst: false })
     .limit(12)
+
+  if (error) {
+    console.error('telegram dashboard query failed:', error.message)
+    return sendMessage(chatId, '⚠️ Dashboard is temporarily unavailable. Your Telegram connection is active; try again shortly.')
+  }
 
   if (!projects?.length) {
     return sendMessage(chatId, '📋 No projects yet. Add them in MintGuard.')
@@ -193,7 +209,8 @@ async function handleDashboard(chatId, userId) {
   const lines = projects.map(p => {
     const e = emoji[p.status] || '⏰'
     const date = p.mint_date ? new Date(p.mint_date).toLocaleString() : 'TBD'
-    const price = p.mint_price ? ` · ${p.mint_price}` : ''
+    const priceText = cleanPriceText(p.mint_price)
+    const price = priceText !== 'Free' ? ` · ${priceText}` : ''
     return `${e} <b>${p.name}</b> [${(p.chain || 'ETH').toUpperCase()}]${price}\n   ${p.wl_type} · ${date}`
   }).join('\n\n')
 
@@ -201,18 +218,23 @@ async function handleDashboard(chatId, userId) {
 }
 
 async function handleLive(chatId, userId) {
-  const { data: projects } = await supabase
+  const { data: projects, error } = await supabase
     .from('wl_projects')
     .select('id, name, mint_price, chain, contract_address, mint_mode, wl_type')
     .eq('user_id', userId)
     .eq('status', 'live')
+
+  if (error) {
+    console.error('telegram live query failed:', error.message)
+    return sendMessage(chatId, '⚠️ Live mints are temporarily unavailable. Your Telegram connection is active; try again shortly.')
+  }
 
   if (!projects?.length) {
     return sendMessage(chatId, '🟢 No live mints right now. You\'ll get a notification when one goes live.')
   }
 
   for (const p of projects) {
-    const price = p.mint_price || 'Free'
+    const price = cleanPriceText(p.mint_price)
     const hasContract = !!p.contract_address
     const isAuto = p.mint_mode === 'auto'
 
@@ -233,7 +255,7 @@ async function handleLive(chatId, userId) {
 }
 
 async function handleUpcoming(chatId, userId) {
-  const { data: projects } = await supabase
+  const { data: projects, error } = await supabase
     .from('wl_projects')
     .select('name, mint_date, mint_price, chain, wl_type')
     .eq('user_id', userId)
@@ -241,13 +263,18 @@ async function handleUpcoming(chatId, userId) {
     .order('mint_date', { ascending: true, nullsFirst: false })
     .limit(6)
 
+  if (error) {
+    console.error('telegram upcoming query failed:', error.message)
+    return sendMessage(chatId, '⚠️ Upcoming mints are temporarily unavailable. Your Telegram connection is active; try again shortly.')
+  }
+
   if (!projects?.length) {
     return sendMessage(chatId, '⏰ No upcoming mints scheduled.')
   }
 
   const lines = projects.map(p => {
     const date = p.mint_date ? new Date(p.mint_date).toLocaleString() : 'TBD'
-    return `⏰ <b>${p.name}</b> [${(p.chain || 'ETH').toUpperCase()}]\n   ${p.mint_price || 'Free'} · ${p.wl_type}\n   🕐 ${date}`
+    return `⏰ <b>${p.name}</b> [${(p.chain || 'ETH').toUpperCase()}]\n   ${cleanPriceText(p.mint_price)} · ${p.wl_type}\n   🕐 ${date}`
   }).join('\n\n')
 
   return sendMessage(chatId, `📅 <b>Upcoming Mints</b>\n\n${lines}`)
@@ -298,6 +325,7 @@ async function handleCallback(queryId, data, chatId) {
 
 export default async function handler(req, res) {
   if (req.method !== 'POST') return res.status(405).end()
+  let activeChatId = null
 
   if (req.body?.project && req.body?.type) {
     return handleAppNotification(req, res)
@@ -326,6 +354,7 @@ export default async function handler(req, res) {
 
     if (message) {
       const chatId = message.chat.id
+      activeChatId = chatId
       const { command: cmd, args } = normalizeCommand(message.text)
 
       if (cmd === '/start') {
@@ -342,14 +371,17 @@ export default async function handler(req, res) {
       if (cmd === '/dashboard' || cmd === '/status') await handleDashboard(chatId, profile.id)
       else if (cmd === '/live') await handleLive(chatId, profile.id)
       else if (cmd === '/upcoming') await handleUpcoming(chatId, profile.id)
-      else if (cmd === '/help' || cmd === '/start') {
-        await sendMessage(chatId, `Commands:\n/dashboard · /live · /upcoming · /help`)
+      else if (cmd === '/help' || cmd === '/commands') {
+        await sendMessage(chatId, commandMenu())
       } else {
-        await sendMessage(chatId, `Commands:\n/dashboard · /live · /upcoming · /help`)
+        await sendMessage(chatId, commandMenu())
       }
     }
   } catch (e) {
     console.error('telegram webhook error:', e)
+    if (activeChatId) {
+      await sendMessage(activeChatId, '⚠️ Command failed inside Alpha Hub. Try /help or reconnect Telegram in Settings.')
+    }
   }
 
   res.status(200).json({ ok: true })

@@ -22,6 +22,18 @@ const WL_BADGE = {
   UNKNOWN: "badge-cyan",
 }
 
+function looksLikeAddress(value) {
+  return /^0x[a-fA-F0-9]{40}$/.test(String(value || '').trim())
+}
+
+function displayMintPrice(value) {
+  const clean = String(value || '').trim()
+  if (!clean || looksLikeAddress(clean)) return null
+  if (/free/i.test(clean)) return 'Free'
+  if (!/[0-9]/.test(clean)) return null
+  return clean.replace(/\s*(ETH|BNB)$/i, '')
+}
+
 function Countdown({ mintDate, onLive, isAuto }) {
   const [timeLeft, setTimeLeft] = React.useState("")
   const fired = React.useRef(false)
@@ -61,6 +73,7 @@ export default function ProjectCard({ project, isMinting, onMint, onDelete, onSt
   const [intel, setIntel] = useState(null)
   const [intelLoading, setIntelLoading] = useState(false)
   const status = STATUS_STYLES[project.status] || STATUS_STYLES.upcoming
+  const mintPrice = displayMintPrice(project.mint_price)
 
   const handleFetchIntel = async function() {
     setIntelLoading(true)
@@ -111,9 +124,9 @@ export default function ProjectCard({ project, isMinting, onMint, onDelete, onSt
                     }
                   </div>
                 )}
-                {project.mint_price && (
+                {mintPrice && (
                   <span className="text-xs font-mono font-semibold text-green bg-green/10 border border-green/20 px-1.5 py-0.5 rounded">
-                    {project.mint_price} {project.chain === 'bnb' ? 'BNB' : 'ETH'}
+                    {mintPrice === 'Free' ? 'Free' : `${mintPrice} ${project.chain === 'bnb' ? 'BNB' : 'ETH'}`}
                   </span>
                 )}
                 {project.mint_mode === 'auto' && (

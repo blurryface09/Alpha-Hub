@@ -18,6 +18,7 @@ const MINT_MODES = [
 ]
 
 const STATUS_OPTIONS = ['upcoming', 'live', 'minted', 'missed', 'cancelled']
+const ETH_ADDRESS_RE = /^0x[a-fA-F0-9]{40}$/
 
 export default function EditProjectModal({ project, onSave, onClose }) {
   const [form, setForm] = useState({
@@ -45,13 +46,16 @@ export default function EditProjectModal({ project, onSave, onClose }) {
     }
     setLoading(true)
     try {
+      const rawContract = form.contract_address?.trim() || ''
+      const rawMintPrice = form.mint_price?.trim() || ''
+      const priceLooksLikeAddress = ETH_ADDRESS_RE.test(rawMintPrice)
       await onSave({
         ...form,
         gas_limit: parseInt(form.gas_limit) || 200000,
         max_mint: parseInt(form.max_mint) || 1,
-        contract_address: form.contract_address?.trim() || null,
+        contract_address: rawContract || (priceLooksLikeAddress ? rawMintPrice : null),
         mint_date: form.mint_date || null,
-        mint_price: form.mint_price?.trim() || null,
+        mint_price: priceLooksLikeAddress ? null : (rawMintPrice || null),
         notes: form.notes?.trim() || null,
       })
     } catch(err) {

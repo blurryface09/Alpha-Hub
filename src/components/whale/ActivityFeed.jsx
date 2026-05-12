@@ -43,6 +43,7 @@ export default function ActivityFeed({ activity, onCopyMint }) {
         const isLarge = val > 0.5
         const explorer = EXPLORER[a.chain] || 'etherscan.io'
         const txUrl = a.tx_hash ? `https://${explorer}/tx/${a.tx_hash}` : null
+        const canCopyMint = Boolean(a.contract_address && onCopyMint)
 
         return (
           <div
@@ -81,7 +82,7 @@ export default function ActivityFeed({ activity, onCopyMint }) {
                   )}
                 </div>
 
-                {(txUrl || (isMint && a.contract_address && onCopyMint)) && (
+                {(txUrl || canCopyMint) && (
                   <div className="flex items-center gap-3 mt-1">
                     {txUrl && (
                     <a
@@ -93,12 +94,12 @@ export default function ActivityFeed({ activity, onCopyMint }) {
                       View tx <ExternalLink size={9} />
                     </a>
                     )}
-                    {isMint && a.contract_address && onCopyMint && (
+                    {canCopyMint && (
                       <button
                         onClick={() => onCopyMint(a)}
                         className="text-[10px] text-green hover:underline flex items-center gap-1"
                       >
-                        Copy Mint <CopyPlus size={9} />
+                        {isMint ? 'Copy Mint' : 'Copy as Mint'} <CopyPlus size={9} />
                       </button>
                     )}
                   </div>

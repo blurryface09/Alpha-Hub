@@ -6,6 +6,8 @@ import { friendlyError } from '../../lib/errors'
 import { getAuthToken } from '../../lib/supabase'
 import DateTimePicker from '../shared/DateTimePicker'
 
+const ETH_ADDRESS_RE = /^0x[a-fA-F0-9]{40}$/
+
 const WL_TYPES = [
   { val: 'GTD',     label: 'GTD',     desc: 'Guaranteed spot' },
   { val: 'FCFS',    label: 'FCFS',    desc: 'First come first served' },
@@ -151,14 +153,17 @@ export default function AddProjectModal({ onAdd, onClose }) {
       toast.error('Confirm the mint time before enabling Auto Beta')
       return
     }
+    const rawContract = form.contract_address?.trim() || ''
+    const rawMintPrice = form.mint_price?.trim() || ''
+    const priceLooksLikeAddress = ETH_ADDRESS_RE.test(rawMintPrice)
     const cleanForm = {
       ...form,
       gas_limit: parseInt(form.gas_limit) || 200000,
       max_mint: parseInt(form.max_mint) || 1,
       automint_enabled: form.mint_mode === 'auto' && form.auto_beta_ack,
-      contract_address: form.contract_address?.trim() || null,
+      contract_address: rawContract || (priceLooksLikeAddress ? rawMintPrice : null),
       mint_date: form.mint_date || null,
-      mint_price: form.mint_price?.trim() || null,
+      mint_price: priceLooksLikeAddress ? null : (rawMintPrice || null),
       max_mint_price: form.max_mint_price?.trim() || null,
       max_gas_fee: form.max_gas_fee?.trim() || null,
       max_total_spend: form.max_total_spend?.trim() || null,
