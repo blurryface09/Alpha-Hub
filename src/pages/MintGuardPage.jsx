@@ -4,7 +4,9 @@ import { Plus, Shield } from 'lucide-react'
 import toast from 'react-hot-toast'
 import { supabase, directInsert, directUpdate, getAuthToken } from '../lib/supabase'
 import { useMint } from '../hooks/useMint'
+import { useSubscription } from '../hooks/useSubscription'
 import { useAuthStore } from '../store'
+import Paywall from '../components/Paywall'
 import AddProjectModal from '../components/mint/AddProjectModal'
 import MintConfirmModal from '../components/mint/MintConfirmModal'
 import ProjectCard from '../components/mint/ProjectCard'
@@ -28,6 +30,7 @@ async function notifyTelegram(project, type, userToken) {
 
 export default function MintGuardPage() {
   const { user } = useAuthStore()
+  const { plan, limits, hasAccess, refresh } = useSubscription()
   const { executeMint: mintHook, isConnected } = useMint()
   const [projects, setProjects] = useState([])
   const [loading, setLoading] = useState(true)
@@ -37,6 +40,7 @@ export default function MintGuardPage() {
   const [mintingId, setMintingId] = useState(null)
   const [telegramChatId, setTelegramChatId] = useState(null)
   const [userToken, setUserToken] = useState(null)
+  const [upgradeRequired, setUpgradeRequired] = useState(null)
   const autoFired = React.useRef(new Set())
   const tgNotified = React.useRef(new Set()) // prevent duplicate Telegram notifications
 
@@ -150,6 +154,7 @@ export default function MintGuardPage() {
 
   // Auto-check if any live mints need to fire (guard prevents double-trigger with Countdown)
   useEffect(() => {
+    if (!hasAccess('pro')) return
     const autoProjects = projects.filter(p =>
       p.status === 'live' &&
       p.mint_mode === 'auto' &&
@@ -174,7 +179,7 @@ export default function MintGuardPage() {
 
   // Send Telegram live-alert when a project transitions to 'live'
   useEffect(() => {
-    if (!telegramChatId || !userToken) return
+    if (!telegramChatId || !userToken || !hasAccess('pro')) return
     projects.forEach(p => {
       if (p.status === 'live' && !tgNotified.current.has(p.id)) {
         tgNotified.current.add(p.id)
@@ -212,6 +217,11 @@ export default function MintGuardPage() {
     if (!user?.id) {
       toast.error('Not logged in — please sign out and back in')
       throw new Error('Not logged in')
+    }
+    if (projects.length >= limits.mintProjects) {
+      setUpgradeRequired('More mint tracking requires Pro.')
+      toast.error(`Your ${plan || 'Free'} plan tracks ${limits.mintProjects} mint project${limits.mintProjects === 1 ? '' : 's'}. Upgrade to add more.`)
+      throw new Error('Plan limit reached')
     }
     const insertData = {
       name: projectData.name || 'Unnamed',
@@ -272,6 +282,11 @@ export default function MintGuardPage() {
   }
 
   const handleMintModeToggle = async (id, currentMode) => {
+    if (!hasAccess('pro')) {
+      setUpgradeRequired('Automint tools require Pro.')
+      toast.error('Automint tools require Pro.')
+      return
+    }
     const newMode = currentMode === 'confirm' ? 'auto' : 'confirm'
     await supabase.from('wl_projects').update({ mint_mode: newMode }).eq('id', id)
     setProjects(prev => prev.map(p => p.id === id ? { ...p, mint_mode: newMode } : p))
@@ -279,6 +294,11 @@ export default function MintGuardPage() {
   }
 
   const handleMint = async (project, isAuto = false) => {
+    if (!hasAccess('pro')) {
+      setUpgradeRequired('Mint execution and automint tools require Pro.')
+      toast.error('Mint execution requires Pro.')
+      return
+    }
     if (!isConnected) {
       toast.error('Connect your wallet first — use the Connect Wallet button in the header')
       return
@@ -352,6 +372,18 @@ export default function MintGuardPage() {
   const liveCount = projects.filter(p => p.status === 'live').length
   const upcomingCount = projects.filter(p => p.status === 'upcoming').length
 
+  if (upgradeRequired) {
+    return (
+      <Paywall
+        onSuccess={refresh}
+        showBack
+        requiredPlan="pro"
+        currentPlan={plan || 'free'}
+        lockMessage={upgradeRequired}
+      />
+    )
+  }
+
   return (
     <div>
       {/* Header */}
@@ -364,7 +396,12 @@ export default function MintGuardPage() {
               <span className="badge badge-green animate-pulse-slow">{liveCount} LIVE</span>
             )}
           </div>
-          <p className="text-sm text-muted">Track your WL projects. Get alerted. Auto-mint when ready.</p>
+          <p className="text-sm text-muted">
+            Track your WL projects. Get alerted. Auto-mint when ready.
+            <span className="ml-2 text-xs text-accent">
+              {plan === 'free' || !plan ? `Free limit: ${projects.length}/${limits.mintProjects}` : `${plan?.toUpperCase()} limit: ${projects.length}/${limits.mintProjects}`}
+            </span>
+          </p>
         </div>
         <button onClick={() => {
           if (!user) { toast.error('Not authenticated - please sign out and back in'); return }

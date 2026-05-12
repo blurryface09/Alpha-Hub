@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from 'react'
 import { useAccount } from 'wagmi'
 import { getAuthToken } from '../lib/supabase'
-import { hasPlanAccess, normalizedPlan } from '../lib/access'
+import { hasPlanAccess, normalizedPlan, planLimits } from '../lib/access'
 
 export function useSubscription() {
   const { address, isConnected } = useAccount()
@@ -54,9 +54,13 @@ export function useSubscription() {
       ))
     : 0
 
+  const plan = normalizedPlan(subscription)
+  const hasAccess = useCallback((requiredPlan) => hasPlanAccess(subscription, requiredPlan), [subscription])
+
   return {
     subscription,
-    plan: normalizedPlan(subscription),
+    plan,
+    limits: planLimits(plan),
     isActive,
     isFree,
     isPending,
@@ -65,7 +69,7 @@ export function useSubscription() {
     daysRemaining,
     loading,
     error,
-    hasAccess: (requiredPlan) => hasPlanAccess(subscription, requiredPlan),
+    hasAccess,
     refresh: checkSubscription,
   }
 }

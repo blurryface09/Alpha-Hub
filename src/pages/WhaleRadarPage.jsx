@@ -4,16 +4,20 @@ import { Radar, Plus, Trash2, Eye } from 'lucide-react'
 import toast from 'react-hot-toast'
 import { supabase } from '../lib/supabase'
 import { useAuthStore, useWhaleStore } from '../store'
+import { useSubscription } from '../hooks/useSubscription'
+import Paywall from '../components/Paywall'
 import AddWalletModal from '../components/whale/AddWalletModal'
 import ActivityFeed from '../components/whale/ActivityFeed'
 
 export default function WhaleRadarPage() {
   const { user } = useAuthStore()
   const { activity, fetch: fetchActivity, subscribe } = useWhaleStore()
+  const { plan, limits, hasAccess, refresh } = useSubscription()
   const [watchlist, setWatchlist] = useState([])
   const [loading, setLoading] = useState(true)
   const [showAddModal, setShowAddModal] = useState(false)
   const [activeChain, setActiveChain] = useState('all')
+  const [upgradeRequired, setUpgradeRequired] = useState(false)
 
   const fetchWatchlist = useCallback(async () => {
     if (!user) return
@@ -29,9 +33,10 @@ export default function WhaleRadarPage() {
   useEffect(() => {
     fetchWatchlist()
     fetchActivity(user?.id)
+    if (!hasAccess('pro')) return undefined
     const unsub = subscribe(user?.id)
     return unsub
-  }, [fetchWatchlist, user?.id])
+  }, [fetchWatchlist, fetchActivity, hasAccess, subscribe, user?.id])
 
   const addWallet = async ({ address, label, chain }) => {
     try {
@@ -39,6 +44,11 @@ export default function WhaleRadarPage() {
       if (!address || !address.startsWith('0x')) { toast.error('Invalid wallet address'); return }
       if (watchlist.find(w => w.wallet_address.toLowerCase() === address.toLowerCase() && w.chain === chain)) {
         toast.error('Already watching this wallet')
+        return
+      }
+      if (watchlist.length >= limits.trackedWallets) {
+        setUpgradeRequired(true)
+        toast.error(`Your ${plan || 'Free'} plan tracks ${limits.trackedWallets} wallet${limits.trackedWallets === 1 ? '' : 's'}. Upgrade to add more.`)
         return
       }
       const insertPromise = supabase
@@ -80,6 +90,18 @@ export default function WhaleRadarPage() {
   const mintActivity = activity.filter(a => a.is_mint)
   const largeMovers = activity.filter(a => parseFloat(a.value_eth) > 1)
 
+  if (upgradeRequired) {
+    return (
+      <Paywall
+        onSuccess={refresh}
+        showBack
+        requiredPlan="pro"
+        currentPlan={plan || 'free'}
+        lockMessage="More tracked wallets require Pro."
+      />
+    )
+  }
+
   return (
     <div>
       {/* Header */}
@@ -91,7 +113,10 @@ export default function WhaleRadarPage() {
             <div className="w-1.5 h-1.5 rounded-full bg-green animate-pulse" />
           </div>
           <p className="text-sm text-muted">
-            Server-monitored smart money alerts with realtime updates.
+            {hasAccess('pro') ? 'Server-monitored smart money alerts with realtime updates.' : 'Limited wallet tracking. Upgrade for realtime whale alerts.'}
+            <span className="ml-2 text-xs text-accent">
+              {plan === 'free' || !plan ? `Free limit: ${watchlist.length}/${limits.trackedWallets}` : `${plan?.toUpperCase()} limit: ${watchlist.length}/${limits.trackedWallets}`}
+            </span>
           </p>
         </div>
         <button onClick={() => {

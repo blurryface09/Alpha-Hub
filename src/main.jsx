@@ -101,8 +101,8 @@ function App() {
           <Route path="/auth" element={<AuthPage />} />
           <Route path="/" element={<ProtectedRoute><DashboardLayout /></ProtectedRoute>}>
             <Route index element={<OverviewPage />} />
-            <Route path="mintguard" element={<PremiumRoute requiredPlan="pro" featureName="MintGuard"><MintGuardPage /></PremiumRoute>} />
-            <Route path="whaleradar" element={<PremiumRoute requiredPlan="pro" featureName="WhaleRadar"><WhaleRadarPage /></PremiumRoute>} />
+            <Route path="mintguard" element={<PremiumRoute requiredPlan="free" featureName="MintGuard"><MintGuardPage /></PremiumRoute>} />
+            <Route path="whaleradar" element={<PremiumRoute requiredPlan="free" featureName="WhaleRadar"><WhaleRadarPage /></PremiumRoute>} />
             <Route path="alpha" element={<PremiumRoute requiredPlan="pro" featureName="Wallet forensics"><AlphaPage /></PremiumRoute>} />
             <Route path="settings" element={<SettingsPage />} />
             <Route path="admin" element={<AdminRoute><AdminPage /></AdminRoute>} />

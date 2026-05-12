@@ -11,14 +11,35 @@ export const PLAN_RANK = {
 export const FEATURE_ACCESS = {
   overview: 'free',
   settings: 'free',
-  whaleradar: 'pro',
-  mintguard: 'pro',
+  whaleradar: 'free',
+  mintguard: 'free',
   alpha: 'pro',
   automint: 'pro',
   telegram: 'pro',
   advancedReports: 'elite',
   priorityAlerts: 'elite',
   multiWallet: 'elite',
+}
+
+export const PLAN_LIMITS = {
+  free: {
+    trackedWallets: 1,
+    mintProjects: 1,
+    walletChecksPerDay: 3,
+    aiReportsPerDay: 0,
+  },
+  pro: {
+    trackedWallets: 10,
+    mintProjects: 15,
+    walletChecksPerDay: 50,
+    aiReportsPerDay: 20,
+  },
+  elite: {
+    trackedWallets: 50,
+    mintProjects: 100,
+    walletChecksPerDay: 250,
+    aiReportsPerDay: 100,
+  },
 }
 
 export function normalizedPlan(subscription) {
@@ -35,6 +56,10 @@ export function hasPlanAccess(subscription, requiredPlan = 'free') {
   const current = normalizedPlan(subscription)
   if (!current) return false
   return (PLAN_RANK[current] ?? -1) >= (PLAN_RANK[requiredPlan] ?? 0)
+}
+
+export function planLimits(plan = 'free') {
+  return PLAN_LIMITS[plan] || PLAN_LIMITS.free
 }
 
 export function planLabel(plan) {

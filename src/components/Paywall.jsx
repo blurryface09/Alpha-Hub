@@ -383,7 +383,7 @@ export default function Paywall({
               </div>
               <p className="text-xs text-gray-500 mt-1">
                 {selectedPlanId === 'free'
-                  ? 'Free access unlocks the basic dashboard. Upgrade when you need alerts, automint, and forensic tools.'
+                  ? 'Free access unlocks the basic dashboard, limited wallet checks, and limited mint tracking.'
                   : activationMode === 'manual'
                   ? 'After payment, your subscription enters review and will be activated after confirmation.'
                   : 'Payment will activate automatically after on-chain verification.'}
