@@ -24,8 +24,7 @@ export default async function handler(req, res) {
     .from('subscriptions')
     .select('*')
     .eq('wallet_address', walletAddress)
-    .eq('verified', true)
-    .order('expires_at', { ascending: false })
+    .order('created_at', { ascending: false })
     .limit(1)
     .maybeSingle()
 

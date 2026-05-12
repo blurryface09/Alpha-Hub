@@ -140,7 +140,7 @@ async function createPayment(req, res, user) {
       starts_at: now.toISOString(),
       started_at: now.toISOString(),
       expires_at: expiresAt.toISOString(),
-      verified: false,
+      verified: true,
       amount_eth: 0,
       amount_usd: 0,
       chain_id: PAYMENT_CONFIG.chainId,

@@ -103,7 +103,8 @@ export default function Paywall({
     const data = await res.json()
     if (!res.ok) throw new Error(data.error || 'Could not activate Free plan')
     toast.success('Free plan activated.')
-    onSuccess?.()
+    await Promise.resolve(onSuccess?.())
+    window.location.href = '/'
   }
 
   async function handlePay() {
@@ -192,13 +193,14 @@ export default function Paywall({
         if (!verifyRes.ok) throw new Error(verified.error || 'Payment verification failed')
         toast.success('Subscription activated.')
         setStep('active')
-        onSuccess?.()
+        await Promise.resolve(onSuccess?.())
+        window.location.href = '/'
         return
       }
 
       toast.success('Payment submitted for admin review.')
       setStep('pending')
-      onSuccess?.()
+      await Promise.resolve(onSuccess?.())
     } catch (err) {
       setStep('pricing')
       if (err.code === 4001 || err.message?.toLowerCase().includes('rejected')) {

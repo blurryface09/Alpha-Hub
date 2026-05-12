@@ -18,6 +18,7 @@ export function useSubscription() {
 
     try {
       setLoading(true)
+      setError(null)
       const token = await getAuthToken()
       if (!token) throw new Error('Sign in again to check your subscription')
       const res = await fetch('/api/subscription?walletAddress=' + encodeURIComponent(address.toLowerCase()), {
@@ -28,6 +29,7 @@ export function useSubscription() {
       setSubscription(data.subscription || null)
     } catch (err) {
       setError(err.message)
+      setSubscription(null)
     } finally {
       setLoading(false)
     }
