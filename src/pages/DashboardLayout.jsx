@@ -8,6 +8,7 @@ import {
 import { useAccount } from 'wagmi'
 import { useAuthStore, useNotificationStore } from '../store'
 import { useSubscription } from '../hooks/useSubscription'
+import { planLabel } from '../lib/access'
 import ConnectWallet from '../components/shared/ConnectWallet'
 import NotificationPanel from '../components/shared/NotificationPanel'
 
@@ -24,7 +25,7 @@ const NAV_ITEMS = [
 export default function DashboardLayout() {
   const { user, profile, signOut } = useAuthStore()
   const { address, isConnected } = useAccount()
-  const { subscription, isActive, isPending, isFree } = useSubscription()
+  const { subscription, plan, isActive, isPending, isFree } = useSubscription()
   const { notifications, unreadCount, fetch: fetchNotifs, subscribe, markAllRead } = useNotificationStore()
   const [sidebarOpen, setSidebarOpen] = useState(false)
   const [notifOpen, setNotifOpen] = useState(false)
@@ -129,7 +130,7 @@ export default function DashboardLayout() {
                   <span className={`badge text-[9px] uppercase ${
                     isActive ? 'badge-green' : isPending ? 'bg-amber-500/10 text-amber-400 border border-amber-500/20' : isFree ? 'bg-surface border border-border text-muted' : 'bg-red-500/10 text-red-400 border border-red-500/20'
                   }`}>
-                    {isPending ? 'pending' : subscription?.plan || 'free'}
+                    {isPending ? 'pending' : planLabel(plan || subscription?.plan || 'free')}
                   </span>
                 )}
               </div>

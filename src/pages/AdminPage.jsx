@@ -19,8 +19,12 @@ const PLAN_DAYS = {
 
 const PLAN_COLORS = {
   free: 'text-slate-300 bg-slate-500/10 border-slate-500/20',
+  weekly: 'text-slate-300 bg-slate-500/10 border-slate-500/20',
   pro: 'text-cyan-400 bg-cyan-500/10 border-cyan-500/20',
+  monthly: 'text-cyan-400 bg-cyan-500/10 border-cyan-500/20',
   elite: 'text-violet-400 bg-violet-500/10 border-violet-500/20',
+  quarterly: 'text-violet-400 bg-violet-500/10 border-violet-500/20',
+  founder: 'text-violet-400 bg-violet-500/10 border-violet-500/20',
 }
 
 function StatCard({ icon: Icon, label, value, sub, color }) {

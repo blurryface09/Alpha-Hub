@@ -1,7 +1,7 @@
 import { createServiceClient, requireAdmin } from './_lib/auth.js'
 import { writeAuditLog } from './_lib/audit.js'
 import { rateLimit, sendRateLimit } from './_lib/redis.js'
-import { PAYMENT_CONFIG, getPlan, getPlanDurationDays, PRICING_PLANS } from './_lib/pricing.js'
+import { PAYMENT_CONFIG, getPlan, getPlanDurationDays, subscriptionPlanForTier, PRICING_PLANS } from './_lib/pricing.js'
 
 const PLAN_DAYS = Object.fromEntries(
   Object.values(PRICING_PLANS).map(plan => [plan.id, plan.durationDaysMonthly])
@@ -20,7 +20,7 @@ async function activateSubscriptionFromPayment(supabase, payment) {
   const payload = {
     user_id: payment.user_id,
     wallet_address: payment.wallet_address.toLowerCase(),
-    plan: payment.plan,
+    plan: subscriptionPlanForTier(payment.plan),
     billing_cycle: payment.billing_cycle || 'monthly',
     status: 'active',
     tx_hash: payment.tx_hash,
@@ -152,7 +152,7 @@ export default async function handler(req, res) {
       .from('subscriptions')
       .upsert({
         wallet_address: walletAddress.toLowerCase(),
-        plan,
+        plan: subscriptionPlanForTier(plan),
         billing_cycle: 'monthly',
         tx_hash: txHash,
         chain_id: PAYMENT_CONFIG.chainId,

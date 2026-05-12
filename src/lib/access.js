@@ -1,7 +1,11 @@
 export const PLAN_RANK = {
   free: 0,
+  weekly: 0,
   pro: 1,
+  monthly: 1,
   elite: 2,
+  quarterly: 2,
+  founder: 2,
 }
 
 export const FEATURE_ACCESS = {
@@ -18,8 +22,12 @@ export const FEATURE_ACCESS = {
 }
 
 export function normalizedPlan(subscription) {
-  if (subscription?.status === 'active') return subscription.plan || 'pro'
-  if (subscription?.status === 'free' || subscription?.plan === 'free') return 'free'
+  if (subscription?.status === 'active') {
+    if (subscription.plan === 'quarterly' || subscription.plan === 'founder' || subscription.plan === 'elite') return 'elite'
+    if (subscription.plan === 'monthly' || subscription.plan === 'pro') return 'pro'
+    return 'free'
+  }
+  if (subscription?.status === 'free' || subscription?.plan === 'free' || subscription?.plan === 'weekly') return 'free'
   return null
 }
 

@@ -9,6 +9,7 @@ import {
   getPlan,
   getPlanDurationDays,
   getPlanPriceUsd,
+  subscriptionPlanForTier,
 } from '../_lib/pricing.js'
 
 const RECEIVER = PAYMENT_CONFIG.receiverAddress.toLowerCase()
@@ -101,7 +102,7 @@ async function createPayment(req, res, user) {
     const { data, error } = await upsertSubscription(supabase, {
       user_id: user.id,
       wallet_address: walletAddress.toLowerCase(),
-      plan: 'free',
+      plan: subscriptionPlanForTier('free'),
       billing_cycle: billingCycle,
       status: 'free',
       tx_hash: freeReference,
@@ -169,7 +170,7 @@ async function createPayment(req, res, user) {
   const { error: subscriptionError } = await upsertSubscription(supabase, {
     user_id: user.id,
     wallet_address: walletAddress.toLowerCase(),
-    plan: plan.id,
+    plan: subscriptionPlanForTier(plan.id),
     billing_cycle: billingCycle,
     status: 'pending_verification',
     tx_hash: txHash,
@@ -270,7 +271,7 @@ async function verifyPayment(req, res, user) {
     const { data: subscription, error } = await upsertSubscription(supabase, {
       user_id: user.id,
       wallet_address: walletAddress.toLowerCase(),
-      plan: plan.id,
+      plan: subscriptionPlanForTier(plan.id),
       billing_cycle: billingCycle,
       status: 'active',
       tx_hash: txHash,

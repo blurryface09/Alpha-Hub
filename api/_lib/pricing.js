@@ -67,3 +67,17 @@ export function getPlanPriceUsd(plan, billingCycle = 'monthly') {
 export function getPlanDurationDays(plan, billingCycle = 'monthly') {
   return billingCycle === 'annual' ? plan.durationDaysAnnual : plan.durationDaysMonthly
 }
+
+export function subscriptionPlanForTier(planId) {
+  if (planId === 'elite') return 'quarterly'
+  if (planId === 'pro') return 'monthly'
+  if (planId === 'free') return 'weekly'
+  return planId
+}
+
+export function tierFromSubscriptionPlan(plan) {
+  if (plan === 'quarterly' || plan === 'founder' || plan === 'elite') return 'elite'
+  if (plan === 'monthly' || plan === 'pro') return 'pro'
+  if (plan === 'weekly' || plan === 'free') return 'free'
+  return 'free'
+}
