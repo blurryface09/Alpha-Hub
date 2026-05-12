@@ -99,6 +99,7 @@ function App() {
       <BrowserRouter>
         <Routes>
           <Route path="/auth" element={<AuthPage />} />
+          <Route path="/upgrade" element={<Paywall showBack />} />
           <Route path="/" element={<ProtectedRoute><DashboardLayout /></ProtectedRoute>}>
             <Route index element={<OverviewPage />} />
             <Route path="mintguard" element={<PremiumRoute requiredPlan="free" featureName="MintGuard"><MintGuardPage /></PremiumRoute>} />
@@ -107,6 +108,7 @@ function App() {
             <Route path="settings" element={<SettingsPage />} />
             <Route path="admin" element={<AdminRoute><AdminPage /></AdminRoute>} />
           </Route>
+          <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
       </BrowserRouter>
       <Toaster
