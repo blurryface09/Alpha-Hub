@@ -36,6 +36,25 @@ function calculateExpectedEth(amountUsd, ethUsd) {
   return Math.ceil((Number(amountUsd) / Number(ethUsd)) * 1_000_000) / 1_000_000
 }
 
+function subscriptionPlanCandidates(plan, status) {
+  if (status === 'free') {
+    return [
+      subscriptionPlanForTier('free'),
+      'free',
+      'basic',
+      'starter',
+      'trial',
+      'monthly',
+    ]
+  }
+
+  if (plan === 'elite' || plan === 'quarterly' || plan === 'founder') {
+    return ['quarterly', 'elite', 'founder', 'monthly']
+  }
+
+  return ['monthly', 'pro', 'weekly']
+}
+
 async function upsertSubscription(supabase, payload) {
   const optionalColumns = [
     [],
@@ -46,18 +65,30 @@ async function upsertSubscription(supabase, payload) {
     ['starts_at', 'billing_cycle', 'amount_usd', 'chain_id', 'updated_at'],
     ['starts_at', 'billing_cycle', 'amount_usd', 'chain_id', 'updated_at', 'status'],
   ]
+  const plans = subscriptionPlanCandidates(payload.plan, payload.status)
 
   let result
-  for (const omitColumns of optionalColumns) {
-    const row = Object.fromEntries(
-      Object.entries(payload).filter(([key]) => !omitColumns.includes(key))
-    )
-    result = await supabase
-      .from('subscriptions')
-      .upsert(row, { onConflict: 'wallet_address' })
-      .select()
-      .single()
-    if (!result.error) return result
+  const seen = new Set()
+  for (const candidatePlan of plans) {
+    if (seen.has(candidatePlan)) continue
+    seen.add(candidatePlan)
+
+    for (const omitColumns of optionalColumns) {
+      const row = Object.fromEntries(
+        Object.entries({ ...payload, plan: candidatePlan }).filter(([key]) => !omitColumns.includes(key))
+      )
+      result = await supabase
+        .from('subscriptions')
+        .upsert(row, { onConflict: 'wallet_address' })
+        .select()
+        .single()
+      if (!result.error) return result
+
+      const message = `${result.error.message || ''} ${result.error.details || ''} ${result.error.hint || ''}`
+      const canRetryPlan = message.includes('subscriptions_plan_check') || message.toLowerCase().includes('violates check constraint')
+      const canRetryColumn = message.toLowerCase().includes('column') || message.toLowerCase().includes('schema cache')
+      if (!canRetryPlan && !canRetryColumn) return result
+    }
   }
   return result
 }
