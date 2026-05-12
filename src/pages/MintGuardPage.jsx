@@ -6,6 +6,7 @@ import { supabase, directInsert, directUpdate, getAuthToken } from '../lib/supab
 import { useMint } from '../hooks/useMint'
 import { useSubscription } from '../hooks/useSubscription'
 import { useAuthStore } from '../store'
+import { friendlyError } from '../lib/errors'
 import Paywall from '../components/Paywall'
 import AddProjectModal from '../components/mint/AddProjectModal'
 import MintConfirmModal from '../components/mint/MintConfirmModal'
@@ -247,7 +248,7 @@ export default function MintGuardPage() {
       setShowAddModal(false)
     } catch (err) {
       console.error('handleAddProject error:', err)
-      toast.error(err.message || 'Save failed', { id: 'save-project' })
+      toast.error(friendlyError(err, 'Could not save this project. Please try again.'), { id: 'save-project' })
       throw err
     }
   }
@@ -258,7 +259,7 @@ export default function MintGuardPage() {
     const { error } = await supabase.from('wl_projects').delete().eq('id', id)
     if (error) {
       if (snapshot) setProjects(prev => [snapshot, ...prev.filter(p => p.id !== id)])
-      toast.error('Delete failed: ' + error.message)
+      toast.error(friendlyError(error, 'Could not delete this project. Please try again.'))
       return
     }
     toast.success('Project removed')
@@ -267,7 +268,7 @@ export default function MintGuardPage() {
   const handleStatusUpdate = async (id, status) => {
     setProjects(prev => prev.map(p => p.id === id ? { ...p, status } : p))
     const { error } = await supabase.from('wl_projects').update({ status }).eq('id', id)
-    if (error) toast.error('Status update failed: ' + error.message)
+    if (error) toast.error(friendlyError(error, 'Could not update this project. Please try again.'))
   }
 
   const handleEditProject = async (id, updates) => {
@@ -277,7 +278,7 @@ export default function MintGuardPage() {
       setProjects(prev => prev.map(p => p.id === id ? { ...p, ...updates } : p))
       toast.success('Project updated!', { id: 'edit-project' })
     } catch(e) {
-      toast.error(e.message, { id: 'edit-project' })
+      toast.error(friendlyError(e, 'Could not update this project. Please try again.'), { id: 'edit-project' })
     }
   }
 

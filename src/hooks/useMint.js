@@ -3,6 +3,7 @@ import { parseEther, parseAbi } from 'viem'
 import { mainnet, base, bsc } from 'wagmi/chains'
 import toast from 'react-hot-toast'
 import { supabase, getAuthToken } from '../lib/supabase'
+import { friendlyError } from '../lib/errors'
 
 const CHAIN_MAP = {
   eth: mainnet.id,
@@ -82,7 +83,7 @@ export function useMint() {
         toast.loading('Switching network...', { id: 'mint-tx' })
         await switchChainAsync({ chainId: targetChainId })
       } catch (e) {
-        toast.error('Failed to switch network: ' + e.message, { id: 'mint-tx' })
+        toast.error(friendlyError(e, 'Could not switch network. Please try again.'), { id: 'mint-tx' })
         return { success: false, error: e.message }
       }
     }
@@ -180,7 +181,7 @@ export function useMint() {
 
     } catch (e) {
       const msg = e.shortMessage || e.message || 'Transaction failed'
-      toast.error(msg.slice(0, 120), { id: 'mint-tx' })
+      toast.error(friendlyError(e, 'Mint transaction failed. Please check the project and try again.'), { id: 'mint-tx' })
 
       // Log failure (non-critical)
       if (userId) {

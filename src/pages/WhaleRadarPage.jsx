@@ -5,6 +5,7 @@ import toast from 'react-hot-toast'
 import { supabase } from '../lib/supabase'
 import { useAuthStore, useWhaleStore } from '../store'
 import { useSubscription } from '../hooks/useSubscription'
+import { friendlyError } from '../lib/errors'
 import Paywall from '../components/Paywall'
 import AddWalletModal from '../components/whale/AddWalletModal'
 import ActivityFeed from '../components/whale/ActivityFeed'
@@ -65,7 +66,7 @@ export default function WhaleRadarPage() {
 
       if (error) {
         console.error('Supabase whale error:', error.code, error.message)
-        toast.error(`Failed: ${error.message}`, { duration: 6000 })
+        toast.error(friendlyError(error, 'Could not save this wallet. Please try again.'), { duration: 6000 })
         return
       }
       setWatchlist(prev => [...prev, data])
@@ -73,7 +74,7 @@ export default function WhaleRadarPage() {
       setShowAddModal(false)
     } catch (err) {
       console.error('Unexpected error adding wallet:', err)
-      toast.error(`Unexpected error: ${err.message}`)
+      toast.error(friendlyError(err, 'Could not save this wallet. Please try again.'))
     }
   }
 

@@ -1,5 +1,5 @@
 import { createClient } from '@supabase/supabase-js'
-import { PAYMENT_CONFIG, getPaymentChain } from './_lib/pricing.js'
+import { PAYMENT_CONFIG, getActivationMode, getPaymentChain } from './_lib/pricing.js'
 
 const startedAt = Date.now()
 
@@ -62,6 +62,7 @@ export default async function handler(req, res) {
     process.env.ALCHEMY_API_KEY ||
     process.env.VITE_ALCHEMY_API_KEY
   )
+  const automintEnabled = String(process.env.AUTOMINT_ENABLED || '').trim().toLowerCase() === 'true'
   const paymentChain = getPaymentChain()
   const receiverConfigured = isWalletAddress(PAYMENT_CONFIG.receiverAddress)
   const missingPaymentEnv = [
@@ -75,11 +76,16 @@ export default async function handler(req, res) {
     supabase,
     telegram: { ok: telegramConfigured },
     cron: { ok: cronProtected },
+    automint: {
+      ok: true,
+      status: automintEnabled ? 'enabled' : 'safe_mode',
+      dryRun: !automintEnabled,
+    },
     payment: {
       ok: receiverConfigured,
       status: receiverConfigured ? 'healthy' : 'down',
       chain: paymentChain?.key || null,
-      activationMode: PAYMENT_CONFIG.activationMode,
+      activationMode: getActivationMode(),
       receiver: PAYMENT_CONFIG.receiverAddress,
       missing: missingPaymentEnv,
     },

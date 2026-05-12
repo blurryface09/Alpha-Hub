@@ -7,6 +7,7 @@ import ConnectWallet from './shared/ConnectWallet'
 import { getAuthToken } from '../lib/supabase'
 import { useAuthStore } from '../store'
 import { PAYMENT_CONFIG, getPlanPriceUsd, roundUpEthAmount } from '../config/payments'
+import { friendlyError } from '../lib/errors'
 
 const PLAN_ORDER = ['free', 'pro', 'elite']
 
@@ -202,6 +203,7 @@ export default function Paywall({
       setStep('pending')
       await Promise.resolve(onSuccess?.())
     } catch (err) {
+      console.error('payment flow error:', err)
       setStep('pricing')
       if (err.code === 4001 || err.message?.toLowerCase().includes('rejected')) {
         toast.error('Transaction cancelled')
@@ -212,7 +214,7 @@ export default function Paywall({
       } else if (err.message?.toLowerCase().includes('chain') || err.message?.toLowerCase().includes('network')) {
         toast.error('Switch to Base to pay')
       } else {
-        toast.error(err.message || 'Payment failed. Please try again.')
+        toast.error(friendlyError(err, 'Payment is temporarily unavailable. Please try again.'))
       }
     }
   }

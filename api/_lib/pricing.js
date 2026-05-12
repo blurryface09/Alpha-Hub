@@ -52,7 +52,7 @@ export function getPaymentChain() {
 }
 
 export function getActivationMode() {
-  return PAYMENT_CONFIG.activationMode === 'automatic' ? 'automatic' : 'manual'
+  return String(PAYMENT_CONFIG.activationMode || '').trim() === 'automatic' ? 'automatic' : 'manual'
 }
 
 export function getPlan(planId) {

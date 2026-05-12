@@ -214,6 +214,7 @@ export default function AdminPage() {
     { label: 'Telegram', value: health.telegram?.ok ? 'healthy' : 'down', ok: health.telegram?.ok !== false, icon: Send },
     { label: 'Supabase', value: health.supabase?.latencyMs != null ? `${health.supabase.latencyMs}ms` : 'checking', ok: health.supabase?.ok !== false, icon: Database },
     { label: 'Cron', value: health.cron?.ok ? 'protected' : 'missing secret', ok: health.cron?.ok !== false, icon: Clock },
+    { label: 'Automint', value: health.automint?.status || 'safe_mode', ok: health.automint?.ok !== false, icon: Shield },
     { label: 'Queue/Redis', value: health.redis?.status || 'optional', ok: true, icon: Radio },
   ]
 

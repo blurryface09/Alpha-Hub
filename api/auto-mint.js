@@ -32,6 +32,7 @@ function getSupabase() {
 const ALCHEMY_KEY = process.env.ALCHEMY_API_KEY || process.env.VITE_ALCHEMY_API_KEY
 const ETHERSCAN_KEY = process.env.ETHERSCAN_API_KEY || process.env.VITE_ETHERSCAN_API_KEY
 const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN
+const AUTOMINT_ENABLED = String(process.env.AUTOMINT_ENABLED || '').trim().toLowerCase() === 'true'
 
 const CHAIN_CONFIG = {
   eth:  { chain: mainnet, rpc: `https://eth-mainnet.g.alchemy.com/v2/${ALCHEMY_KEY}`,  id: 1    },
@@ -182,6 +183,15 @@ export default async function handler(req, res) {
   const cronSecret = process.env.CRON_SECRET
   if (cronSecret && req.headers.authorization !== `Bearer ${cronSecret}`) {
     return res.status(401).end()
+  }
+
+  if (!AUTOMINT_ENABLED) {
+    return res.status(200).json({
+      ok: true,
+      dryRun: true,
+      fired: 0,
+      message: 'Auto-mint is disabled. Set AUTOMINT_ENABLED=true to allow live transactions.',
+    })
   }
 
   if (!process.env.WALLET_ENCRYPTION_KEY) {

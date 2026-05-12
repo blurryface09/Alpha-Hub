@@ -4,7 +4,7 @@ export const PAYMENT_CONFIG = {
   chainName: 'Base',
   tokenSymbol: 'ETH',
   explorerBaseUrl: 'https://basescan.org/tx',
-  activationMode: import.meta.env.VITE_PAYMENT_ACTIVATION_MODE || 'manual',
+  activationMode: String(import.meta.env.VITE_PAYMENT_ACTIVATION_MODE || 'manual').trim(),
 
   plans: {
     free: {
