@@ -89,12 +89,13 @@ export default function AdminPage() {
   const totalEth = subscribers.reduce((sum, s) => sum + parseFloat(s.amount_eth || 0), 0)
 
   const handleAddSubscriber = async () => {
-    if (!newWallet || !newWallet.startsWith('0x') || newWallet.length !== 42) {
+    const normalizedWallet = newWallet.trim()
+    if (!normalizedWallet || !normalizedWallet.startsWith('0x') || normalizedWallet.length !== 42) {
       toast.error('Enter a valid wallet address')
       return
     }
 
-      setAdding(true)
+    setAdding(true)
     try {
       const token = await getAuthToken()
       if (!token) throw new Error('Sign in again to grant access')
@@ -105,7 +106,7 @@ export default function AdminPage() {
           Authorization: `Bearer ${token}`,
         },
         body: JSON.stringify({
-          walletAddress: newWallet,
+          walletAddress: normalizedWallet,
           plan: newPlan,
           reason: 'manual_admin_grant',
         }),
@@ -113,13 +114,13 @@ export default function AdminPage() {
       const result = await res.json()
       if (!res.ok) throw new Error(result.error || 'Failed to add subscriber')
 
-      toast.success('Access granted to ' + newWallet.slice(0, 6) + '...' + newWallet.slice(-4))
+      toast.success('Access granted to ' + normalizedWallet.slice(0, 6) + '...' + normalizedWallet.slice(-4))
       setNewWallet('')
       setNewNote('')
       setShowAddForm(false)
       fetchSubscribers()
     } catch (err) {
-      toast.error(err.message || 'Failed to add subscriber')
+      toast.error(err.message || 'Failed to grant access. Please try again.')
     } finally {
       setAdding(false)
     }
@@ -330,10 +331,13 @@ export default function AdminPage() {
                 Wallet Address
               </label>
               <input
-                className="input w-full font-mono text-sm"
+                className="input w-full min-w-0 font-mono text-xs sm:text-sm"
                 placeholder="0x..."
                 value={newWallet}
                 onChange={e => setNewWallet(e.target.value)}
+                autoCapitalize="none"
+                autoCorrect="off"
+                spellCheck={false}
               />
             </div>
 
@@ -359,18 +363,18 @@ export default function AdminPage() {
               </div>
             </div>
 
-            <div className="flex gap-2">
+            <div className="flex flex-col sm:flex-row gap-2">
               <button
                 onClick={() => handleAddSubscriber()}
                 disabled={adding}
-                className="flex-1 flex items-center justify-center gap-2 py-2.5 rounded-lg bg-accent text-white text-sm font-semibold hover:bg-accent/90 disabled:opacity-50 transition-all"
+                className="flex-1 flex items-center justify-center gap-2 py-3 sm:py-2.5 rounded-lg bg-accent text-white text-sm font-semibold hover:bg-accent/90 disabled:opacity-50 transition-all"
               >
                 {adding ? <Loader2 size={14} className="animate-spin" /> : <CheckCircle2 size={14} />}
                 {adding ? 'Granting...' : 'Grant Access'}
               </button>
               <button
                 onClick={() => { setShowAddForm(false); setNewWallet('') }}
-                className="px-4 py-2.5 rounded-lg border border-border text-muted text-sm hover:text-text transition-all"
+                className="px-4 py-3 sm:py-2.5 rounded-lg border border-border text-muted text-sm hover:text-text transition-all"
               >
                 Cancel
               </button>

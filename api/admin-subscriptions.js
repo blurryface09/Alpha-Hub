@@ -11,6 +11,65 @@ function validWallet(wallet) {
   return /^0x[a-fA-F0-9]{40}$/.test(String(wallet || ''))
 }
 
+function subscriptionPlanCandidates(plan, status) {
+  if (status === 'free' || plan === 'free') return ['free', 'basic', 'starter', 'trial', 'monthly']
+  if (plan === 'elite' || plan === 'quarterly' || plan === 'founder') return ['quarterly', 'elite', 'founder', 'monthly']
+  return ['monthly', 'pro', 'weekly']
+}
+
+function shouldRetrySubscriptionWrite(error) {
+  const message = `${error?.message || ''} ${error?.details || ''} ${error?.hint || ''}`.toLowerCase()
+  return message.includes('schema cache') ||
+    message.includes('column') ||
+    message.includes('check constraint') ||
+    message.includes('violates')
+}
+
+function publicSubscriptionError(error) {
+  const message = `${error?.message || ''} ${error?.details || ''} ${error?.hint || ''}`.toLowerCase()
+  if (message.includes('schema cache') || message.includes('column') || message.includes('check constraint')) {
+    return 'Subscription schema mismatch. The app retried the safe write paths but Supabase still rejected the grant.'
+  }
+  return 'Could not update subscription. Please try again.'
+}
+
+async function upsertSubscription(supabase, payload) {
+  const optionalColumns = [
+    [],
+    ['amount_usd'],
+    ['amount_usd', 'amount_eth'],
+    ['starts_at', 'amount_usd', 'amount_eth'],
+    ['starts_at', 'billing_cycle', 'amount_usd', 'amount_eth'],
+    ['starts_at', 'billing_cycle', 'amount_usd', 'amount_eth', 'chain_id'],
+    ['starts_at', 'billing_cycle', 'amount_usd', 'amount_eth', 'chain_id', 'updated_at'],
+    ['starts_at', 'billing_cycle', 'amount_usd', 'amount_eth', 'chain_id', 'updated_at', 'status'],
+  ]
+  const candidates = subscriptionPlanCandidates(payload.plan, payload.status)
+  const seen = new Set()
+  let result
+
+  for (const candidate of candidates) {
+    if (seen.has(candidate)) continue
+    seen.add(candidate)
+
+    for (const omit of optionalColumns) {
+      const row = Object.fromEntries(
+        Object.entries({ ...payload, plan: candidate }).filter(([key]) => !omit.includes(key))
+      )
+      result = await supabase
+        .from('subscriptions')
+        .upsert(row, { onConflict: 'wallet_address' })
+        .select()
+        .single()
+
+      if (!result.error) return result
+      if (!shouldRetrySubscriptionWrite(result.error)) return result
+    }
+  }
+
+  return result
+}
+
 async function activateSubscriptionFromPayment(supabase, payment) {
   const plan = getPlan(payment.plan)
   if (!plan) return { error: { message: 'Invalid payment plan' } }
@@ -34,22 +93,8 @@ async function activateSubscriptionFromPayment(supabase, payment) {
     updated_at: now.toISOString(),
   }
 
-  const attempts = [
-    payload,
-    Object.fromEntries(Object.entries(payload).filter(([key]) => key !== 'starts_at')),
-    Object.fromEntries(Object.entries(payload).filter(([key]) => !['starts_at', 'billing_cycle', 'amount_usd'].includes(key))),
-  ]
-
-  let result
-  for (const row of attempts) {
-    result = await supabase
-      .from('subscriptions')
-      .upsert(row, { onConflict: 'wallet_address' })
-      .select()
-      .single()
-    if (!result.error) return { ...result, expiresAt }
-  }
-  return result
+  const result = await upsertSubscription(supabase, payload)
+  return result.error ? result : { ...result, expiresAt }
 }
 
 export default async function handler(req, res) {
@@ -128,7 +173,7 @@ export default async function handler(req, res) {
       if (updateError) return res.status(500).json({ error: updateError.message })
 
       const { data: subscription, error: subscriptionError, expiresAt } = await activateSubscriptionFromPayment(supabase, updatedPayment)
-      if (subscriptionError) return res.status(500).json({ error: subscriptionError.message })
+      if (subscriptionError) return res.status(500).json({ error: publicSubscriptionError(subscriptionError) })
 
       await writeAuditLog(supabase, {
         action: 'admin.payment.approved',
@@ -148,26 +193,22 @@ export default async function handler(req, res) {
     const expiresAt = new Date(now.getTime() + getPlanDurationDays(planConfig, 'monthly') * 24 * 60 * 60 * 1000)
     const txHash = `manual_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`
 
-    const { data, error } = await supabase
-      .from('subscriptions')
-      .upsert({
-        wallet_address: walletAddress.toLowerCase(),
-        plan: subscriptionPlanForTier(plan),
-        billing_cycle: 'monthly',
-        tx_hash: txHash,
-        chain_id: PAYMENT_CONFIG.chainId,
-        amount_eth: 0,
-        amount_usd: 0,
-        starts_at: now.toISOString(),
-        started_at: now.toISOString(),
-        expires_at: expiresAt.toISOString(),
-        verified: true,
-        status: 'active',
-      }, { onConflict: 'wallet_address' })
-      .select()
-      .single()
+    const { data, error } = await upsertSubscription(supabase, {
+      wallet_address: walletAddress.toLowerCase(),
+      plan: subscriptionPlanForTier(plan),
+      billing_cycle: 'monthly',
+      tx_hash: txHash,
+      chain_id: PAYMENT_CONFIG.chainId,
+      amount_eth: 0,
+      amount_usd: 0,
+      starts_at: now.toISOString(),
+      started_at: now.toISOString(),
+      expires_at: expiresAt.toISOString(),
+      verified: true,
+      status: 'active',
+    })
 
-    if (error) return res.status(500).json({ error: error.message })
+    if (error) return res.status(500).json({ error: publicSubscriptionError(error) })
     await writeAuditLog(supabase, {
       action: 'admin.subscription.created',
       userId: admin.id,
