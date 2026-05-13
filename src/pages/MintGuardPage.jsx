@@ -101,11 +101,12 @@ export default function MintGuardPage() {
     if (!user) { setLoading(false); return }
     try {
       if (showLoader) setLoading(true)
-      const { data, error } = await supabase
+      let query = supabase
         .from('wl_projects')
         .select('*')
-        .eq('user_id', user.id)
         .order('mint_date', { ascending: true, nullsFirst: false })
+      if (plan !== 'admin') query = query.eq('user_id', user.id)
+      const { data, error } = await query
       if (error) { console.error('fetchProjects error:', error); return }
       if (Array.isArray(data)) {
         const updated = await autoUpdateStatus(data)
@@ -116,7 +117,7 @@ export default function MintGuardPage() {
     } finally {
       setLoading(false)
     }
-  }, [user])
+  }, [user, plan])
 
   // First load with spinner, subsequent interval refreshes silent
   const initialLoad = React.useRef(false)
@@ -456,7 +457,7 @@ export default function MintGuardPage() {
             Track your WL projects. Get alerted. Auto-mint when ready.
             <span className="ml-2 text-xs text-accent">
               {plan === 'admin'
-                ? 'Admin access: unlimited'
+                ? 'Admin Mode: all projects'
                 : plan === 'free' || !plan
                 ? `Free limit: ${projects.length}/${limits.mintProjects}`
                 : `${plan?.toUpperCase()} limit: ${projects.length}/${limits.mintProjects}`}

@@ -33,33 +33,34 @@ export default function WhaleRadarPage() {
 
   const fetchWatchlist = useCallback(async () => {
     if (!user) return
-    const { data } = await supabase
+    let query = supabase
       .from('whale_watchlist')
       .select('*')
-      .eq('user_id', user.id)
       .eq('is_active', true)
+    if (!isAdmin) query = query.eq('user_id', user.id)
+    const { data } = await query
     setWatchlist(data || [])
     setLoading(false)
-  }, [user])
+  }, [user, isAdmin])
 
   useEffect(() => {
     fetchWatchlist()
-    fetchActivity(user?.id)
+    fetchActivity(isAdmin ? null : user?.id)
     if (!hasAccess('pro')) return undefined
-    const unsub = subscribe(user?.id)
+    const unsub = subscribe(isAdmin ? null : user?.id)
     return unsub
-  }, [fetchWatchlist, fetchActivity, hasAccess, subscribe, user?.id])
+  }, [fetchWatchlist, fetchActivity, hasAccess, subscribe, user?.id, isAdmin])
 
   useEffect(() => {
     const refreshOnResume = () => {
       fetchWatchlist()
-      fetchActivity(user?.id)
+      fetchActivity(isAdmin ? null : user?.id)
     }
     window.addEventListener('alphahub:resume', refreshOnResume)
     return () => {
       window.removeEventListener('alphahub:resume', refreshOnResume)
     }
-  }, [fetchActivity, fetchWatchlist, user?.id])
+  }, [fetchActivity, fetchWatchlist, user?.id, isAdmin])
 
   const addWallet = async ({ address, label, chain }) => {
     try {

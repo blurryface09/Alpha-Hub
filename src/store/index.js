@@ -99,6 +99,11 @@ export const useAuthStore = create((set, get) => ({
 
       if (data?.user) {
         set({ user: data.user, signingIn: false })
+        await supabase.from('profiles').upsert({
+          id: data.user.id,
+          username: 'user_' + data.user.id.slice(0, 6),
+          wallet_address: address.toLowerCase(),
+        }).catch(() => {})
         await get().fetchProfile(data.user.id)
         return { success: true }
       }
