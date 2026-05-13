@@ -1,13 +1,13 @@
 import { dedupeKey } from './normalize.js'
 import { scoreProject } from './scoring.js'
 import { fetchOpenSeaProjects } from './adapters/opensea.js'
-import { fetchReservoirProjects } from './adapters/reservoir.js'
+import { fetchAlchemyProjects } from './adapters/alchemy.js'
 import { fetchZoraProjects } from './adapters/zora.js'
 import { fetchOnchainProjects } from './adapters/onchain.js'
 
 const ADAPTERS = {
   opensea: fetchOpenSeaProjects,
-  reservoir: fetchReservoirProjects,
+  alchemy: fetchAlchemyProjects,
   zora: fetchZoraProjects,
   onchain: fetchOnchainProjects,
 }
@@ -53,12 +53,15 @@ async function upsertProject(supabase, project) {
   }
 
   if (existing?.id) {
+    const nextStatus = existing.status === 'hidden' || existing.status === 'rejected'
+      ? existing.status
+      : scored.status
     const { error } = await supabase
       .from('calendar_projects')
       .update({
         ...scored,
         first_seen_at: existing.first_seen_at || scored.first_seen_at,
-        status: existing.status === 'hidden' || existing.status === 'rejected' ? existing.status : scored.status,
+        status: nextStatus,
       })
       .eq('id', existing.id)
     if (error) throw error
@@ -155,6 +158,27 @@ export async function getCalendarStatus(supabase) {
   const pendingCount = rows.filter(row => row.status === 'pending_review').length
   const newContractCount = rows.filter(row => row.source === 'onchain').length
   const latestRun = (runs.data || [])[0]
+  const knownSources = Object.keys(ADAPTERS)
+  const sourceRuns = {}
+  for (const source of knownSources) {
+    sourceRuns[source] = {
+      status: 'not_run',
+      imported: 0,
+      updated: 0,
+      errors: [],
+      finishedAt: null,
+    }
+  }
+  for (const run of runs.data || []) {
+    if (!knownSources.includes(run.source) || sourceRuns[run.source]?.finishedAt) continue
+    sourceRuns[run.source] = {
+      status: run.status,
+      imported: run.imported_count || 0,
+      updated: run.updated_count || 0,
+      errors: run.errors || [],
+      finishedAt: run.finished_at || run.created_at,
+    }
+  }
 
   return {
     ok: !projects.error,
@@ -165,15 +189,6 @@ export async function getCalendarStatus(supabase) {
     liveCount,
     pendingCount,
     newContractCount,
-    sources: Object.fromEntries((runs.data || []).map(run => [
-      run.source,
-      {
-        status: run.status,
-        imported: run.imported_count || 0,
-        updated: run.updated_count || 0,
-        errors: run.errors || [],
-        finishedAt: run.finished_at || run.created_at,
-      },
-    ])),
+    sources: sourceRuns,
   }
 }

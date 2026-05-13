@@ -74,7 +74,7 @@ async function fetchContractMetadata(url, contract) {
   return {
     name,
     symbol,
-    totalSupply: Number.isFinite(totalSupply) ? totalSupply : null,
+    totalSupply: Number.isFinite(totalSupply) && totalSupply <= 2147483647 ? totalSupply : null,
   }
 }
 
