@@ -15,7 +15,6 @@ import {
 import { useAuthStore, useNotificationStore, useWhaleStore } from '../store'
 import { useSubscription } from '../hooks/useSubscription'
 import { supabase } from '../lib/supabase'
-import { demoFeedEvents } from '../lib/demoData'
 
 function timeAgo(value) {
   if (!value) return 'never'
@@ -195,8 +194,8 @@ export default function OverviewPage() {
       .filter((event) => event.title)
       .sort((a, b) => new Date(b.at || 0) - new Date(a.at || 0))
       .slice(0, 12)
-    return realEvents.length ? realEvents : (plan === 'admin' ? demoFeedEvents : [])
-  }, [activity, notifications, projects, plan])
+    return realEvents
+  }, [activity, notifications, projects])
 
   const summary = [
     { label: 'Active Automints', value: stats.activeAutomints, icon: Zap, tone: 'text-green' },
@@ -276,9 +275,6 @@ export default function OverviewPage() {
             <div>
               <div className="section-label mb-1">Main Live Feed</div>
               <h2 className="text-base font-semibold">Operational intelligence stream</h2>
-              {liveFeed[0]?.demo && (
-                <p className="text-xs text-muted mt-1">Demo activity shown until real alerts arrive.</p>
-              )}
             </div>
             <Link to="/whaleradar" className="btn-ghost text-xs py-2 px-3">
               Open Radar
@@ -308,7 +304,6 @@ export default function OverviewPage() {
                     <div className="min-w-0 flex-1">
                       <div className="flex items-start justify-between gap-3">
                         <div className="text-sm font-semibold truncate">{event.title}</div>
-                        {event.demo && <span className="badge badge-yellow text-[10px]">DEMO</span>}
                         <div className="text-[11px] font-mono text-muted whitespace-nowrap">{timeAgo(event.at)}</div>
                       </div>
                       <div className="text-xs text-muted mt-1 line-clamp-2">{event.message}</div>

@@ -33,6 +33,7 @@ create table if not exists public.calendar_projects (
   tracked_wallet_count integer,
   first_seen_at timestamptz default now(),
   last_seen_at timestamptz default now(),
+  last_synced_at timestamptz,
   created_by uuid,
   created_by_wallet text,
   approved_by uuid,
@@ -51,8 +52,22 @@ create table if not exists public.calendar_project_signals (
   created_at timestamptz default now()
 );
 
+create table if not exists public.calendar_sync_runs (
+  id uuid primary key default gen_random_uuid(),
+  source text not null,
+  status text not null default 'healthy',
+  imported_count integer default 0,
+  updated_count integer default 0,
+  error_count integer default 0,
+  errors jsonb default '[]'::jsonb,
+  started_at timestamptz default now(),
+  finished_at timestamptz,
+  created_at timestamptz default now()
+);
+
 alter table public.calendar_projects enable row level security;
 alter table public.calendar_project_signals enable row level security;
+alter table public.calendar_sync_runs enable row level security;
 
 drop policy if exists "calendar approved readable" on public.calendar_projects;
 create policy "calendar approved readable"
@@ -72,6 +87,7 @@ to authenticated
 with check (
   auth.uid() = created_by
   and status = 'pending_review'
+  and source = 'community'
 );
 
 drop policy if exists "calendar admins manage projects" on public.calendar_projects;
@@ -105,11 +121,25 @@ for all
 using (public.is_admin())
 with check (public.is_admin());
 
+drop policy if exists "calendar sync readable" on public.calendar_sync_runs;
+create policy "calendar sync readable"
+on public.calendar_sync_runs
+for select
+using (true);
+
+drop policy if exists "calendar admins manage sync" on public.calendar_sync_runs;
+create policy "calendar admins manage sync"
+on public.calendar_sync_runs
+for all
+using (public.is_admin())
+with check (public.is_admin());
+
 create index if not exists calendar_projects_status_idx on public.calendar_projects(status);
 create index if not exists calendar_projects_chain_idx on public.calendar_projects(chain);
 create index if not exists calendar_projects_mint_date_idx on public.calendar_projects(mint_date);
 create index if not exists calendar_projects_scores_idx on public.calendar_projects(hype_score, hidden_gem_score, whale_interest_score);
 create index if not exists calendar_project_signals_project_idx on public.calendar_project_signals(project_id);
+create index if not exists calendar_sync_runs_source_idx on public.calendar_sync_runs(source, created_at desc);
 
 alter table if exists public.wl_projects
   add column if not exists calendar_project_id uuid references public.calendar_projects(id) on delete set null;

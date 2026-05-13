@@ -6,7 +6,7 @@ import {
 } from 'lucide-react'
 import toast from 'react-hot-toast'
 import { useAccount } from 'wagmi'
-import { supabase, directInsert } from '../lib/supabase'
+import { supabase, directInsert, getAuthToken } from '../lib/supabase'
 import { useAuthStore } from '../store'
 import { useSubscription } from '../hooks/useSubscription'
 import { friendlyError } from '../lib/errors'
@@ -24,105 +24,6 @@ const CHAINS = [
   { value: 'eth', label: 'Ethereum', chainId: 1 },
   { value: 'base', label: 'Base', chainId: 8453 },
   { value: 'bnb', label: 'BNB Chain', chainId: 56 },
-]
-
-const DEMO_PROJECTS = [
-  {
-    id: 'demo-trending',
-    demo: true,
-    name: 'Demo: Skyline Genesis',
-    image_url: null,
-    chain: 'base',
-    chain_id: 8453,
-    contract_address: '0x706daf3b6312852a2cba0f62ab7aea4f57ee941f',
-    mint_url: 'https://opensea.io',
-    mint_date: new Date(Date.now() + 42 * 60 * 1000).toISOString(),
-    mint_price: '0.04 ETH',
-    mint_type: 'public',
-    status: 'approved',
-    source: 'Demo',
-    source_confidence: 'high',
-    risk_score: 24,
-    hype_score: 82,
-    whale_interest_score: 68,
-    hidden_gem_score: 41,
-    tracked_wallet_count: 4,
-    mint_count: 19,
-    source_url: 'https://opensea.io',
-    description: 'Admin demo preview showing how a high-activity mint appears before real calendar data is approved.',
-  },
-  {
-    id: 'demo-hidden',
-    demo: true,
-    name: 'Demo: Low Noise Labs',
-    image_url: null,
-    chain: 'eth',
-    chain_id: 1,
-    contract_address: '0x8b6df4b78f8d1fd2a80f0dd31ad44aa28c0f1091',
-    mint_url: 'https://zora.co',
-    mint_date: new Date(Date.now() + 5 * 60 * 60 * 1000).toISOString(),
-    mint_price: 'TBA',
-    mint_type: 'allowlist',
-    status: 'approved',
-    source: 'Demo',
-    source_confidence: 'medium',
-    risk_score: 38,
-    hype_score: 28,
-    whale_interest_score: 43,
-    hidden_gem_score: 77,
-    tracked_wallet_count: 2,
-    mint_count: 3,
-    source_url: 'https://zora.co',
-    description: 'Admin demo preview for early-signal projects that are not crowded yet.',
-  },
-  {
-    id: 'demo-live',
-    demo: true,
-    name: 'Demo: Minting Now Sample',
-    image_url: null,
-    chain: 'base',
-    chain_id: 8453,
-    contract_address: '0x91c5fb2fe2c9d437ab12a8de4f0ca77423dbe1a4',
-    mint_url: 'https://opensea.io',
-    mint_date: new Date(Date.now() - 8 * 60 * 1000).toISOString(),
-    mint_price: '0.02 ETH',
-    mint_type: 'public',
-    status: 'live',
-    source: 'Demo',
-    source_confidence: 'high',
-    risk_score: 31,
-    hype_score: 56,
-    whale_interest_score: 52,
-    hidden_gem_score: 34,
-    tracked_wallet_count: 3,
-    mint_count: 42,
-    source_url: 'https://opensea.io',
-    description: 'Admin demo preview for live launches. Demo cards never arm automint.',
-  },
-  {
-    id: 'demo-contract',
-    demo: true,
-    name: 'Demo: Fresh Creator Contract',
-    image_url: null,
-    chain: 'eth',
-    chain_id: 1,
-    contract_address: '0x4cd00e4f7d1ad9a2118ac26d43fc2ef9200a8d51',
-    mint_url: '',
-    mint_date: null,
-    mint_price: 'Unknown',
-    mint_type: 'unknown',
-    status: 'pending_review',
-    source: 'Demo',
-    source_confidence: 'low',
-    risk_score: 58,
-    hype_score: 12,
-    whale_interest_score: 17,
-    hidden_gem_score: 49,
-    tracked_wallet_count: 1,
-    mint_count: 0,
-    source_url: '',
-    description: 'Admin demo preview for newly discovered contracts that need review before users track them.',
-  },
 ]
 
 function normalizeChain(chain) {
@@ -186,6 +87,18 @@ function sourceLabel(source) {
   return source.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase())
 }
 
+function timeAgo(value) {
+  if (!value) return 'never'
+  const diff = Date.now() - new Date(value).getTime()
+  if (!Number.isFinite(diff)) return 'unknown'
+  const mins = Math.max(0, Math.floor(diff / 60000))
+  if (mins < 1) return 'just now'
+  if (mins < 60) return `${mins}m ago`
+  const hours = Math.floor(mins / 60)
+  if (hours < 24) return `${hours}h ago`
+  return `${Math.floor(hours / 24)}d ago`
+}
+
 export default function CalendarPage() {
   const { user } = useAuthStore()
   const { address, isConnected } = useAccount()
@@ -195,6 +108,8 @@ export default function CalendarPage() {
   const [projects, setProjects] = useState([])
   const [loading, setLoading] = useState(true)
   const [schemaMissing, setSchemaMissing] = useState(false)
+  const [status, setStatus] = useState(null)
+  const [syncing, setSyncing] = useState(false)
   const [submitOpen, setSubmitOpen] = useState(false)
   const [submitting, setSubmitting] = useState(false)
   const [selectedProject, setSelectedProject] = useState(null)
@@ -246,9 +161,18 @@ export default function CalendarPage() {
     }
   }, [isAdmin])
 
+  const fetchStatus = useCallback(async () => {
+    try {
+      const res = await fetch('/api/calendar/status')
+      const data = await res.json()
+      if (res.ok) setStatus(data)
+    } catch {}
+  }, [])
+
   useEffect(() => {
     fetchProjects()
-  }, [fetchProjects])
+    fetchStatus()
+  }, [fetchProjects, fetchStatus])
 
   useEffect(() => {
     const refreshOnResume = () => fetchProjects()
@@ -257,8 +181,7 @@ export default function CalendarPage() {
   }, [fetchProjects])
 
   const visibleProjects = useMemo(() => {
-    const baseProjects = projects.length ? projects : (isAdmin ? DEMO_PROJECTS : [])
-    return baseProjects
+    return projects
       .filter(project => tabFilter(project, activeTab))
       .filter(project => chain === 'all' || normalizeChain(project.chain) === chain)
       .filter(project => {
@@ -269,7 +192,31 @@ export default function CalendarPage() {
           .some(value => String(value).toLowerCase().includes(needle))
       })
       .sort((a, b) => scoreFor(b, activeTab) - scoreFor(a, activeTab))
-  }, [activeTab, chain, isAdmin, projects, query])
+  }, [activeTab, chain, projects, query])
+
+  const runSync = async () => {
+    setSyncing(true)
+    try {
+      const token = await getAuthToken()
+      const res = await fetch('/api/calendar/sync', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
+        body: JSON.stringify({ limit: 12 }),
+      })
+      const data = await res.json()
+      if (!res.ok) throw new Error(data.error || 'Calendar sync failed')
+      toast.success(`Calendar sync complete: ${data.totalImported || 0} imported, ${data.totalUpdated || 0} updated.`)
+      fetchProjects()
+      fetchStatus()
+    } catch (error) {
+      toast.error(friendlyError(error, 'Calendar sync could not run.'))
+    } finally {
+      setSyncing(false)
+    }
+  }
 
   const resetForm = () => setForm({
     name: '',
@@ -301,7 +248,6 @@ export default function CalendarPage() {
       const chainValue = normalizeChain(form.chain)
       const row = {
         name: form.name.trim(),
-        slug: form.name.trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, ''),
         image_url: form.image_url.trim() || null,
         description: form.notes.trim() || null,
         chain: chainValue,
@@ -312,27 +258,22 @@ export default function CalendarPage() {
         x_url: form.x_url.trim() || null,
         discord_url: form.discord_url.trim() || null,
         mint_date: form.mint_date ? new Date(form.mint_date).toISOString() : null,
-        mint_date_source: form.mint_date ? 'community_submission' : null,
-        mint_date_confidence: form.mint_date ? 'manual' : 'low',
-        mint_time_confirmed: Boolean(form.mint_date),
         mint_price: form.mint_price.trim() || null,
         mint_type: form.mint_type || 'unknown',
-        status: isAdmin ? 'approved' : 'pending_review',
-        source: isAdmin ? 'admin' : 'community',
         source_url: form.mint_url.trim() || form.website_url.trim() || form.x_url.trim() || null,
-        source_confidence: form.mint_date ? 'medium' : 'low',
-        risk_score: form.contract_address ? 45 : 60,
-        hype_score: 0,
-        whale_interest_score: 0,
-        hidden_gem_score: form.contract_address ? 35 : 20,
-        created_by: user?.id || null,
         created_by_wallet: address?.toLowerCase() || null,
-        approved_by: isAdmin ? user?.id || null : null,
-        approved_at: isAdmin ? new Date().toISOString() : null,
-        first_seen_at: new Date().toISOString(),
-        last_seen_at: new Date().toISOString(),
       }
-      await directInsert('calendar_projects', row)
+      const token = await getAuthToken()
+      const res = await fetch('/api/calendar/submit', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
+        body: JSON.stringify(row),
+      })
+      const data = await res.json()
+      if (!res.ok) throw new Error(data.error || 'Could not submit calendar project')
       toast.success(isAdmin ? 'Calendar project added.' : 'Project submitted for review.')
       resetForm()
       setSubmitOpen(false)
@@ -345,16 +286,19 @@ export default function CalendarPage() {
   }
 
   const updateStatus = async (project, status) => {
-    if (!isAdmin || project.demo) return
+    if (!isAdmin) return
     try {
-      const payload = {
-        status,
-        approved_by: status === 'approved' || status === 'live' ? user?.id || null : project.approved_by,
-        approved_at: status === 'approved' || status === 'live' ? new Date().toISOString() : project.approved_at,
-        updated_at: new Date().toISOString(),
-      }
-      const { error } = await supabase.from('calendar_projects').update(payload).eq('id', project.id)
-      if (error) throw error
+      const token = await getAuthToken()
+      const res = await fetch('/api/calendar/moderate', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
+        body: JSON.stringify({ projectId: project.id, status }),
+      })
+      const data = await res.json()
+      if (!res.ok) throw new Error(data.error || 'Could not update project status')
       toast.success(`Project marked ${status}.`)
       fetchProjects()
     } catch (error) {
@@ -363,10 +307,6 @@ export default function CalendarPage() {
   }
 
   const addToMintGuard = async (project) => {
-    if (project.demo) {
-      toast('Demo project preview only. Add a real approved project to MintGuard.')
-      return
-    }
     if (!user?.id) {
       toast.error('Sign in again before adding to MintGuard.')
       return
@@ -422,14 +362,30 @@ export default function CalendarPage() {
           </p>
           {schemaMissing && (
             <p className="text-xs text-accent3 mt-2">
-              Calendar database table is not installed yet. Admin demo previews are available until the SQL migration is applied.
+              Calendar database table is not installed yet. Apply the Calendar SQL migration, then run sync.
             </p>
           )}
         </div>
-        <button onClick={() => setSubmitOpen(true)} className="btn-primary flex items-center justify-center gap-2">
-          <Plus size={15} />
-          Submit Project
-        </button>
+        <div className="flex flex-col sm:flex-row gap-2">
+          {isAdmin && (
+            <button onClick={runSync} disabled={syncing} className="btn-ghost flex items-center justify-center gap-2">
+              {syncing ? <Loader size={15} className="animate-spin" /> : <Radar size={15} />}
+              {syncing ? 'Syncing...' : 'Run Sync Now'}
+            </button>
+          )}
+          <button onClick={() => setSubmitOpen(true)} className="btn-primary flex items-center justify-center gap-2">
+            <Plus size={15} />
+            Submit Project
+          </button>
+        </div>
+      </div>
+
+      <div className="grid grid-cols-2 lg:grid-cols-5 gap-3 mb-5">
+        <Metric label="Last Synced" value={timeAgo(status?.lastSync)} />
+        <Metric label="Projects" value={status?.projectCount ?? projects.length} />
+        <Metric label="Upcoming" value={status?.upcomingCount ?? 0} tone="text-accent3" />
+        <Metric label="Live" value={status?.liveCount ?? 0} tone="text-green" />
+        <Metric label="Pending" value={isAdmin ? (status?.pendingCount ?? 0) : '-'} tone="text-muted" />
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-4 gap-3 mb-5">
@@ -487,9 +443,12 @@ export default function CalendarPage() {
           <Sparkles size={32} className="text-muted mb-3" />
           <h2 className="text-base font-bold">No approved calendar projects yet</h2>
           <p className="text-sm text-muted mt-2 max-w-md">
-            Submit a mint page, contract, or official project link. Admin-reviewed projects appear here after approval.
+            No real sourced projects were found for this tab yet. Submit an official project link or run a calendar sync.
           </p>
-          <button onClick={() => setSubmitOpen(true)} className="btn-ghost mt-4 text-xs">Submit first project</button>
+          <div className="flex flex-col sm:flex-row gap-2 mt-4">
+            {isAdmin && <button onClick={runSync} disabled={syncing} className="btn-primary text-xs">{syncing ? 'Syncing...' : 'Run Sync Now'}</button>}
+            <button onClick={() => setSubmitOpen(true)} className="btn-ghost text-xs">Submit Project</button>
+          </div>
         </div>
       ) : (
         <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
@@ -552,7 +511,6 @@ function ProjectCard({ project, tab, isAdmin, onOpen, onAdd, onStatus }) {
         </div>
         <div className="flex-1 min-w-0">
           <div className="flex flex-wrap items-center gap-2 mb-1">
-            {project.demo && <span className="badge badge-yellow">Demo</span>}
             {live && <span className="badge badge-green animate-pulse-slow">LIVE NOW</span>}
             <span className="badge badge-cyan">{normalizeChain(project.chain).toUpperCase()}</span>
             <span className={`badge ${confidenceClass(project.source_confidence || project.mint_date_confidence)}`}>
@@ -597,7 +555,7 @@ function ProjectCard({ project, tab, isAdmin, onOpen, onAdd, onStatus }) {
         )}
       </div>
 
-      {isAdmin && !project.demo && (
+      {isAdmin && (
         <div className="flex gap-2 mt-3">
           <button onClick={() => onStatus('approved')} className="btn-ghost text-xs flex-1">Approve</button>
           <button onClick={() => onStatus('live')} className="btn-ghost text-xs flex-1">Mark Live</button>
@@ -698,7 +656,6 @@ function DetailDrawer({ project, isAdmin, onClose, onAdd, onStatus }) {
         <div className="flex items-start justify-between gap-4 mb-5">
           <div>
             <div className="flex flex-wrap items-center gap-2 mb-2">
-              {project.demo && <span className="badge badge-yellow">Demo</span>}
               <span className="badge badge-cyan">{normalizeChain(project.chain).toUpperCase()}</span>
               <span className={`badge ${confidenceClass(project.source_confidence || project.mint_date_confidence)}`}>Confidence {(project.source_confidence || 'low').toUpperCase()}</span>
             </div>
@@ -729,7 +686,7 @@ function DetailDrawer({ project, isAdmin, onClose, onAdd, onStatus }) {
           <button onClick={onAdd} className="btn-primary flex-1">Add to MintGuard</button>
           {project.source_url && <a className="btn-ghost flex-1 text-center" href={project.source_url} target="_blank" rel="noreferrer">Open Source</a>}
         </div>
-        {isAdmin && !project.demo && (
+        {isAdmin && (
           <div className="flex gap-2 mt-3">
             <button onClick={() => onStatus('approved')} className="btn-ghost text-xs flex-1">Approve</button>
             <button onClick={() => onStatus('rejected')} className="btn-danger text-xs flex-1">Reject</button>

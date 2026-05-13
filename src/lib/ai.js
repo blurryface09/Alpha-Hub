@@ -91,7 +91,7 @@ Specific positives only: wallet age, diversified activity, verified marketplace 
 Pick one: Safe to monitor / Track but do not auto-copy / Avoid automint without manual review / High-confidence smart wallet candidate. Add one reason.
 
 **CONFIDENCE**
-High / Medium / Low with reason. Mention data source: on-chain transaction sample from ${chain.name}, last updated now.
+High / Medium / Low with reason. Mention data source: on-chain transaction data from ${chain.name}, last updated now.
 
 No vague DYOR filler. Max 450 words.`
 

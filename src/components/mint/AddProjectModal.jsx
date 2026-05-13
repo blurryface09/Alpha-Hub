@@ -63,7 +63,7 @@ export default function AddProjectModal({ onAdd, onClose }) {
     try {
       const token = await getAuthToken()
       if (!token) throw new Error('Sign in again before scanning')
-      const res = await fetch('/api/mint-time/detect', {
+      const res = await fetch('/api/calendar/mint-time', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',

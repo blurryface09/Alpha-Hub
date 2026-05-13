@@ -66,7 +66,6 @@ export default function ActivityFeed({ activity, onCopyMint }) {
                       ? a.wallet_label
                       : a.wallet_address?.slice(0, 8) + '...' + a.wallet_address?.slice(-4)}
                   </span>
-                  {a.demo && <span className="badge badge-yellow text-[10px]">DEMO</span>}
                   {isMint && <span className="badge badge-green text-[10px]">MINT</span>}
                   {isLarge && !isMint && <span className="badge badge-cyan text-[10px]">LARGE</span>}
                   <span className={`badge text-[10px] ${a.chain === 'eth' ? 'badge-purple' : 'badge-cyan'}`}>

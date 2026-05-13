@@ -148,7 +148,7 @@ export default function AlphaPage() {
         {error && <p className="text-accent2 text-sm mt-2">⚠ {error}</p>}
       </div>
 
-      {plan === 'admin' && !walletData && !contractData && !loading && (
+      {import.meta.env.DEV && plan === 'admin' && !walletData && !contractData && !loading && (
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-3 mb-4">
           {[
             { title: 'Wallet intelligence', body: 'Paste a wallet to classify behavior, risk, failed txs, and copy-trading suitability.' },
@@ -156,7 +156,7 @@ export default function AlphaPage() {
             { title: 'Confidence labels', body: 'Reports include data source, last updated, confidence level, and why confidence is limited.' },
           ].map((item) => (
             <div key={item.title} className="card border-accent/10 bg-accent/5">
-              <div className="section-label">Admin demo preview</div>
+              <div className="section-label">Local preview</div>
               <div className="text-sm font-semibold">{item.title}</div>
               <p className="text-xs text-muted mt-2">{item.body}</p>
             </div>
@@ -273,7 +273,7 @@ export default function AlphaPage() {
             <div className="flex items-center justify-between mb-3">
               <div>
                 <div className="section-label mb-0">Forensic AI Analysis</div>
-                <p className="text-[11px] text-muted mt-1">Source: on-chain sample · Last updated now · Confidence shown in report</p>
+                <p className="text-[11px] text-muted mt-1">Source: on-chain data · Last updated now · Confidence shown in report</p>
               </div>
               {(aiAnalysis || aiLoading) && (
                 <button
