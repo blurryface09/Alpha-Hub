@@ -94,12 +94,17 @@ export async function directInsert(table, data) {
   const row = Array.isArray(result) ? result[0] : result
   if (row) return row
 
-  const { data: rows, error } = await supabase
+  let query = supabase
     .from(table)
     .select('*')
     .order('created_at', { ascending: false })
     .limit(1)
-    .single()
+
+  if (data?.user_id) query = query.eq('user_id', data.user_id)
+  if (data?.wallet_address) query = query.eq('wallet_address', data.wallet_address)
+  if (data?.tx_hash) query = query.eq('tx_hash', data.tx_hash)
+
+  const { data: rows, error } = await query.maybeSingle()
   if (rows && !error) return rows
 
   return { ...data, id: crypto.randomUUID(), created_at: new Date().toISOString() }

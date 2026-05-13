@@ -107,14 +107,9 @@ export default function MintGuardPage() {
         .eq('user_id', user.id)
         .order('mint_date', { ascending: true, nullsFirst: false })
       if (error) { console.error('fetchProjects error:', error); return }
-      // Never overwrite existing projects with an empty result — could be a transient
-      // auth token refresh causing RLS to block the query momentarily.
-      if (data && data.length > 0) {
+      if (Array.isArray(data)) {
         const updated = await autoUpdateStatus(data)
         setProjects(updated)
-      } else if (data && data.length === 0) {
-        // Only clear if we genuinely have nothing on first load
-        setProjects(prev => prev.length === 0 ? [] : prev)
       }
     } catch(e) {
       console.error('fetchProjects catch:', e)
@@ -128,6 +123,9 @@ export default function MintGuardPage() {
   const lastVisibilityRefresh = React.useRef(0)
 
   useEffect(() => {
+    setProjects([])
+    setLoading(true)
+    initialLoad.current = false
     if (!initialLoad.current) {
       initialLoad.current = true
       fetchProjects(true) // show spinner on first load
