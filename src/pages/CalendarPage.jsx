@@ -142,6 +142,34 @@ async function copyShare(project) {
   }
 }
 
+function ratingStorageKey(projectId) {
+  return `alphahub:calendar-rating:${projectId}`
+}
+
+function readLocalRating(projectId) {
+  if (typeof window === 'undefined') return null
+  const value = Number(window.localStorage.getItem(ratingStorageKey(projectId)))
+  return Number.isFinite(value) && value >= 1 && value <= 5 ? value : null
+}
+
+function writeLocalRating(projectId, rating) {
+  if (typeof window === 'undefined') return
+  window.localStorage.setItem(ratingStorageKey(projectId), String(rating))
+}
+
+function mergeLocalRatings(projects) {
+  return (projects || []).map(project => {
+    const localRating = readLocalRating(project.id)
+    if (!localRating) return project
+    return {
+      ...project,
+      rating_avg: project.rating_avg || localRating,
+      rating_count: Math.max(1, Number(project.rating_count || 0)),
+      viewer_rating: localRating,
+    }
+  })
+}
+
 function timeAgo(value) {
   if (!value) return 'never'
   const diff = Date.now() - new Date(value).getTime()
@@ -213,7 +241,7 @@ export default function CalendarPage() {
         throw error
       }
       setSchemaMissing(false)
-      setProjects(data || [])
+      setProjects(mergeLocalRatings(data || []))
     } catch (error) {
       toast.error(friendlyError(error, 'Calendar could not refresh.'))
       setProjects([])
@@ -392,11 +420,8 @@ export default function CalendarPage() {
       toast.error('Sign in again before adding to MintGuard.')
       return
     }
-    if (!mintGuardEligible(project)) {
-      toast.error('This project needs real metadata before it can be added to MintGuard.')
-      return
-    }
-    toast.loading('Adding to MintGuard...', { id: 'calendar-add' })
+    const reviewMode = !mintGuardEligible(project)
+    toast.loading(reviewMode ? 'Adding as a review-only MintGuard project...' : 'Adding to MintGuard...', { id: 'calendar-add' })
     try {
       const token = await getAuthToken()
       const res = await fetch('/api/calendar/add-to-mintguard', {
@@ -409,7 +434,7 @@ export default function CalendarPage() {
       })
       const data = await res.json().catch(() => ({}))
       if (!res.ok || data?.ok === false) throw new Error(data.error || 'Could not add this project to MintGuard')
-      toast.success('Added to MintGuard in Confirm Mode.', { id: 'calendar-add' })
+      toast.success(reviewMode ? 'Added to MintGuard. Confirm details before Auto Beta.' : 'Added to MintGuard in Confirm Mode.', { id: 'calendar-add' })
     } catch (error) {
       toast.error(friendlyError(error, 'Could not add this project to MintGuard.'), { id: 'calendar-add' })
     }
@@ -433,11 +458,13 @@ export default function CalendarPage() {
       })
       const data = await res.json().catch(() => ({}))
       if (!res.ok || data?.ok === false) throw new Error(data.error || 'Could not save rating')
+      writeLocalRating(project.id, rating)
       setProjects(prev => prev.map(item => item.id === project.id
         ? {
             ...item,
             rating_avg: data.ratingAvg ?? rating,
             rating_count: data.ratingCount ?? Math.max(1, Number(item.rating_count || 0)),
+            viewer_rating: rating,
           }
         : item))
       setSelectedProject(prev => prev?.id === project.id
@@ -445,11 +472,29 @@ export default function CalendarPage() {
             ...prev,
             rating_avg: data.ratingAvg ?? rating,
             rating_count: data.ratingCount ?? Math.max(1, Number(prev.rating_count || 0)),
+            viewer_rating: rating,
           }
         : prev)
       toast.success(data.localOnly ? 'Rating saved with fallback storage.' : 'Rating saved.')
     } catch (error) {
-      toast.error(friendlyError(error, 'Could not save rating.'))
+      writeLocalRating(project.id, rating)
+      setProjects(prev => prev.map(item => item.id === project.id
+        ? {
+            ...item,
+            rating_avg: item.rating_avg || rating,
+            rating_count: Math.max(1, Number(item.rating_count || 0)),
+            viewer_rating: rating,
+          }
+        : item))
+      setSelectedProject(prev => prev?.id === project.id
+        ? {
+            ...prev,
+            rating_avg: prev.rating_avg || rating,
+            rating_count: Math.max(1, Number(prev.rating_count || 0)),
+            viewer_rating: rating,
+          }
+        : prev)
+      toast.success('Rating saved on this device.')
     } finally {
       setRatingBusy(null)
     }
@@ -640,10 +685,9 @@ export default function CalendarPage() {
 
 function ProjectCard({ project, tab, isAdmin, onOpen, onAdd, onStatus, onRate, onShare, ratingBusy }) {
   const live = isLive(project)
-  const eligible = mintGuardEligible(project)
   const launchReady = isLaunchReadyCalendarProject(project)
   const quality = Number(project.quality_score || calendarQualityScore(project))
-  const rating = Number(project.rating_avg || 0)
+  const rating = Number(project.viewer_rating || project.rating_avg || 0)
   const ratingCount = Number(project.rating_count || 0)
   const rankValue = tab === 'hidden-gems'
     ? project.hidden_gem_score || 0
@@ -704,6 +748,9 @@ function ProjectCard({ project, tab, isAdmin, onOpen, onAdd, onStatus, onRate, o
 
       <div className="flex flex-col sm:flex-row gap-2 mt-4">
         <button onClick={onOpen} className="btn-primary flex-1">View Details</button>
+        <button onClick={onAdd} className="btn-ghost flex-1">
+          Add to My Mints
+        </button>
         <button onClick={onShare} className="btn-ghost flex-1 flex items-center justify-center gap-2">
           <Share2 size={14} />
           Share
@@ -717,14 +764,6 @@ function ProjectCard({ project, tab, isAdmin, onOpen, onAdd, onStatus, onRate, o
 
       {isAdmin && (
         <div className="flex gap-2 mt-3">
-          <button
-            onClick={onAdd}
-            disabled={!eligible}
-            className={`btn-ghost text-xs flex-1 ${eligible ? '' : 'opacity-60 cursor-not-allowed'}`}
-            title={eligible ? 'Add this sourced project to MintGuard' : 'Needs real metadata before MintGuard'}
-          >
-            Track
-          </button>
           <button onClick={() => onStatus('approved')} className="btn-ghost text-xs flex-1">Approve</button>
           <button onClick={() => onStatus('live')} className="btn-ghost text-xs flex-1">Mark Live</button>
           <button onClick={() => onStatus('hidden')} className="btn-danger text-xs flex-1">Hide</button>
@@ -868,11 +907,10 @@ function Field({ label, value, onChange, placeholder = '', required = false }) {
 }
 
 function DetailDrawer({ project, isAdmin, onClose, onAdd, onStatus, onRate, onShare, ratingBusy }) {
-  const eligible = mintGuardEligible(project)
   const launchReady = isLaunchReadyCalendarProject(project)
   const needsReview = !launchReady || (project.source_confidence || project.mint_date_confidence || 'low') === 'low'
   const quality = Number(project.quality_score || calendarQualityScore(project))
-  const rating = Number(project.rating_avg || 0)
+  const rating = Number(project.viewer_rating || project.rating_avg || 0)
   const ratingCount = Number(project.rating_count || 0)
   return (
     <div className="fixed inset-0 z-50 bg-black/70 flex justify-end" onClick={event => event.target === event.currentTarget && onClose()}>
@@ -914,7 +952,7 @@ function DetailDrawer({ project, isAdmin, onClose, onAdd, onStatus, onRate, onSh
         <div className="space-y-3 text-sm">
           {needsReview && (
             <div className="rounded-lg border border-accent3/30 bg-accent3/10 p-3 text-sm text-accent3">
-              This project needs review. Alpha Hub found activity, but official project metadata is limited. Add an official link or wait for Alchemy/OpenSea enrichment before using MintGuard.
+              This project needs review. Alpha Hub found activity, but official project metadata is limited. You can save it to My Mints, but confirm official links before Auto Beta.
             </div>
           )}
           <Info label="Mint time" value={formatTime(project)} />
@@ -935,19 +973,13 @@ function DetailDrawer({ project, isAdmin, onClose, onAdd, onStatus, onRate, onSh
         </div>
 
         <div className="flex flex-col sm:flex-row gap-2 mt-6">
+          <button onClick={onAdd} className="btn-ghost flex-1">
+            Add to My Mints
+          </button>
           <button onClick={onShare} className="btn-primary flex-1 flex items-center justify-center gap-2">
             <Share2 size={14} />
             Copy Share Link
           </button>
-          {isAdmin && (
-            <button
-              onClick={onAdd}
-              disabled={!eligible}
-              className={`flex-1 ${eligible ? 'btn-ghost' : 'btn-ghost opacity-60 cursor-not-allowed'}`}
-            >
-              {eligible ? 'Track in My Mints' : 'Needs Metadata'}
-            </button>
-          )}
           {project.source_url && <a className="btn-ghost flex-1 text-center" href={project.source_url} target="_blank" rel="noreferrer">Open Source</a>}
         </div>
         {isAdmin && (
