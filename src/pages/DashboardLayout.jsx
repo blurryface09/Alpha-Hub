@@ -3,7 +3,7 @@ import { Outlet, NavLink, useNavigate } from 'react-router-dom'
 import { motion, AnimatePresence } from 'framer-motion'
 import {
   LayoutDashboard, Shield, Radar, Search,
-  Settings, Bell, LogOut, Menu, X, Zap
+  Settings, Bell, LogOut, Menu, X, Zap, CalendarDays
 } from 'lucide-react'
 import { useAccount } from 'wagmi'
 import { useAuthStore, useNotificationStore } from '../store'
@@ -16,6 +16,7 @@ const ADMIN_WALLET = import.meta.env.VITE_ADMIN_WALLET?.toLowerCase()
 
 const NAV_ITEMS = [
   { path: '/',           label: 'Overview',    icon: LayoutDashboard, exact: true },
+  { path: '/calendar',   label: 'Calendar',    icon: CalendarDays,     badge: 'LIVE' },
   { path: '/mintguard',  label: 'MintGuard',   icon: Shield,          badge: 'NEW' },
   { path: '/whaleradar', label: 'WhaleRadar',  icon: Radar },
   { path: '/alpha',      label: 'Alpha Tools', icon: Search },

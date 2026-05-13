@@ -10,6 +10,7 @@ import { useAuthStore } from './store'
 import AuthPage from './pages/AuthPage'
 import DashboardLayout from './pages/DashboardLayout'
 import OverviewPage from './pages/OverviewPage'
+import CalendarPage from './pages/CalendarPage'
 import MintGuardPage from './pages/MintGuardPage'
 import WhaleRadarPage from './pages/WhaleRadarPage'
 import AlphaPage from './pages/AlphaPage'
@@ -102,6 +103,7 @@ function App() {
           <Route path="/upgrade" element={<Paywall showBack />} />
           <Route path="/" element={<ProtectedRoute><DashboardLayout /></ProtectedRoute>}>
             <Route index element={<OverviewPage />} />
+            <Route path="calendar" element={<PremiumRoute requiredPlan="free" featureName="Alpha Hub Calendar"><CalendarPage /></PremiumRoute>} />
             <Route path="mintguard" element={<PremiumRoute requiredPlan="free" featureName="MintGuard"><MintGuardPage /></PremiumRoute>} />
             <Route path="whaleradar" element={<PremiumRoute requiredPlan="free" featureName="WhaleRadar"><WhaleRadarPage /></PremiumRoute>} />
             <Route path="alpha" element={<PremiumRoute requiredPlan="pro" featureName="Wallet forensics"><AlphaPage /></PremiumRoute>} />
