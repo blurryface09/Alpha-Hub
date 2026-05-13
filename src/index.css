@@ -8,9 +8,13 @@
   body {
     @apply bg-bg text-text font-sans antialiased;
     background-image:
-      linear-gradient(rgba(0,212,255,0.02) 1px, transparent 1px),
-      linear-gradient(90deg, rgba(0,212,255,0.02) 1px, transparent 1px);
-    background-size: 48px 48px;
+      radial-gradient(circle at 12% 8%, rgba(167,139,250,0.16), transparent 28rem),
+      radial-gradient(circle at 82% 14%, rgba(100,215,255,0.12), transparent 24rem),
+      radial-gradient(circle at 52% 96%, rgba(255,111,145,0.10), transparent 24rem),
+      linear-gradient(rgba(100,215,255,0.025) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(167,139,250,0.022) 1px, transparent 1px);
+    background-size: auto, auto, auto, 64px 64px, 64px 64px;
+    min-height: 100vh;
   }
 
   ::-webkit-scrollbar { width: 4px; height: 4px; }
@@ -23,43 +27,43 @@
 
 @layer components {
   .card {
-    @apply bg-surface border border-border rounded-xl p-5;
+    @apply bg-surface/80 border border-border rounded-2xl p-5 shadow-xl shadow-black/10 backdrop-blur;
   }
 
   .card-sm {
-    @apply bg-surface border border-border rounded-lg p-4;
+    @apply bg-surface/75 border border-border rounded-2xl p-4 shadow-lg shadow-black/10 backdrop-blur;
   }
 
   .btn-primary {
-    @apply bg-accent text-bg font-semibold text-sm px-4 py-2.5 rounded-lg
-           hover:bg-cyan-300 active:scale-95 transition-all duration-150
+    @apply bg-accent text-bg font-semibold text-sm px-4 py-2.5 rounded-xl
+           hover:bg-white active:scale-95 transition-all duration-150 shadow-lg shadow-accent/10
            disabled:opacity-40 disabled:cursor-not-allowed;
   }
 
   .btn-ghost {
-    @apply border border-border2 text-muted text-sm px-4 py-2.5 rounded-lg
-           hover:border-accent hover:text-accent transition-all duration-150
-           bg-transparent;
+    @apply border border-border2 text-muted text-sm px-4 py-2.5 rounded-xl
+           hover:border-accent hover:text-text hover:bg-surface2/80 transition-all duration-150
+           bg-surface/30;
   }
 
   .btn-danger {
-    @apply border border-red-900 text-accent2 text-sm px-3 py-1.5 rounded-lg
-           hover:bg-red-950 transition-all duration-150 bg-transparent;
+    @apply border border-accent2/30 text-accent2 text-sm px-3 py-1.5 rounded-xl
+           hover:bg-accent2/10 transition-all duration-150 bg-transparent;
   }
 
   .input {
-    @apply bg-surface2 border border-border2 rounded-lg px-3 py-2.5 text-sm text-text
-           focus:outline-none focus:border-accent placeholder-muted transition-colors
+    @apply bg-surface2/90 border border-border2 rounded-xl px-3 py-2.5 text-sm text-text
+           focus:outline-none focus:border-accent focus:ring-2 focus:ring-accent/10 placeholder-muted transition-colors
            w-full;
   }
 
   .select {
-    @apply bg-surface2 border border-border2 rounded-lg px-3 py-2.5 text-sm text-text
-           focus:outline-none focus:border-accent transition-colors w-full;
+    @apply bg-surface2/90 border border-border2 rounded-xl px-3 py-2.5 text-sm text-text
+           focus:outline-none focus:border-accent focus:ring-2 focus:ring-accent/10 transition-colors w-full;
   }
 
   .badge {
-    @apply font-mono text-xs px-2 py-0.5 rounded font-medium;
+    @apply font-mono text-xs px-2.5 py-1 rounded-full font-medium;
   }
 
   .badge-green { @apply bg-green/10 text-green border border-green/20; }
@@ -69,7 +73,7 @@
   .badge-purple { @apply bg-purple/10 text-purple border border-purple/20; }
 
   .metric-card {
-    @apply bg-surface2 border border-border rounded-lg p-3.5;
+    @apply bg-surface2/75 border border-border rounded-2xl p-4 shadow-lg shadow-black/10;
   }
 
   .section-label {
@@ -85,13 +89,13 @@
   }
 
   .nav-link {
-    @apply flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium
+    @apply flex items-center gap-3 px-3 py-3 rounded-2xl text-sm font-medium
            text-muted hover:text-text hover:bg-surface2 transition-all duration-150;
   }
 
   .nav-link.active {
-    @apply text-accent border border-accent/20;
-    background: rgba(0, 212, 255, 0.08);
+    @apply text-text border border-accent/25 shadow-lg shadow-accent/5;
+    background: linear-gradient(135deg, rgba(100,215,255,0.15), rgba(167,139,250,0.12));
   }
 
   .spinner {
@@ -117,7 +121,39 @@
   .chain-eth  { @apply text-[#627EEA]; }
   .chain-base { @apply text-[#0052FF]; }
 
-  .glow-accent { box-shadow: 0 0 20px rgba(0,212,255,0.15); }
-  .glow-green  { box-shadow: 0 0 20px rgba(0,200,150,0.15); }
-  .glow-red    { box-shadow: 0 0 20px rgba(255,61,90,0.15); }
+  .glow-accent { box-shadow: 0 0 28px rgba(100,215,255,0.18); }
+  .glow-green  { box-shadow: 0 0 28px rgba(72,240,179,0.18); }
+  .glow-red    { box-shadow: 0 0 28px rgba(255,111,145,0.18); }
+
+  .hero-panel {
+    @apply relative overflow-hidden rounded-3xl border border-border bg-surface/80 p-5 sm:p-7 shadow-2xl shadow-black/20 backdrop-blur;
+  }
+
+  .hero-panel::before {
+    content: '';
+    position: absolute;
+    inset: -1px;
+    pointer-events: none;
+    background:
+      radial-gradient(circle at 10% 0%, rgba(100,215,255,0.18), transparent 20rem),
+      radial-gradient(circle at 100% 20%, rgba(255,111,145,0.14), transparent 18rem);
+  }
+
+  .hero-content { @apply relative z-10; }
+
+  .filter-chip {
+    @apply inline-flex items-center gap-2 rounded-full border border-border2 bg-surface2/70 px-3 py-2 text-xs text-muted transition-all hover:border-accent hover:text-text;
+  }
+
+  .filter-chip.active {
+    @apply border-accent text-bg bg-accent;
+  }
+
+  .empty-state {
+    @apply rounded-3xl border border-dashed border-border2 bg-surface/50 p-8 text-center;
+  }
+
+  .mascot-orb {
+    @apply flex h-11 w-11 items-center justify-center rounded-2xl border border-accent/25 bg-accent/10 text-lg shadow-lg shadow-accent/10;
+  }
 }

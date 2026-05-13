@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react'
 import { motion } from 'framer-motion'
 import { useNavigate } from 'react-router-dom'
-import { Radar, Plus, Trash2, Eye } from 'lucide-react'
+import { Radar, Plus, Trash2, Eye, Sparkles } from 'lucide-react'
 import toast from 'react-hot-toast'
 import { supabase } from '../lib/supabase'
 import { useAuthStore, useWhaleStore } from '../store'
@@ -187,31 +187,38 @@ export default function WhaleRadarPage() {
   return (
     <div>
       {/* Header */}
-      <div className="flex items-start justify-between mb-6">
-        <div>
-          <div className="flex items-center gap-2 mb-1">
-            <Radar size={20} className="text-accent" />
-            <h1 className="text-xl font-bold">WhaleRadar</h1>
-            <div className="w-1.5 h-1.5 rounded-full bg-green animate-pulse" />
+      <div className="hero-panel mb-6">
+        <div className="hero-content flex flex-col gap-5 lg:flex-row lg:items-center lg:justify-between">
+          <div className="max-w-2xl">
+            <div className="flex flex-wrap items-center gap-2 mb-3">
+              <span className="mascot-orb"><Radar size={17} /></span>
+              <span className="badge badge-green">Live watchlist</span>
+              <span className="badge badge-cyan">Copy Mint</span>
+            </div>
+            <h1 className="text-3xl font-black tracking-tight">Follow wallets that move first.</h1>
+            <p className="mt-2 text-sm text-muted leading-relaxed">
+              Track smart wallets, deployers, and mint hunters. When a watched wallet mints, Alpha Hub can turn that signal into a personal MintGuard project.
+            </p>
+            <div className="mt-4 flex flex-wrap gap-2">
+              <span className="filter-chip active">{watchlist.length} watching</span>
+              <span className="filter-chip">{mintActivity.length} mint signals</span>
+              <span className="filter-chip">
+                {plan === 'admin'
+                  ? 'Admin Mode'
+                  : plan === 'free' || !plan
+                  ? `${watchlist.length}/${limits.trackedWallets} free slots`
+                  : `${watchlist.length}/${limits.trackedWallets} ${plan?.toUpperCase()} slots`}
+              </span>
+            </div>
           </div>
-          <p className="text-sm text-muted">
-            {hasAccess('pro') ? 'Server-monitored smart money alerts with realtime updates.' : 'Limited wallet tracking. Upgrade for realtime whale alerts.'}
-            <span className="ml-2 text-xs text-accent">
-              {plan === 'admin'
-                ? 'Admin Mode'
-                : plan === 'free' || !plan
-                ? `Free limit: ${watchlist.length}/${limits.trackedWallets}`
-                : `${plan?.toUpperCase()} limit: ${watchlist.length}/${limits.trackedWallets}`}
-            </span>
-          </p>
+          <button onClick={() => {
+            if (!user) { toast.error('Please sign out and back in, then try again.'); return }
+            setShowAddModal(true)
+          }} className="btn-primary flex items-center justify-center gap-2">
+            <Plus size={15} />
+            Track Wallet
+          </button>
         </div>
-        <button onClick={() => {
-          if (!user) { toast.error('Not authenticated - please sign out and back in'); return }
-          setShowAddModal(true)
-        }} className="btn-primary flex items-center gap-2">
-          <Plus size={15} />
-          Watch Wallet
-        </button>
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 mb-6">
@@ -239,10 +246,10 @@ export default function WhaleRadarPage() {
               <div className="flex justify-center py-8"><div className="spinner" /></div>
             ) : watchlist.length === 0 ? (
               <div className="text-center py-8">
-                <Eye size={28} className="text-muted mx-auto mb-2" />
+                <Sparkles size={28} className="text-accent mx-auto mb-2" />
                 <p className="text-text text-sm font-semibold">Track smart wallets before the timeline reacts</p>
                 <p className="text-xs text-muted mt-1">Add whales, deployers, or sniper wallets. Alpha Hub monitors mint activity and alerts you when something moves.</p>
-                <button onClick={() => setShowAddModal(true)} className="btn-ghost mt-4 text-xs">Watch Wallet</button>
+                <button onClick={() => setShowAddModal(true)} className="btn-ghost mt-4 text-xs">Track a wallet</button>
               </div>
             ) : (
               <div className="space-y-2">
@@ -307,7 +314,7 @@ export default function WhaleRadarPage() {
             {!realActivity.length && (
               <div className="mb-3 flex flex-col gap-2 rounded-lg border border-accent/20 bg-accent/8 p-3 sm:flex-row sm:items-center sm:justify-between">
                 <div>
-                  <div className="text-sm font-semibold text-text">Copy Mint turns whale activity into MintGuard projects.</div>
+                  <div className="text-sm font-semibold text-text">Copy Mint turns wallet movement into a tracked launch.</div>
                   <div className="text-xs text-muted">Real whale mint activity will appear here once tracked wallets move.</div>
                 </div>
                 <button

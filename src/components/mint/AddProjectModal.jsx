@@ -212,7 +212,7 @@ export default function AddProjectModal({ onAdd, onClose }) {
           <div className="flex items-center gap-2">
             <Shield size={16} className="text-accent" />
             <h2 className="font-bold text-sm">
-              {step === 1 ? 'Add WL Project' : 'Project Details'}
+              {step === 1 ? 'Add Alpha' : 'Review and save'}
             </h2>
           </div>
           <button onClick={onClose} className="text-muted hover:text-text"><X size={16} /></button>
@@ -222,11 +222,15 @@ export default function AddProjectModal({ onAdd, onClose }) {
           {step === 1 && (
             <div className="space-y-4">
               <div>
-                <label className="text-xs font-mono text-muted uppercase tracking-wider block mb-1.5">Project URL</label>
+                <div className="rounded-2xl border border-accent/20 bg-accent/8 p-3 mb-4">
+                  <div className="text-sm font-bold text-text">What are you tracking?</div>
+                  <p className="text-xs text-muted mt-1">Start with a mint page, OpenSea link, X post, or official site. You can edit every detail before saving.</p>
+                </div>
+                <label className="text-xs font-mono text-muted uppercase tracking-wider block mb-1.5">Official link</label>
                 <div className="flex gap-2">
                   <input
                     className="input flex-1"
-                    placeholder="https://twitter.com/project or opensea.io/..."
+                    placeholder="OpenSea, Zora, mint page, website, or X link"
                     value={url}
                     onChange={e => setUrl(e.target.value)}
                     onKeyDown={e => e.key === 'Enter' && handleUrlSubmit()}
@@ -238,14 +242,14 @@ export default function AddProjectModal({ onAdd, onClose }) {
                     className="btn-primary px-4 flex items-center gap-2"
                   >
                     {loading ? <Loader size={14} className="animate-spin" /> : <Sparkles size={14} />}
-                    {loading ? '' : 'Next'}
+                    {loading ? '' : 'Scan'}
                   </button>
                 </div>
-                <p className="text-xs text-muted mt-2">AI will extract project name & chain from any URL</p>
+                <p className="text-xs text-muted mt-2">Alpha Hub will try to detect name, chain, contract, and launch time. You always confirm before saving.</p>
               </div>
               <div className="flex justify-end">
                 <button onClick={() => setStep(2)} className="text-xs text-accent hover:underline">
-                  Skip — enter manually
+                  Enter details yourself
                 </button>
               </div>
             </div>
@@ -254,8 +258,8 @@ export default function AddProjectModal({ onAdd, onClose }) {
           {step === 2 && (
             <div className="space-y-4">
               <div>
-                <label className="text-xs font-mono text-muted uppercase tracking-wider block mb-1.5">Project Name *</label>
-                <input className="input" placeholder="e.g. CryptoSkulls" value={form.name} onChange={e => set('name', e.target.value)} autoFocus />
+                <label className="text-xs font-mono text-muted uppercase tracking-wider block mb-1.5">Project name *</label>
+                <input className="input" placeholder="e.g. Slimez, BasePaint, Farcaster drop..." value={form.name} onChange={e => set('name', e.target.value)} autoFocus />
               </div>
 
               <div className="grid grid-cols-2 gap-3">
@@ -268,7 +272,7 @@ export default function AddProjectModal({ onAdd, onClose }) {
                   </select>
                 </div>
                 <div>
-                  <label className="text-xs font-mono text-muted uppercase tracking-wider block mb-1.5">WL Type</label>
+                  <label className="text-xs font-mono text-muted uppercase tracking-wider block mb-1.5">Access type</label>
                   <select className="input" value={form.wl_type} onChange={e => set('wl_type', e.target.value)}>
                     {WL_TYPES.map(t => <option key={t.val} value={t.val}>{t.label} — {t.desc}</option>)}
                   </select>
@@ -289,7 +293,7 @@ export default function AddProjectModal({ onAdd, onClose }) {
               <div className="flex gap-2">
                 <button onClick={detectMintTime} disabled={detectingTime} className="btn-ghost flex items-center gap-2 text-xs">
                   {detectingTime ? <Loader size={13} className="animate-spin" /> : <Sparkles size={13} />}
-                  {detectingTime ? 'Scanning...' : 'Detect mint time'}
+                  {detectingTime ? 'Scanning...' : 'Find launch time'}
                 </button>
                 {detectedTime && (
                   <button onClick={confirmDetectedTime} className="btn-primary text-xs">
@@ -299,7 +303,7 @@ export default function AddProjectModal({ onAdd, onClose }) {
               </div>
               {detectedTime && (
                 <div className="rounded-lg border border-accent/20 bg-accent/8 p-3 text-xs text-muted space-y-1">
-                  <div className="font-mono text-accent">Detected mint time</div>
+                  <div className="font-mono text-accent">Possible launch time found</div>
                   <div>Local: {new Date(detectedTime.mintDate).toLocaleString()}</div>
                   <div>UTC: {new Date(detectedTime.mintDate).toISOString()}</div>
                   <div>Source: {detectedTime.source}</div>
@@ -311,24 +315,24 @@ export default function AddProjectModal({ onAdd, onClose }) {
               )}
               {form.mint_date && (
                 <div className="rounded-lg border border-accent/20 bg-accent/8 p-3 text-xs text-muted">
-                  <div className="font-mono text-accent mb-1">Mint time confirmed</div>
+                  <div className="font-mono text-accent mb-1">Launch time confirmed</div>
                   <div>Local: {new Date(form.mint_date).toLocaleString()}</div>
                   <div>UTC: {new Date(form.mint_date).toISOString()}</div>
                 </div>
               )}
 
               <div>
-                <label className="text-xs font-mono text-muted uppercase tracking-wider block mb-1.5">Mint Price</label>
+                <label className="text-xs font-mono text-muted uppercase tracking-wider block mb-1.5">Price</label>
                 <input className="input" placeholder="e.g. 0.08" value={form.mint_price} onChange={e => set('mint_price', e.target.value)} />
               </div>
 
               <div>
-                <label className="text-xs font-mono text-muted uppercase tracking-wider block mb-1.5">Contract Address <span className="text-muted2">(optional — needed for auto-mint)</span></label>
+                <label className="text-xs font-mono text-muted uppercase tracking-wider block mb-1.5">Contract address <span className="text-muted2">(optional, needed for mint assist)</span></label>
                 <input className="input font-mono text-xs" placeholder="0x..." value={form.contract_address} onChange={e => set('contract_address', e.target.value)} />
               </div>
 
               <div>
-                <label className="text-xs font-mono text-muted uppercase tracking-wider block mb-1.5">Mint Mode</label>
+                <label className="text-xs font-mono text-muted uppercase tracking-wider block mb-1.5">How should Alpha Hub help?</label>
                 <div className="grid grid-cols-2 gap-2">
                   {MINT_MODES.map(m => (
                     <button
@@ -363,11 +367,11 @@ export default function AddProjectModal({ onAdd, onClose }) {
 
               <div className="grid grid-cols-3 gap-3">
                 <div>
-                  <label className="text-xs font-mono text-muted uppercase tracking-wider block mb-1.5">Max Mint</label>
+                  <label className="text-xs font-mono text-muted uppercase tracking-wider block mb-1.5">Quantity</label>
                   <input className="input" type="number" min="1" max="20" value={form.max_mint} onChange={e => set('max_mint', parseInt(e.target.value) || 1)} />
                 </div>
                 <div className="col-span-2">
-                  <label className="text-xs font-mono text-muted uppercase tracking-wider block mb-1.5">Gas Limit</label>
+                  <label className="text-xs font-mono text-muted uppercase tracking-wider block mb-1.5">Gas safety limit</label>
                   <input className="input" type="number" value={form.gas_limit} onChange={e => set('gas_limit', parseInt(e.target.value) || 200000)} />
                 </div>
               </div>
@@ -390,13 +394,13 @@ export default function AddProjectModal({ onAdd, onClose }) {
 
               <div>
                 <label className="text-xs font-mono text-muted uppercase tracking-wider block mb-1.5">Notes</label>
-                <textarea className="input resize-none" rows={2} placeholder="Discord role, contract notes, anything useful..." value={form.notes} onChange={e => set('notes', e.target.value)} />
+                <textarea className="input resize-none" rows={2} placeholder="Role needed, mint rules, official source, or anything you want to remember..." value={form.notes} onChange={e => set('notes', e.target.value)} />
               </div>
 
               <div className="flex gap-2 pt-1">
                 <button onClick={() => setStep(1)} className="btn-ghost flex-1">Back</button>
                 <button onClick={handleSubmit} disabled={loading} className="btn-primary flex-1 flex items-center justify-center gap-2">
-                  {loading ? <><Loader size={14} className="animate-spin" /> Saving...</> : <><Shield size={14} /> Add to MintGuard</>}
+                  {loading ? <><Loader size={14} className="animate-spin" /> Saving...</> : <><Shield size={14} /> Save to My Mints</>}
                 </button>
               </div>
             </div>

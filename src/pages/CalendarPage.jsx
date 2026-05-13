@@ -442,38 +442,41 @@ export default function CalendarPage() {
 
   return (
     <div>
-      <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between mb-6">
-        <div>
-          <div className="flex items-center gap-2 mb-1">
-            <CalendarDays size={20} className="text-accent" />
-            <h1 className="text-xl font-bold">Alpha Hub Calendar</h1>
-            <span className="badge badge-cyan">Discovery</span>
-          </div>
-          <p className="text-sm text-muted max-w-2xl">
-            Discover trending mints, hidden gems, live launches, and new contracts before they hit the timeline.
-          </p>
-          {schemaMissing && (
-            <p className="text-xs text-accent3 mt-2">
-              Calendar database table is not installed yet. Apply the Calendar SQL migration, then run sync.
+      <div className="hero-panel mb-6">
+        <div className="hero-content flex flex-col gap-5 lg:flex-row lg:items-center lg:justify-between">
+          <div className="max-w-3xl">
+            <div className="flex flex-wrap items-center gap-2 mb-3">
+              <span className="mascot-orb"><CalendarDays size={17} /></span>
+              <span className="badge badge-cyan">Discover</span>
+              <span className="badge badge-purple">Community alpha</span>
+            </div>
+            <h1 className="text-3xl font-black tracking-tight">Find launches worth tracking.</h1>
+            <p className="mt-2 text-sm text-muted leading-relaxed">
+              Browse sourced mints, community submissions, live opportunities, and new contracts. Low-confidence entries stay marked for review until official details are clear.
             </p>
-          )}
-        </div>
-        <div className="flex flex-col sm:flex-row gap-2">
-          {isAdmin && (
-            <button onClick={runSync} disabled={syncing || calendarNotReady} className="btn-ghost flex items-center justify-center gap-2">
-              {syncing ? <Loader size={15} className="animate-spin" /> : <Radar size={15} />}
-              {calendarNotReady ? 'Install Calendar SQL First' : syncing ? 'Syncing...' : 'Run Sync Now'}
+            {schemaMissing && (
+              <p className="text-xs text-accent3 mt-3">
+                Calendar storage needs the SQL migration before live sync can save projects.
+              </p>
+            )}
+          </div>
+          <div className="flex flex-col sm:flex-row gap-2">
+            {isAdmin && (
+              <button onClick={runSync} disabled={syncing || calendarNotReady} className="btn-ghost flex items-center justify-center gap-2">
+                {syncing ? <Loader size={15} className="animate-spin" /> : <Radar size={15} />}
+                {calendarNotReady ? 'Install Calendar SQL First' : syncing ? 'Syncing...' : 'Run Sync'}
+              </button>
+            )}
+            {isAdmin && (
+              <button onClick={cleanupCalendar} disabled={calendarNotReady} className="btn-ghost flex items-center justify-center gap-2">
+                Clean low-quality rows
+              </button>
+            )}
+            <button onClick={() => setSubmitOpen(true)} className="btn-primary flex items-center justify-center gap-2">
+              <Plus size={15} />
+              Add Alpha
             </button>
-          )}
-          {isAdmin && (
-            <button onClick={cleanupCalendar} disabled={calendarNotReady} className="btn-ghost flex items-center justify-center gap-2">
-              Clean Bad Rows
-            </button>
-          )}
-          <button onClick={() => setSubmitOpen(true)} className="btn-primary flex items-center justify-center gap-2">
-            <Plus size={15} />
-            Submit Project
-          </button>
+          </div>
         </div>
       </div>
 
@@ -512,7 +515,7 @@ export default function CalendarPage() {
               className="input pl-9"
               value={query}
               onChange={event => setQuery(event.target.value)}
-              placeholder="Search project, contract, source..."
+              placeholder="Search projects, share codes, links..."
             />
           </div>
           <div className="flex gap-1 overflow-x-auto">
@@ -710,8 +713,8 @@ function SubmitModal({ form, setForm, submitting, onClose, onSubmit, isAdmin }) 
     <div className="fixed inset-0 z-50 bg-black/80 flex items-center justify-center p-4" onClick={event => event.target === event.currentTarget && onClose()}>
       <div className="bg-surface border border-border rounded-xl w-full max-w-2xl max-h-[90vh] overflow-y-auto">
         <div className="p-5 border-b border-border">
-          <h2 className="font-bold">{isAdmin ? 'Add Calendar Project' : 'Submit Calendar Project'}</h2>
-          <p className="text-xs text-muted mt-1">Add official links, mint time, and contract details. Times are stored in UTC.</p>
+          <h2 className="font-bold">{isAdmin ? 'Add Alpha' : 'Share Alpha'}</h2>
+          <p className="text-xs text-muted mt-1">Add the basics first. Official links and clear timing help the community trust it.</p>
         </div>
         <div className="p-5 space-y-4">
           <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
@@ -764,13 +767,13 @@ function SubmitModal({ form, setForm, submitting, onClose, onSubmit, isAdmin }) 
             <textarea className="input min-h-24" value={form.notes} onChange={event => update('notes', event.target.value)} placeholder="Why this should be tracked, official source, community notes..." />
           </label>
           <div className="rounded-lg border border-accent/20 bg-accent/8 p-3 text-xs text-muted">
-            User submissions enter review. Admin submissions go live immediately. Low-confidence projects must be confirmed before Auto Beta.
+            User submissions enter review. Admin submissions can go live immediately. Low-confidence projects must be confirmed before Auto Beta.
           </div>
         </div>
         <div className="p-5 border-t border-border flex flex-col sm:flex-row gap-2">
           <button disabled={submitting} onClick={onSubmit} className="btn-primary flex-1 flex items-center justify-center gap-2">
             {submitting ? <Loader size={14} className="animate-spin" /> : <Plus size={14} />}
-            {isAdmin ? 'Add Project' : 'Submit for Review'}
+            {isAdmin ? 'Publish Alpha' : 'Submit for Review'}
           </button>
           <button onClick={onClose} className="btn-ghost">Cancel</button>
         </div>

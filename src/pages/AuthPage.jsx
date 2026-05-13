@@ -5,7 +5,7 @@ import toast from 'react-hot-toast'
 import { useAccount, useDisconnect, useSignMessage } from 'wagmi'
 import { useAuthStore } from '../store'
 import ConnectWallet from '../components/shared/ConnectWallet'
-import { Loader2, ShieldCheck, Repeat2 } from 'lucide-react'
+import { Loader2, ShieldCheck, Repeat2, Sparkles, Radar, Wand2 } from 'lucide-react'
 
 export default function AuthPage() {
   const { user, signingIn, signInWithWallet } = useAuthStore()
@@ -36,25 +36,57 @@ export default function AuthPage() {
     }
   }
 
+  const onboarding = [
+    { icon: Sparkles, title: 'Discover live Web3 opportunities before they move.', body: 'Browse mints, claims, launches, wallets, and community alpha in one friendly hub.' },
+    { icon: Radar, title: 'Track what matters without reading every chart.', body: 'Save projects, follow wallets, get alerts, and keep your next actions clear.' },
+    { icon: Wand2, title: 'Start simple. Go advanced when ready.', body: 'Beginner-friendly cards first. Contract details and automation stay tucked away until you need them.' },
+  ]
+
   return (
     <div className="min-h-screen bg-bg flex items-center justify-center p-4">
       <motion.div
         initial={{ opacity: 0, y: 20 }}
         animate={{ opacity: 1, y: 0 }}
-        className="w-full max-w-sm"
+        className="w-full max-w-5xl grid gap-6 lg:grid-cols-[1fr_390px] items-center"
       >
-        {/* Logo */}
-        <div className="text-center mb-8">
-          <div className="font-mono text-xl font-bold text-accent tracking-widest mb-1">
-            ALPHA/HUB
+        <section className="hero-panel">
+          <div className="hero-content">
+            <div className="inline-flex items-center gap-2 rounded-full border border-accent/25 bg-accent/10 px-3 py-1 text-xs text-accent font-mono mb-5">
+              <span className="dot-live" />
+              Friendly Web3 alpha guide
+            </div>
+            <h1 className="text-3xl sm:text-5xl font-black leading-tight max-w-2xl">
+              Find alpha, track mints, and move with more confidence.
+            </h1>
+            <p className="text-muted mt-4 max-w-2xl">
+              Alpha Hub turns noisy wallet activity, NFT launches, and community tips into simple cards you can understand and act on.
+            </p>
+            <div className="grid gap-3 mt-7">
+              {onboarding.map((item) => (
+                <div key={item.title} className="flex gap-3 rounded-2xl border border-border bg-surface2/60 p-4">
+                  <div className="h-10 w-10 rounded-2xl bg-accent/10 border border-accent/20 flex items-center justify-center text-accent shrink-0">
+                    <item.icon size={18} />
+                  </div>
+                  <div>
+                    <div className="text-sm font-semibold">{item.title}</div>
+                    <div className="text-xs text-muted mt-1">{item.body}</div>
+                  </div>
+                </div>
+              ))}
+            </div>
           </div>
-          <p className="text-muted text-sm">On-chain intelligence platform</p>
-        </div>
+        </section>
 
         <div className="card space-y-5">
+          <div className="text-center mb-2">
+            <div className="font-mono text-xl font-bold text-accent tracking-widest mb-1">
+              ALPHA/HUB
+            </div>
+            <p className="text-muted text-sm">Connect only when you’re ready to save and track.</p>
+          </div>
           <div className="text-center space-y-1">
             <h2 className="text-base font-semibold text-text">Sign in with your wallet</h2>
-            <p className="text-xs text-muted">No email. No password. Your wallet is your identity.</p>
+            <p className="text-xs text-muted">Signing is free. It proves this wallet is yours.</p>
           </div>
 
           {/* Step 1 — connect wallet */}
@@ -124,12 +156,11 @@ export default function AuthPage() {
           </p>
         </div>
 
-        {/* Feature pills */}
-        <div className="flex flex-wrap gap-2 justify-center mt-6">
-          {['MintGuard', 'WhaleRadar', 'Rug Detector', 'Wallet Forensics'].map(f => (
-            <span key={f} className="badge badge-cyan text-xs">{f}</span>
-          ))}
-        </div>
+        <div className="flex flex-wrap gap-2 justify-center lg:col-span-2">
+            {['Live mints', 'Watchlists', 'Community alpha', 'AI checks'].map(f => (
+              <span key={f} className="badge badge-cyan text-xs">{f}</span>
+            ))}
+          </div>
       </motion.div>
     </div>
   )

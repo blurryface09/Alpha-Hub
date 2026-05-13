@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
-import { Plus, Shield } from 'lucide-react'
+import { Plus, Shield, Sparkles, Wand2 } from 'lucide-react'
 import toast from 'react-hot-toast'
 import { supabase, directInsert, directUpdate, getAuthToken } from '../lib/supabase'
 import { useMint } from '../hooks/useMint'
@@ -444,33 +444,41 @@ export default function MintGuardPage() {
   return (
     <div>
       {/* Header */}
-      <div className="flex items-start justify-between mb-6">
-        <div>
-          <div className="flex items-center gap-2 mb-1">
-            <Shield size={20} className="text-accent" />
-            <h1 className="text-xl font-bold">MintGuard</h1>
-            {liveCount > 0 && (
-              <span className="badge badge-green animate-pulse-slow">{liveCount} LIVE</span>
-            )}
+      <div className="hero-panel mb-6">
+        <div className="hero-content flex flex-col gap-5 lg:flex-row lg:items-center lg:justify-between">
+          <div className="max-w-2xl">
+            <div className="flex flex-wrap items-center gap-2 mb-3">
+              <span className="mascot-orb"><Shield size={17} /></span>
+              <span className="badge badge-cyan">My Mints</span>
+              {liveCount > 0 && (
+                <span className="badge badge-green animate-pulse-slow">{liveCount} live now</span>
+              )}
+            </div>
+            <h1 className="text-3xl font-black tracking-tight">Track launches without the chaos.</h1>
+            <p className="mt-2 text-sm text-muted leading-relaxed">
+              Save mints, confirm launch times, get alerts, and let Alpha Hub prepare the transaction. You stay in control with Confirm Mode by default.
+            </p>
+            <div className="mt-4 flex flex-wrap gap-2">
+              <span className="filter-chip active"><Wand2 size={13} /> Confirm Mode</span>
+              <span className="filter-chip">Auto Beta opt-in</span>
+              <span className="filter-chip">Spend limits</span>
+              <span className="filter-chip">
+                {plan === 'admin'
+                  ? 'Admin Mode'
+                  : plan === 'free' || !plan
+                  ? `${projects.length}/${limits.mintProjects} free tracks`
+                  : `${projects.length}/${limits.mintProjects} ${plan?.toUpperCase()} tracks`}
+              </span>
+            </div>
           </div>
-          <p className="text-sm text-muted">
-            Track your WL projects. Get alerted. Auto-mint when ready.
-            <span className="ml-2 text-xs text-accent">
-              {plan === 'admin'
-                ? `Admin Mode: personal projects ${projects.length}/${limits.mintProjects}`
-                : plan === 'free' || !plan
-                ? `Free limit: ${projects.length}/${limits.mintProjects}`
-                : `${plan?.toUpperCase()} limit: ${projects.length}/${limits.mintProjects}`}
-            </span>
-          </p>
+          <button onClick={() => {
+            if (!user) { toast.error('Please sign out and back in, then try again.'); return }
+            setShowAddModal(true)
+          }} className="btn-primary flex items-center justify-center gap-2">
+            <Plus size={15} />
+            Add Alpha
+          </button>
         </div>
-        <button onClick={() => {
-          if (!user) { toast.error('Not authenticated - please sign out and back in'); return }
-          setShowAddModal(true)
-        }} className="btn-primary flex items-center gap-2">
-          <Plus size={15} />
-          Add Project
-        </button>
       </div>
 
       {/* Stats */}
@@ -512,11 +520,12 @@ export default function MintGuardPage() {
           <div className="spinner" />
         </div>
       ) : filtered.length === 0 ? (
-        <div className="card flex flex-col items-center justify-center py-16 text-center">
-          <Shield size={32} className="text-muted mb-3" />
-          <p className="text-muted text-sm">No projects here yet</p>
+        <div className="empty-state">
+          <Sparkles size={32} className="text-accent mb-3" />
+          <h2 className="text-lg font-bold">No mints saved yet</h2>
+          <p className="text-muted text-sm mt-2 max-w-md">Add a mint link, contract, or project name. Alpha Hub will help detect timing and keep it in Confirm Mode until you decide otherwise.</p>
           <button onClick={() => setShowAddModal(true)} className="btn-ghost mt-4 text-xs">
-            + Add your first WL project
+            Add your first alpha
           </button>
         </div>
       ) : (

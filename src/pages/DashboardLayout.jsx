@@ -2,8 +2,8 @@ import React, { useEffect, useState } from 'react'
 import { Outlet, NavLink, useNavigate } from 'react-router-dom'
 import { motion, AnimatePresence } from 'framer-motion'
 import {
-  LayoutDashboard, Shield, Radar, Search,
-  Settings, Bell, LogOut, Menu, X, Zap, CalendarDays
+  Home, Shield, Radar, Search,
+  User, Bell, LogOut, Menu, X, Zap, Compass
 } from 'lucide-react'
 import { useAccount } from 'wagmi'
 import { useAuthStore, useNotificationStore } from '../store'
@@ -15,12 +15,12 @@ import NotificationPanel from '../components/shared/NotificationPanel'
 const ADMIN_WALLET = import.meta.env.VITE_ADMIN_WALLET?.toLowerCase()
 
 const NAV_ITEMS = [
-  { path: '/',           label: 'Overview',    icon: LayoutDashboard, exact: true },
-  { path: '/calendar',   label: 'Calendar',    icon: CalendarDays,     badge: 'LIVE' },
-  { path: '/mintguard',  label: 'MintGuard',   icon: Shield,          badge: 'NEW' },
-  { path: '/whaleradar', label: 'WhaleRadar',  icon: Radar },
-  { path: '/alpha',      label: 'Alpha Tools', icon: Search },
-  { path: '/settings',   label: 'Settings',    icon: Settings },
+  { path: '/',           label: 'Home',        icon: Home, exact: true },
+  { path: '/calendar',   label: 'Discover',    icon: Compass, badge: 'LIVE' },
+  { path: '/mintguard',  label: 'My Mints',    icon: Shield },
+  { path: '/whaleradar', label: 'Watchlist',   icon: Radar },
+  { path: '/alpha',      label: 'Tools',       icon: Search },
+  { path: '/settings',   label: 'Profile',     icon: User },
 ]
 
 export default function DashboardLayout() {
@@ -71,15 +71,18 @@ export default function DashboardLayout() {
 
       {/* Sidebar */}
       <motion.aside
-        className={`fixed top-0 left-0 h-full w-60 bg-surface border-r border-border z-30 flex flex-col
+        className={`fixed top-0 left-0 h-full w-64 bg-surface/80 backdrop-blur-xl border-r border-border z-30 flex flex-col
                     transform transition-transform duration-200 lg:translate-x-0 lg:static lg:flex
                     ${sidebarOpen ? 'translate-x-0' : '-translate-x-full'}`}
       >
         {/* Logo */}
         <div className="px-5 py-5 border-b border-border flex items-center justify-between">
-          <div>
-            <div className="font-mono text-base font-bold text-accent tracking-widest">ALPHA/HUB</div>
-            <div className="text-xs text-muted mt-0.5">On-Chain Intelligence</div>
+          <div className="flex items-center gap-3">
+            <div className="mascot-orb">✦</div>
+            <div>
+              <div className="font-mono text-base font-bold text-accent tracking-widest">ALPHA/HUB</div>
+              <div className="text-xs text-muted mt-0.5">Friendly Web3 radar</div>
+            </div>
           </div>
           <button className="lg:hidden text-muted" onClick={() => setSidebarOpen(false)}>
             <X size={16} />
@@ -87,9 +90,9 @@ export default function DashboardLayout() {
         </div>
 
         {/* Status indicator */}
-        <div className="mx-4 mt-3 mb-1 px-3 py-2 bg-surface2 rounded-lg border border-border flex items-center gap-2">
+        <div className="mx-4 mt-3 mb-1 px-3 py-2 bg-surface2/70 rounded-2xl border border-border flex items-center gap-2">
           <div className="dot-live" />
-          <span className="text-xs text-muted font-mono">ETH · BASE · LIVE</span>
+          <span className="text-xs text-muted font-mono">LIVE ALPHA SCAN</span>
         </div>
 
         {/* Nav */}
@@ -126,8 +129,8 @@ export default function DashboardLayout() {
 
         {/* User */}
         <div className="px-3 py-3 border-t border-border">
-          <div className="flex items-center gap-3 px-3 py-2.5 rounded-lg bg-surface2 mb-1">
-            <div className="w-7 h-7 rounded-full bg-accent/20 flex items-center justify-center text-accent text-xs font-bold">
+          <div className="flex items-center gap-3 px-3 py-2.5 rounded-2xl bg-surface2/80 mb-1 border border-border">
+            <div className="w-8 h-8 rounded-2xl bg-accent/20 flex items-center justify-center text-accent text-xs font-bold">
               {address ? address[2]?.toUpperCase() : '?'}
             </div>
             <div className="flex-1 min-w-0">
@@ -159,7 +162,7 @@ export default function DashboardLayout() {
       {/* Main content */}
       <div className="flex-1 flex flex-col min-w-0">
         {/* Top bar */}
-        <header className="sticky top-0 z-10 bg-surface/90 backdrop-blur border-b border-border px-4 py-3 flex items-center gap-3">
+        <header className="sticky top-0 z-10 bg-bg/72 backdrop-blur-xl border-b border-border px-4 py-3 flex items-center gap-3">
           <button
             className="lg:hidden text-muted hover:text-text"
             onClick={() => setSidebarOpen(true)}
@@ -167,7 +170,12 @@ export default function DashboardLayout() {
             <Menu size={20} />
           </button>
 
-          <div className="flex-1" />
+          <div className="flex-1 min-w-0">
+            <div className="hidden sm:flex items-center gap-2 text-xs text-muted">
+              <span className="dot-live" />
+              <span>Alpha guide is watching for fresh signals</span>
+            </div>
+          </div>
 
           <ConnectWallet />
 

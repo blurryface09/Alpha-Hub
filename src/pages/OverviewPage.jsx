@@ -6,6 +6,7 @@ import {
   AlertTriangle,
   Bell,
   Clock,
+  Compass,
   Radar,
   Send,
   Signal,
@@ -198,12 +199,10 @@ export default function OverviewPage() {
   }, [activity, notifications, projects])
 
   const summary = [
-    { label: 'Active Automints', value: stats.activeAutomints, icon: Zap, tone: 'text-green' },
-    { label: 'Active Alerts', value: stats.activeAlerts, icon: Bell, tone: stats.activeAlerts ? 'text-accent2' : 'text-muted' },
-    { label: 'Wallets Tracked', value: stats.walletsTracked, icon: Wallet, tone: 'text-accent' },
-    { label: 'Saved Projects', value: stats.totalProjects, icon: Clock, tone: 'text-accent3' },
-    { label: 'Telegram', value: stats.telegramConnected ? 'On' : 'Off', icon: Send, tone: stats.telegramConnected ? 'text-green' : 'text-muted' },
-    { label: 'Last Sync', value: timeAgo(stats.lastSync), icon: Signal, tone: 'text-accent' },
+    { label: 'Live alerts', value: stats.activeAlerts, icon: Bell, tone: stats.activeAlerts ? 'text-accent2' : 'text-muted', hint: 'Unread signals waiting for you' },
+    { label: 'Tracked mints', value: stats.totalProjects, icon: Clock, tone: 'text-accent3', hint: 'Projects saved to MintGuard' },
+    { label: 'Wallets watched', value: stats.walletsTracked, icon: Wallet, tone: 'text-accent', hint: 'Smart wallets on your radar' },
+    { label: 'Auto Beta', value: stats.activeAutomints ? 'Armed' : 'Off', icon: Zap, tone: stats.activeAutomints ? 'text-green' : 'text-muted', hint: 'Opt-in only' },
   ]
 
   const upcomingMints = projects.filter((p) => p.status === 'upcoming').length
@@ -234,37 +233,41 @@ export default function OverviewPage() {
       <motion.div
         initial={{ opacity: 0, y: 8 }}
         animate={{ opacity: 1, y: 0 }}
-        className="flex flex-col gap-3 md:flex-row md:items-end md:justify-between"
+        className="hero-panel"
       >
-        <div>
-          <div className="section-label mb-1">ALPHA HUB - PRIVATE BETA</div>
-          <h1 className="text-2xl font-bold mb-1">Command Center</h1>
-          <p className="text-sm text-muted">
-            Realtime wallet intelligence, mint automation, alerts, and monitor activity.
-          </p>
-        </div>
-        <div className="flex items-center gap-2 rounded-lg border border-border bg-surface2 px-3 py-2">
-          <div className="dot-live" />
-          <span className="text-xs font-mono text-muted">
-            LIVE SYNC ACTIVE
-          </span>
+        <div className="hero-content flex flex-col gap-5 lg:flex-row lg:items-end lg:justify-between">
+          <div>
+            <div className="inline-flex items-center gap-2 rounded-full border border-accent/25 bg-accent/10 px-3 py-1 text-xs text-accent font-mono mb-3">
+              <span className="dot-live" />
+              Today’s Alpha
+            </div>
+            <h1 className="text-3xl sm:text-4xl font-black mb-2">What should you watch next?</h1>
+            <p className="text-sm sm:text-base text-muted max-w-2xl">
+              Your friendly Web3 radar for live opportunities, wallet signals, upcoming mints, and community picks.
+            </p>
+          </div>
+          <div className="flex flex-col sm:flex-row gap-2">
+            <Link to="/calendar" className="btn-primary text-center">Discover Alpha</Link>
+            <Link to="/mintguard" className="btn-ghost text-center">Add Alpha</Link>
+          </div>
         </div>
       </motion.div>
 
-      <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-3">
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
         {summary.map((item, index) => (
           <motion.div
             key={item.label}
             initial={{ opacity: 0, y: 8 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ delay: index * 0.03 }}
-            className="metric-card min-h-[94px]"
+            className="metric-card min-h-[118px]"
           >
             <div className="flex items-center justify-between mb-3">
               <item.icon size={15} className={item.tone} />
             </div>
             <div className={`text-xl font-bold ${item.tone}`}>{loading ? '-' : item.value}</div>
             <div className="section-label mt-1 mb-0">{item.label}</div>
+            <div className="text-[11px] text-muted mt-2">{item.hint}</div>
           </motion.div>
         ))}
       </div>
@@ -273,22 +276,22 @@ export default function OverviewPage() {
         <section className="card min-h-[480px]">
           <div className="flex items-center justify-between mb-4">
             <div>
-              <div className="section-label mb-1">Main Live Feed</div>
-              <h2 className="text-base font-semibold">Operational intelligence stream</h2>
+              <div className="section-label mb-1">Live Signals</div>
+              <h2 className="text-base font-semibold">Fresh things worth checking</h2>
             </div>
-            <Link to="/whaleradar" className="btn-ghost text-xs py-2 px-3">
-              Open Radar
+            <Link to="/calendar" className="btn-ghost text-xs py-2 px-3">
+              Browse Discover
             </Link>
           </div>
 
           {liveFeed.length === 0 ? (
-            <div className="flex flex-col items-center justify-center py-20 text-center">
-              <Activity size={30} className="text-muted mb-3" />
-              <p className="text-sm text-text font-semibold">Start your intelligence stream</p>
-              <p className="text-xs text-muted2 mt-1">Track a wallet, add a mint, or connect Telegram to arm live alerts.</p>
+            <div className="empty-state flex flex-col items-center justify-center py-16">
+              <div className="mascot-orb mb-4">✧</div>
+              <p className="text-base text-text font-semibold">No alpha stream yet</p>
+              <p className="text-sm text-muted mt-2 max-w-md">Start by discovering a project, watching a wallet, or adding a mint you already care about.</p>
               <div className="flex gap-2 mt-4">
-                <Link to="/whaleradar" className="btn-primary text-xs">Watch Wallet</Link>
-                <Link to="/mintguard" className="btn-ghost text-xs">Add Mint</Link>
+                <Link to="/calendar" className="btn-primary text-xs">Discover</Link>
+                <Link to="/whaleradar" className="btn-ghost text-xs">Watch Wallet</Link>
               </div>
             </div>
           ) : (
@@ -317,9 +320,9 @@ export default function OverviewPage() {
 
         <aside className="space-y-4">
           <section className="card">
-            <div className="section-label">Monitor Stack</div>
+            <div className="section-label">Your Next Moves</div>
             <div className="space-y-3">
-              {userValueItems.map((item) => (
+              {userValueItems.slice(0, 5).map((item) => (
                 <div key={item.label} className="flex items-center gap-3">
                   <div className={`h-8 w-8 rounded-lg bg-surface2 border border-border flex items-center justify-center ${item.tone}`}>
                     <item.icon size={14} />
@@ -334,10 +337,10 @@ export default function OverviewPage() {
           </section>
 
           <section className="card">
-            <div className="section-label">Retention Signals</div>
+            <div className="section-label">Progress</div>
             <div className="space-y-3">
               <div className="flex items-center justify-between">
-                <span className="text-sm text-muted">Mints executed</span>
+                <span className="text-sm text-muted">Alpha tracked</span>
                 <span className="font-mono text-sm text-green">{stats.minted}</span>
               </div>
               <div className="flex items-center justify-between">
@@ -354,9 +357,9 @@ export default function OverviewPage() {
           <section className="card">
             <div className="section-label">Quick Actions</div>
             <div className="grid gap-2">
-              <Link to="/mintguard" className="btn-primary text-center">Open MintGuard</Link>
-              <Link to="/whaleradar" className="btn-ghost text-center">Track Wallets</Link>
-              <Link to="/settings" className="btn-ghost text-center">Configure Telegram</Link>
+              <Link to="/calendar" className="btn-primary text-center flex items-center justify-center gap-2"><Compass size={15} /> Find Alpha</Link>
+              <Link to="/mintguard" className="btn-ghost text-center">Add a Mint</Link>
+              <Link to="/settings" className="btn-ghost text-center">Set Alerts</Link>
             </div>
           </section>
         </aside>
