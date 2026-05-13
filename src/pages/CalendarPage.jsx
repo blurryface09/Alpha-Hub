@@ -87,6 +87,33 @@ function sourceLabel(source) {
   return source.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase())
 }
 
+function shortAddress(address) {
+  if (!address) return null
+  return `${address.slice(0, 6)}...${address.slice(-4)}`
+}
+
+function projectTitle(project) {
+  const name = String(project.name || '').trim()
+  if (name && !name.toLowerCase().startsWith('detected mint 0x')) return name
+  if (project.contract_address) return `NFT Contract ${shortAddress(project.contract_address)}`
+  return 'Untitled Mint Project'
+}
+
+function projectSummary(project) {
+  if (project.description) return project.description
+  if (project.source === 'onchain') {
+    return 'Live mint activity was detected onchain. Add official links or inspect details before tracking.'
+  }
+  return 'Sourced mint opportunity. Confirm official details before arming Auto Beta.'
+}
+
+function confidenceText(project) {
+  const confidence = project.source_confidence || project.mint_date_confidence || 'low'
+  if (confidence === 'high') return 'High'
+  if (confidence === 'medium') return 'Medium'
+  return 'Needs review'
+}
+
 function timeAgo(value) {
   if (!value) return 'never'
   const diff = Date.now() - new Date(value).getTime()
@@ -508,17 +535,18 @@ export default function CalendarPage() {
 
 function ProjectCard({ project, tab, isAdmin, onOpen, onAdd, onStatus }) {
   const live = isLive(project)
-  const rankLabel = tab === 'hidden-gems' ? 'Hidden Gem' : tab === 'new-contracts' ? 'Contract' : 'Hype'
   const rankValue = tab === 'hidden-gems'
     ? project.hidden_gem_score || 0
     : tab === 'new-contracts'
     ? project.source_confidence || 'review'
     : project.hype_score || 0
+  const risk = Number(project.risk_score || 0)
+  const needsReview = (project.source_confidence || project.mint_date_confidence || 'low') === 'low'
 
   return (
-    <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} className="card overflow-hidden">
+    <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} className="card overflow-hidden p-4">
       <div className="flex items-start gap-4">
-        <div className="w-16 h-16 rounded-lg bg-surface2 border border-border overflow-hidden flex items-center justify-center shrink-0">
+        <div className="w-14 h-14 rounded-lg bg-surface2 border border-border overflow-hidden flex items-center justify-center shrink-0">
           {project.image_url ? (
             <img src={project.image_url} alt="" className="w-full h-full object-cover" />
           ) : (
@@ -529,13 +557,11 @@ function ProjectCard({ project, tab, isAdmin, onOpen, onAdd, onStatus }) {
           <div className="flex flex-wrap items-center gap-2 mb-1">
             {live && <span className="badge badge-green animate-pulse-slow">LIVE NOW</span>}
             <span className="badge badge-cyan">{normalizeChain(project.chain).toUpperCase()}</span>
-            <span className={`badge ${confidenceClass(project.source_confidence || project.mint_date_confidence)}`}>
-              Confidence {(project.source_confidence || project.mint_date_confidence || 'low').toUpperCase()}
-            </span>
+            <span className={`badge ${confidenceClass(project.source_confidence || project.mint_date_confidence)}`}>{confidenceText(project)}</span>
             {project.status === 'pending_review' && <span className="badge badge-yellow">Needs Review</span>}
           </div>
-          <h2 className="font-bold truncate">{project.name}</h2>
-          <p className="text-xs text-muted mt-1 line-clamp-2">{project.description || 'Detected mint opportunity. Confirm official details before arming Auto Beta.'}</p>
+          <h2 className="font-bold truncate">{projectTitle(project)}</h2>
+          <p className="text-xs text-muted mt-1 line-clamp-2">{projectSummary(project)}</p>
         </div>
         <div className="text-right shrink-0">
           <div className={`font-mono font-bold ${live ? 'text-green' : 'text-accent3'}`}>{countdown(project)}</div>
@@ -543,27 +569,23 @@ function ProjectCard({ project, tab, isAdmin, onOpen, onAdd, onStatus }) {
         </div>
       </div>
 
-      <div className="grid grid-cols-3 gap-2 mt-4">
-        <Metric label={rankLabel} value={rankValue} />
-        <Metric label="Whale" value={project.whale_interest_score || 0} />
-        <Metric label="Risk" value={project.risk_score ?? 'Review'} tone={(project.risk_score || 0) > 60 ? 'text-accent2' : 'text-green'} />
+      <div className="mt-4 grid grid-cols-2 sm:grid-cols-4 gap-2 text-xs">
+        <Signal label={tab === 'hidden-gems' ? 'Gem score' : 'Hype'} value={rankValue} />
+        <Signal label="Mints" value={project.mint_count || 0} />
+        <Signal label="Risk" value={project.risk_score ?? 'Review'} tone={risk > 60 ? 'text-accent2' : 'text-green'} />
+        <Signal label="Source" value={sourceLabel(project.source)} />
       </div>
 
-      <div className="mt-4 rounded-lg bg-surface2 border border-border p-3">
-        <div className="flex flex-wrap items-center gap-2 text-xs text-muted">
-          <Clock size={13} />
-          <span>{formatTime(project)}</span>
-        </div>
-        <div className="flex flex-wrap gap-2 mt-2">
-          <span className="badge badge-purple">{sourceLabel(project.source)}</span>
-          <span className="badge bg-surface border border-border text-muted">{project.mint_type || 'unknown'}</span>
-          {!!project.tracked_wallet_count && <span className="badge badge-green">{project.tracked_wallet_count} tracked wallets</span>}
-        </div>
+      <div className="mt-3 flex flex-wrap items-center gap-2 text-xs text-muted">
+        <Clock size={13} />
+        <span>{formatTime(project)}</span>
+        {project.contract_address && <span className="font-mono text-accent">{shortAddress(project.contract_address)}</span>}
+        {needsReview && <span className="text-accent3">Verify official links before minting</span>}
       </div>
 
       <div className="flex flex-col sm:flex-row gap-2 mt-4">
         <button onClick={onAdd} className="btn-primary flex-1">Add to MintGuard</button>
-        <button onClick={onOpen} className="btn-ghost flex-1">View Details</button>
+        <button onClick={onOpen} className="btn-ghost flex-1">Details</button>
         {project.source_url && (
           <a href={project.source_url} target="_blank" rel="noreferrer" className="btn-ghost flex items-center justify-center gap-2">
             <ExternalLink size={13} />
@@ -579,6 +601,15 @@ function ProjectCard({ project, tab, isAdmin, onOpen, onAdd, onStatus }) {
         </div>
       )}
     </motion.div>
+  )
+}
+
+function Signal({ label, value, tone = 'text-accent' }) {
+  return (
+    <div className="rounded-lg border border-border bg-surface2 px-3 py-2 min-w-0">
+      <div className={`font-bold truncate ${tone}`}>{value}</div>
+      <div className="text-[10px] uppercase tracking-widest text-muted mt-0.5">{label}</div>
+    </div>
   )
 }
 
@@ -666,6 +697,7 @@ function Field({ label, value, onChange, placeholder = '', required = false }) {
 }
 
 function DetailDrawer({ project, isAdmin, onClose, onAdd, onStatus }) {
+  const needsReview = (project.source_confidence || project.mint_date_confidence || 'low') === 'low'
   return (
     <div className="fixed inset-0 z-50 bg-black/70 flex justify-end" onClick={event => event.target === event.currentTarget && onClose()}>
       <div className="w-full max-w-xl bg-surface border-l border-border h-full overflow-y-auto p-5">
@@ -675,8 +707,8 @@ function DetailDrawer({ project, isAdmin, onClose, onAdd, onStatus }) {
               <span className="badge badge-cyan">{normalizeChain(project.chain).toUpperCase()}</span>
               <span className={`badge ${confidenceClass(project.source_confidence || project.mint_date_confidence)}`}>Confidence {(project.source_confidence || 'low').toUpperCase()}</span>
             </div>
-            <h2 className="text-xl font-bold">{project.name}</h2>
-            <p className="text-sm text-muted mt-1">{project.description || 'Review project data before tracking or arming Auto Beta.'}</p>
+            <h2 className="text-xl font-bold">{projectTitle(project)}</h2>
+            <p className="text-sm text-muted mt-1">{projectSummary(project)}</p>
           </div>
           <button onClick={onClose} className="btn-ghost text-xs">Close</button>
         </div>
@@ -685,16 +717,27 @@ function DetailDrawer({ project, isAdmin, onClose, onAdd, onStatus }) {
           <Metric label="Countdown" value={countdown(project)} tone={isLive(project) ? 'text-green' : 'text-accent3'} />
           <Metric label="Risk" value={project.risk_score ?? 'Review'} tone={(project.risk_score || 0) > 60 ? 'text-accent2' : 'text-green'} />
           <Metric label="Whale Interest" value={project.whale_interest_score || 0} />
-          <Metric label="Hype" value={project.hype_score || 0} />
+          <Metric label="Mint Events" value={project.mint_count || 0} />
         </div>
 
         <div className="space-y-3 text-sm">
+          {needsReview && (
+            <div className="rounded-lg border border-accent3/30 bg-accent3/10 p-3 text-sm text-accent3">
+              This project needs review. Alpha Hub found onchain activity, but official project metadata is limited.
+            </div>
+          )}
           <Info label="Mint time" value={formatTime(project)} />
           <Info label="Mint price" value={project.mint_price || 'TBA'} />
           <Info label="Mint type" value={project.mint_type || 'unknown'} />
           <Info label="Contract" value={project.contract_address || 'Not detected yet'} mono />
           <Info label="Source" value={`${sourceLabel(project.source)} · ${project.source_confidence || 'low'} confidence`} />
-          <Info label="Why ranked?" value={`Tracked wallets: ${project.tracked_wallet_count || 0}. Mint count: ${project.mint_count || 0}. Hidden gem score: ${project.hidden_gem_score || 0}.`} />
+          <Info label="What Alpha Hub found" value={`Mint events: ${project.mint_count || 0}. Holders/supply signal: ${project.holder_count ?? 'unknown'}. Hidden gem score: ${project.hidden_gem_score || 0}. Hype score: ${project.hype_score || 0}.`} />
+          <Info label="What is missing" value={[
+            !project.image_url ? 'project image' : null,
+            !project.website_url && !project.mint_url && !project.source_url ? 'official link' : null,
+            !project.mint_price ? 'mint price' : null,
+            !project.mint_time_confirmed ? 'confirmed mint time' : null,
+          ].filter(Boolean).join(', ') || 'Core details available'} />
           <Info label="Auto Beta readiness" value={project.mint_time_confirmed ? 'Mint time confirmed. Still requires user opt-in and spend limits.' : 'Needs mint-time confirmation before Auto Beta.'} />
         </div>
 

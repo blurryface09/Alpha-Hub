@@ -24,20 +24,21 @@ export async function fetchReservoirProjects({ limit = 12 } = {}) {
       for (const item of rows) {
         const collection = item.collection || item
         const contract = collection.primaryContract || collection.contract || collection.contracts?.[0]
+        const contractAddress = typeof contract === 'string' ? contract : contract?.address
         projects.push(normalizeProject({
           name: collection.name,
           slug: collection.slug || collection.id,
           image_url: collection.image || collection.imageUrl || collection.metadata?.image,
           description: collection.description,
           chain,
-          contract_address: contract,
-          mint_url: collection.externalUrl || collection.openseaVerificationStatus ? collection.externalUrl : null,
+          contract_address: contractAddress,
+          mint_url: collection.externalUrl || null,
           website_url: collection.externalUrl || null,
           source_url: collection.id ? `${host}/collections/v7?id=${encodeURIComponent(collection.id)}` : null,
           mint_count: Number(item.count || item.sales || collection.onSaleCount || 0),
           holder_count: Number(collection.ownerCount || 0),
           hype_score: Number(item.volume || item.volumeChange || 0) > 0 ? 35 : 20,
-          source_confidence: contract ? 'medium' : 'low',
+          source_confidence: contractAddress ? 'medium' : 'low',
           status: 'approved',
         }, 'reservoir'))
       }

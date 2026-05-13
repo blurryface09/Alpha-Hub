@@ -16,7 +16,7 @@ export function scoreProject(project) {
 
   const hype_score = Math.min(100,
     Number(project.hype_score || 0) +
-    mintCount * 3 +
+    Math.min(20, mintCount * 2) +
     tracked * 15 +
     Math.min(20, Math.floor(holders / 25)) +
     proximityScore +
