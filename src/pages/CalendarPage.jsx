@@ -434,9 +434,36 @@ export default function CalendarPage() {
       })
       const data = await res.json().catch(() => ({}))
       if (!res.ok || data?.ok === false) throw new Error(data.error || 'Could not add this project to MintGuard')
-      toast.success(reviewMode ? 'Added to MintGuard. Confirm details before Auto Beta.' : 'Added to MintGuard in Confirm Mode.', { id: 'calendar-add' })
+      toast.success(data.duplicate
+        ? 'Already in MintGuard.'
+        : reviewMode
+        ? 'Added to MintGuard. Confirm details before Auto Beta.'
+        : 'Added to MintGuard in Confirm Mode.', { id: 'calendar-add' })
     } catch (error) {
       toast.error(friendlyError(error, 'Could not add this project to MintGuard.'), { id: 'calendar-add' })
+    }
+  }
+
+  const saveProject = async (project) => {
+    if (!user?.id) {
+      toast.error('Sign in to save projects.')
+      return
+    }
+    try {
+      const token = await getAuthToken()
+      const res = await fetch('/api/calendar/save', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
+        body: JSON.stringify({ projectId: project.id, walletAddress: address?.toLowerCase() || null }),
+      })
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok || data?.ok === false) throw new Error(data.error || 'Could not save project')
+      toast.success(data.save?.localOnly ? 'Saved on this device.' : 'Project saved.')
+    } catch (error) {
+      toast.error(friendlyError(error, 'Could not save project.'))
     }
   }
 
@@ -647,6 +674,7 @@ export default function CalendarPage() {
               isAdmin={isAdmin}
               onOpen={() => setSelectedProject(project)}
               onAdd={() => addToMintGuard(project)}
+              onSave={() => saveProject(project)}
               onStatus={status => updateStatus(project, status)}
               onRate={rating => rateProject(project, rating)}
               onShare={() => copyShare(project)}
@@ -673,6 +701,7 @@ export default function CalendarPage() {
           isAdmin={isAdmin}
           onClose={() => setSelectedProject(null)}
           onAdd={() => addToMintGuard(selectedProject)}
+          onSave={() => saveProject(selectedProject)}
           onStatus={status => updateStatus(selectedProject, status)}
           onRate={rating => rateProject(selectedProject, rating)}
           onShare={() => copyShare(selectedProject)}
@@ -683,7 +712,7 @@ export default function CalendarPage() {
   )
 }
 
-function ProjectCard({ project, tab, isAdmin, onOpen, onAdd, onStatus, onRate, onShare, ratingBusy }) {
+function ProjectCard({ project, tab, isAdmin, onOpen, onAdd, onSave, onStatus, onRate, onShare, ratingBusy }) {
   const live = isLive(project)
   const launchReady = isLaunchReadyCalendarProject(project)
   const quality = Number(project.quality_score || calendarQualityScore(project))
@@ -750,6 +779,9 @@ function ProjectCard({ project, tab, isAdmin, onOpen, onAdd, onStatus, onRate, o
         <button onClick={onOpen} className="btn-primary flex-1">View Details</button>
         <button onClick={onAdd} className="btn-ghost flex-1">
           Add to My Mints
+        </button>
+        <button onClick={onSave} className="btn-ghost flex-1">
+          Save
         </button>
         <button onClick={onShare} className="btn-ghost flex-1 flex items-center justify-center gap-2">
           <Share2 size={14} />
@@ -906,7 +938,7 @@ function Field({ label, value, onChange, placeholder = '', required = false }) {
   )
 }
 
-function DetailDrawer({ project, isAdmin, onClose, onAdd, onStatus, onRate, onShare, ratingBusy }) {
+function DetailDrawer({ project, isAdmin, onClose, onAdd, onSave, onStatus, onRate, onShare, ratingBusy }) {
   const launchReady = isLaunchReadyCalendarProject(project)
   const needsReview = !launchReady || (project.source_confidence || project.mint_date_confidence || 'low') === 'low'
   const quality = Number(project.quality_score || calendarQualityScore(project))
@@ -975,6 +1007,9 @@ function DetailDrawer({ project, isAdmin, onClose, onAdd, onStatus, onRate, onSh
         <div className="flex flex-col sm:flex-row gap-2 mt-6">
           <button onClick={onAdd} className="btn-ghost flex-1">
             Add to My Mints
+          </button>
+          <button onClick={onSave} className="btn-ghost flex-1">
+            Save
           </button>
           <button onClick={onShare} className="btn-primary flex-1 flex items-center justify-center gap-2">
             <Share2 size={14} />

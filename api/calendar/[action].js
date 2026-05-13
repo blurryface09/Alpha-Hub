@@ -2,7 +2,7 @@ import etherscanHandler from '../etherscan.js'
 import { createServiceClient, getBearerToken, isAdminUser, createAnonClient, requireUser } from '../_lib/auth.js'
 import { rateLimit, sendRateLimit } from '../_lib/redis.js'
 import { runCalendarSync, getCalendarStatus } from '../../src/server/calendar/sync.js'
-import { normalizeProject } from '../../src/server/calendar/normalize.js'
+import { normalizeProject, shareCode as makeShareCode, shareSlug as makeShareSlug } from '../../src/server/calendar/normalize.js'
 import { calendarQualityScore, isRawCalendarDiscovery, mintGuardEligible } from '../../src/lib/calendarQuality.js'
 
 const OPTIONAL_MINTGUARD_FIELDS = [
@@ -18,6 +18,7 @@ const OPTIONAL_MINTGUARD_FIELDS = [
   'execution_status',
   'notes',
   'share_code',
+  'image_url',
 ]
 
 const CALENDAR_EXTENDED_FIELDS = [
@@ -49,6 +50,9 @@ function isCalendarSchemaError(error) {
   return (
     code === '42P01' ||
     message.includes('calendar_projects') ||
+    message.includes('calendar_project_ratings') ||
+    message.includes('calendar_project_watchers') ||
+    message.includes('calendar_saved_projects') ||
     message.includes('calendar_sync_runs') ||
     message.includes('schema cache') ||
     message.includes('relation') ||
@@ -60,6 +64,8 @@ function isWriteShapeError(error) {
   const message = String(error?.message || error || '').toLowerCase()
   return (
     message.includes('schema cache') ||
+    message.includes('relation') ||
+    message.includes('does not exist') ||
     message.includes('column') ||
     message.includes('check constraint') ||
     message.includes('violates') ||
@@ -106,6 +112,29 @@ function calendarSourceType(project) {
   return 'website'
 }
 
+function codeSuffix(projectId) {
+  return String(projectId || Math.random().toString(36).slice(2, 8)).replace(/-/g, '').slice(0, 4).toUpperCase()
+}
+
+async function ensureShareFields(supabase, project) {
+  if (project?.share_code && project?.share_slug) return project
+  const baseCode = makeShareCode(project?.name || project?.slug || 'alpha', project?.contract_address)
+  const baseSlug = makeShareSlug(project?.name || project?.slug || baseCode)
+  const patch = {
+    share_code: project?.share_code || `${baseCode}-${codeSuffix(project?.id)}`.slice(0, 24),
+    share_slug: project?.share_slug || `${baseSlug}-${codeSuffix(project?.id).toLowerCase()}`.slice(0, 80),
+    updated_at: new Date().toISOString(),
+  }
+  const { data, error } = await supabase
+    .from('calendar_projects')
+    .update(patch)
+    .eq('id', project.id)
+    .select()
+    .single()
+  if (error && !isWriteShapeError(error)) throw error
+  return data || { ...project, ...patch }
+}
+
 async function saveRatingWithAggregateFallback(supabase, projectId, numericRating) {
   const { data: project, error: loadError } = await supabase
     .from('calendar_projects')
@@ -140,6 +169,56 @@ async function saveRatingWithAggregateFallback(supabase, projectId, numericRatin
   return { ratingAvg: Number(nextAvg.toFixed(2)), ratingCount: nextCount, localOnly: true }
 }
 
+async function updateRatingAggregate(supabase, projectId) {
+  const { data: ratings, error: ratingsError } = await supabase
+    .from('calendar_project_ratings')
+    .select('rating')
+    .eq('project_id', projectId)
+  if (ratingsError) throw ratingsError
+  const count = ratings?.length || 0
+  const avg = count ? ratings.reduce((sum, row) => sum + Number(row.rating || 0), 0) / count : 0
+  const ratingAvg = Number(avg.toFixed(2))
+  const { error: updateError } = await supabase
+    .from('calendar_projects')
+    .update({ rating_avg: ratingAvg, rating_count: count, updated_at: new Date().toISOString() })
+    .eq('id', projectId)
+  if (updateError && !isWriteShapeError(updateError)) throw updateError
+  return { ratingAvg, ratingCount: count }
+}
+
+async function findExistingMintGuardProject(supabase, userId, project, payload) {
+  const filters = []
+  if (project?.id) filters.push(`calendar_project_id.eq.${project.id}`)
+  if (project?.contract_address) filters.push(`contract_address.eq.${project.contract_address}`)
+  if (payload?.source_url) filters.push(`source_url.eq.${payload.source_url}`)
+  if (!filters.length) return null
+
+  let query = supabase
+    .from('wl_projects')
+    .select('*')
+    .eq('user_id', userId)
+    .or(filters.join(','))
+    .limit(1)
+
+  let { data, error } = await query
+  if (error && isWriteShapeError(error)) {
+    const fallbackFilters = []
+    if (project?.contract_address) fallbackFilters.push(`contract_address.eq.${project.contract_address}`)
+    if (payload?.source_url) fallbackFilters.push(`source_url.eq.${payload.source_url}`)
+    if (!fallbackFilters.length) return null
+    const retry = await supabase
+      .from('wl_projects')
+      .select('*')
+      .eq('user_id', userId)
+      .or(fallbackFilters.join(','))
+      .limit(1)
+    data = retry.data
+    error = retry.error
+  }
+  if (error) return null
+  return data?.[0] || null
+}
+
 async function insertMintGuardProject(supabase, payload) {
   const attempts = []
   attempts.push(payload)
@@ -159,6 +238,7 @@ async function insertMintGuardProject(supabase, payload) {
     mint_price: payload.mint_price,
     wl_type: payload.wl_type,
     status: payload.status,
+    image_url: payload.image_url,
   })
 
   attempts.push({
@@ -221,6 +301,19 @@ async function insertMintGuardProject(supabase, payload) {
   }
 
   throw lastError || new Error('Could not add project to MintGuard')
+}
+
+async function upsertProjectRelation(supabase, table, payload) {
+  const { data, error } = await supabase
+    .from(table)
+    .upsert(payload, { onConflict: 'project_id,user_id' })
+    .select()
+    .single()
+  if (!error) return data
+  if (isCalendarSchemaError(error) || isWriteShapeError(error)) {
+    return { ...payload, localOnly: true }
+  }
+  throw error
 }
 
 async function getOptionalUser(req) {
@@ -313,6 +406,7 @@ export default async function handler(req, res) {
       error = retry.error
     }
     if (error) return res.status(500).json({ ok: false, error: 'Could not submit calendar project' })
+    data = await ensureShareFields(supabase, data)
     return res.status(200).json({ ok: true, project: data })
   }
 
@@ -350,18 +444,30 @@ export default async function handler(req, res) {
       return res.status(200).json({ ok: true, ratingAvg: numericRating, ratingCount: 1, localOnly: true })
     }
 
-    const { data: ratings } = await supabase
-      .from('calendar_project_ratings')
-      .select('rating')
-      .eq('project_id', projectId)
-    const count = ratings?.length || 0
-    const avg = count ? ratings.reduce((sum, row) => sum + Number(row.rating || 0), 0) / count : 0
-    await supabase
-      .from('calendar_projects')
-      .update({ rating_avg: Number(avg.toFixed(2)), rating_count: count, updated_at: new Date().toISOString() })
-      .eq('id', projectId)
+    const aggregate = await updateRatingAggregate(supabase, projectId)
+    return res.status(200).json({ ok: true, ...aggregate })
+  }
 
-    return res.status(200).json({ ok: true, ratingAvg: Number(avg.toFixed(2)), ratingCount: count })
+  if (action === 'watch' || action === 'save') {
+    if (req.method !== 'POST') return res.status(405).json({ ok: false, error: 'Method not allowed' })
+    const user = await requireUser(req, res)
+    if (!user) return
+    const { projectId, walletAddress } = req.body || {}
+    if (!projectId) return res.status(400).json({ ok: false, error: 'Project is required' })
+    const supabase = createServiceClient()
+    const table = action === 'watch' ? 'calendar_project_watchers' : 'calendar_saved_projects'
+    try {
+      const row = await upsertProjectRelation(supabase, table, {
+        project_id: projectId,
+        user_id: user.id,
+        wallet_address: walletAddress || null,
+        created_at: new Date().toISOString(),
+      })
+      return res.status(200).json({ ok: true, [action]: row })
+    } catch (error) {
+      console.error(`calendar ${action} failed:`, error)
+      return res.status(500).json({ ok: false, error: `Could not ${action} this project` })
+    }
   }
 
   if (action === 'cleanup') {
@@ -426,6 +532,7 @@ export default async function handler(req, res) {
       source_type: calendarSourceType(project),
       calendar_project_id: project.id,
       share_code: project.share_code || null,
+      image_url: project.image_url || null,
       chain,
       contract_address: project.contract_address || null,
       mint_date: project.mint_date || null,
@@ -447,7 +554,23 @@ export default async function handler(req, res) {
     }
 
     try {
+      const existing = await findExistingMintGuardProject(supabase, user.id, project, payload)
+      if (existing) {
+        await upsertProjectRelation(supabase, 'calendar_saved_projects', {
+          project_id: project.id,
+          user_id: user.id,
+          wallet_address: null,
+          created_at: new Date().toISOString(),
+        }).catch(() => null)
+        return res.status(200).json({ ok: true, duplicate: true, project: existing })
+      }
       const row = await insertMintGuardProject(supabase, payload)
+      await upsertProjectRelation(supabase, 'calendar_saved_projects', {
+        project_id: project.id,
+        user_id: user.id,
+        wallet_address: null,
+        created_at: new Date().toISOString(),
+      }).catch(() => null)
       return res.status(200).json({ ok: true, project: row })
     } catch (error) {
       console.error('calendar add-to-mintguard failed:', error)
