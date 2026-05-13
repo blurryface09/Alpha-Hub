@@ -104,6 +104,7 @@ function App() {
           <Route path="/" element={<ProtectedRoute><DashboardLayout /></ProtectedRoute>}>
             <Route index element={<OverviewPage />} />
             <Route path="calendar" element={<PremiumRoute requiredPlan="free" featureName="Alpha Hub Calendar"><CalendarPage /></PremiumRoute>} />
+            <Route path="calendar/:shareCode" element={<PremiumRoute requiredPlan="free" featureName="Alpha Hub Calendar"><CalendarPage /></PremiumRoute>} />
             <Route path="mintguard" element={<PremiumRoute requiredPlan="free" featureName="MintGuard"><MintGuardPage /></PremiumRoute>} />
             <Route path="whaleradar" element={<PremiumRoute requiredPlan="free" featureName="WhaleRadar"><WhaleRadarPage /></PremiumRoute>} />
             <Route path="alpha" element={<PremiumRoute requiredPlan="pro" featureName="Wallet forensics"><AlphaPage /></PremiumRoute>} />

@@ -1,3 +1,5 @@
+import { calendarQualityScore } from '../../lib/calendarQuality.js'
+
 export function scoreProject(project) {
   const mintCount = Number(project.mint_count || 0)
   const holders = Number(project.holder_count || 0)
@@ -46,6 +48,7 @@ export function scoreProject(project) {
 
   return {
     ...project,
+    quality_score: calendarQualityScore(project),
     hype_score: Math.round(hype_score),
     whale_interest_score: Math.round(whale_interest_score),
     hidden_gem_score: Math.round(hidden_gem_score),

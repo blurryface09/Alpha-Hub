@@ -6,6 +6,20 @@ import { fetchZoraProjects } from './adapters/zora.js'
 import { fetchOnchainProjects } from './adapters/onchain.js'
 import { isRawCalendarDiscovery } from '../../lib/calendarQuality.js'
 
+const EXTENDED_PROJECT_FIELDS = [
+  'quality_score',
+  'rating_avg',
+  'rating_count',
+  'share_code',
+  'share_slug',
+  'submitted_by_user_id',
+  'submitted_by_wallet',
+  'submitter_role',
+  'community_name',
+  'community_x_handle',
+  'submitted_by_label',
+]
+
 const ADAPTERS = {
   opensea: fetchOpenSeaProjects,
   alchemy: fetchAlchemyProjects,
@@ -28,6 +42,17 @@ function isSchemaError(error) {
 
 function emptySource() {
   return { imported: 0, updated: 0, errors: [] }
+}
+
+function isColumnShapeError(error) {
+  const message = String(error?.message || error || '').toLowerCase()
+  return message.includes('schema cache') || message.includes('column') || message.includes('violates unique')
+}
+
+function stripExtendedFields(project) {
+  const clean = { ...project }
+  EXTENDED_PROJECT_FIELDS.forEach(field => delete clean[field])
+  return clean
 }
 
 async function upsertProject(supabase, project) {
@@ -57,7 +82,7 @@ async function upsertProject(supabase, project) {
     const nextStatus = existing.status === 'hidden' || existing.status === 'rejected'
       ? existing.status
       : scored.status
-    const { error } = await supabase
+    let { error } = await supabase
       .from('calendar_projects')
       .update({
         ...scored,
@@ -65,24 +90,49 @@ async function upsertProject(supabase, project) {
         status: nextStatus,
       })
       .eq('id', existing.id)
+    if (error && isColumnShapeError(error)) {
+      const fallback = stripExtendedFields(scored)
+      const retry = await supabase
+        .from('calendar_projects')
+        .update({
+          ...fallback,
+          first_seen_at: existing.first_seen_at || fallback.first_seen_at,
+          status: nextStatus,
+        })
+        .eq('id', existing.id)
+      error = retry.error
+    }
     if (error) throw error
     return 'updated'
   }
 
-  const { error } = await supabase.from('calendar_projects').insert(scored)
+  let { error } = await supabase.from('calendar_projects').insert(scored)
+  if (error && isColumnShapeError(error)) {
+    const retry = await supabase.from('calendar_projects').insert(stripExtendedFields(scored))
+    error = retry.error
+  }
   if (error) throw error
   return 'imported'
 }
 
 async function downgradeWeakDiscoveryRows(supabase) {
-  const { data } = await supabase
+  let result = await supabase
     .from('calendar_projects')
-    .select('id,name,source,status,source_confidence,image_url,website_url,mint_url,source_url')
+    .select('id,name,source,status,source_confidence,image_url,website_url,mint_url,source_url,quality_score')
     .in('source', ['opensea', 'onchain'])
     .in('status', ['approved', 'live'])
     .limit(200)
+  if (result.error && isColumnShapeError(result.error)) {
+    result = await supabase
+      .from('calendar_projects')
+      .select('id,name,source,status,source_confidence,image_url,website_url,mint_url,source_url')
+      .in('source', ['opensea', 'onchain'])
+      .in('status', ['approved', 'live'])
+      .limit(200)
+  }
+  if (result.error) throw result.error
 
-  const weakIds = (data || [])
+  const weakIds = (result.data || [])
     .filter(row => row.source === 'onchain' || isRawCalendarDiscovery(row))
     .map(row => row.id)
 

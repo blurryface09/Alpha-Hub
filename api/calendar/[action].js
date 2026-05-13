@@ -3,7 +3,7 @@ import { createServiceClient, getBearerToken, isAdminUser, createAnonClient, req
 import { rateLimit, sendRateLimit } from '../_lib/redis.js'
 import { runCalendarSync, getCalendarStatus } from '../../src/server/calendar/sync.js'
 import { normalizeProject } from '../../src/server/calendar/normalize.js'
-import { isRawCalendarDiscovery, mintGuardEligible } from '../../src/lib/calendarQuality.js'
+import { calendarQualityScore, isRawCalendarDiscovery, mintGuardEligible } from '../../src/lib/calendarQuality.js'
 
 const OPTIONAL_MINTGUARD_FIELDS = [
   'calendar_project_id',
@@ -17,6 +17,21 @@ const OPTIONAL_MINTGUARD_FIELDS = [
   'mint_time_confirmed_at',
   'execution_status',
   'notes',
+  'share_code',
+]
+
+const CALENDAR_EXTENDED_FIELDS = [
+  'quality_score',
+  'rating_avg',
+  'rating_count',
+  'share_code',
+  'share_slug',
+  'submitted_by_user_id',
+  'submitted_by_wallet',
+  'submitter_role',
+  'community_name',
+  'community_x_handle',
+  'submitted_by_label',
 ]
 
 function calendarSchemaMissingResponse() {
@@ -50,6 +65,12 @@ function isWriteShapeError(error) {
     message.includes('violates') ||
     message.includes('null value')
   )
+}
+
+function stripFields(row, fields) {
+  const clean = { ...row }
+  fields.forEach(field => delete clean[field])
+  return clean
 }
 
 function normalizeChain(chain) {
@@ -175,6 +196,12 @@ export default async function handler(req, res) {
       source_confidence: body.mint_date ? 'medium' : 'low',
       created_by: user.id,
       created_by_wallet: body.created_by_wallet || null,
+      submitted_by_user_id: user.id,
+      submitted_by_wallet: body.created_by_wallet || null,
+      submitter_role: body.submitter_role || (isAdmin ? 'admin' : 'user'),
+      community_name: body.community_name || null,
+      community_x_handle: body.community_x_handle || null,
+      submitted_by_label: body.submitted_by_label || body.community_name || body.community_x_handle || null,
       approved_by: isAdmin ? user.id : null,
       approved_at: isAdmin ? new Date().toISOString() : null,
       mint_date_source: body.mint_date ? 'community_submission' : null,
@@ -190,9 +217,86 @@ export default async function handler(req, res) {
     row.approved_at = isAdmin ? new Date().toISOString() : null
 
     const supabase = createServiceClient()
-    const { data, error } = await supabase.from('calendar_projects').insert(row).select().single()
+    let { data, error } = await supabase.from('calendar_projects').insert(row).select().single()
+    if (error && isWriteShapeError(error)) {
+      const retry = await supabase.from('calendar_projects').insert(stripFields(row, CALENDAR_EXTENDED_FIELDS)).select().single()
+      data = retry.data
+      error = retry.error
+    }
     if (error) return res.status(500).json({ ok: false, error: 'Could not submit calendar project' })
     return res.status(200).json({ ok: true, project: data })
+  }
+
+  if (action === 'rate') {
+    if (req.method !== 'POST') return res.status(405).json({ ok: false, error: 'Method not allowed' })
+    const user = await requireUser(req, res)
+    if (!user) return
+    const { projectId, rating, review, walletAddress } = req.body || {}
+    const numericRating = Number(rating)
+    if (!projectId || !Number.isInteger(numericRating) || numericRating < 1 || numericRating > 5) {
+      return res.status(400).json({ ok: false, error: 'Choose a rating from 1 to 5' })
+    }
+
+    const supabase = createServiceClient()
+    const payload = {
+      project_id: projectId,
+      user_id: user.id,
+      wallet_address: walletAddress || null,
+      rating: numericRating,
+      review: review || null,
+      updated_at: new Date().toISOString(),
+    }
+    const { error } = await supabase
+      .from('calendar_project_ratings')
+      .upsert(payload, { onConflict: 'project_id,user_id' })
+    if (error) return res.status(500).json({ ok: false, error: 'Could not save rating' })
+
+    const { data: ratings } = await supabase
+      .from('calendar_project_ratings')
+      .select('rating')
+      .eq('project_id', projectId)
+    const count = ratings?.length || 0
+    const avg = count ? ratings.reduce((sum, row) => sum + Number(row.rating || 0), 0) / count : 0
+    await supabase
+      .from('calendar_projects')
+      .update({ rating_avg: Number(avg.toFixed(2)), rating_count: count, updated_at: new Date().toISOString() })
+      .eq('id', projectId)
+
+    return res.status(200).json({ ok: true, ratingAvg: Number(avg.toFixed(2)), ratingCount: count })
+  }
+
+  if (action === 'cleanup') {
+    if (req.method !== 'POST') return res.status(405).json({ ok: false, error: 'Method not allowed' })
+    const user = await getOptionalUser(req)
+    if (!user || !isAdminUser(user)) return res.status(403).json({ ok: false, error: 'Admin access required' })
+
+    const supabase = createServiceClient()
+    const { data, error } = await supabase
+      .from('calendar_projects')
+      .select('*')
+      .in('status', ['approved', 'live', 'pending_review'])
+      .limit(500)
+    if (error) return res.status(500).json({ ok: false, error: 'Could not load calendar projects' })
+
+    let reviewed = 0
+    let downgraded = 0
+    let scored = 0
+    for (const project of data || []) {
+      reviewed += 1
+      const quality = calendarQualityScore(project)
+      const nextStatus = isRawCalendarDiscovery(project) || quality < 50 ? 'pending_review' : project.status
+      const payload = { quality_score: quality, updated_at: new Date().toISOString() }
+      if (nextStatus !== project.status) {
+        payload.status = nextStatus
+        downgraded += 1
+      }
+      let update = await supabase.from('calendar_projects').update(payload).eq('id', project.id)
+      if (update.error && isWriteShapeError(update.error)) {
+        update = await supabase.from('calendar_projects').update(stripFields(payload, CALENDAR_EXTENDED_FIELDS)).eq('id', project.id)
+      }
+      if (!update.error) scored += 1
+    }
+    return res.status(200).json({ ok: true, reviewed, scored, downgraded })
   }
 
   if (action === 'add-to-mintguard') {
@@ -228,6 +332,7 @@ export default async function handler(req, res) {
       source_url: project.mint_url || project.source_url || project.website_url || null,
       source_type: project.source === 'onchain' ? 'contract' : 'calendar',
       calendar_project_id: project.id,
+      share_code: project.share_code || null,
       chain,
       contract_address: project.contract_address || null,
       mint_date: project.mint_date || null,

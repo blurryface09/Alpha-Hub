@@ -6,11 +6,13 @@ import {
 } from 'lucide-react'
 import toast from 'react-hot-toast'
 import { useAccount } from 'wagmi'
+import { useParams } from 'react-router-dom'
 import { supabase, getAuthToken } from '../lib/supabase'
 import { useAuthStore } from '../store'
 import { useSubscription } from '../hooks/useSubscription'
 import { friendlyError } from '../lib/errors'
 import {
+  calendarQualityScore,
   isActiveMintCalendarProject,
   isLaunchReadyCalendarProject,
   isRawCalendarDiscovery,
@@ -44,10 +46,12 @@ function chainIdFor(chain) {
 }
 
 function scoreFor(project, tab) {
+  const sourcePriority = { admin: 500, community: 450, opensea: 350, alchemy: 330, zora: 300, onchain: 0 }[project.source] || 100
+  const quality = Number(project.quality_score || calendarQualityScore(project))
   if (tab === 'hidden-gems') return project.hidden_gem_score || 0
-  if (tab === 'new-contracts') return project.first_seen_at ? new Date(project.first_seen_at).getTime() : 0
-  if (tab === 'minting-now') return project.mint_count || project.hype_score || 0
-  return project.hype_score || project.whale_interest_score || 0
+  if (tab === 'new-contracts') return (project.first_seen_at ? new Date(project.first_seen_at).getTime() : 0) + quality
+  if (tab === 'minting-now') return sourcePriority + quality + (project.mint_count || project.hype_score || 0)
+  return sourcePriority + quality + (project.hype_score || project.whale_interest_score || 0)
 }
 
 function isLive(project) {
@@ -60,11 +64,12 @@ function isLive(project) {
 
 function tabFilter(project, tab) {
   const raw = isRawCalendarDiscovery(project)
+  const quality = Number(project.quality_score || calendarQualityScore(project))
   if (tab === 'new-contracts') return raw || project.status === 'pending_review' || !project.mint_date
-  if (tab === 'minting-now') return isActiveMintCalendarProject(project)
+  if (tab === 'minting-now') return isActiveMintCalendarProject(project) && (quality >= 60 || project.source_confidence === 'high' || ['admin', 'community'].includes(project.source))
   if (!isLaunchReadyCalendarProject(project)) return false
-  if (tab === 'hidden-gems') return (project.hidden_gem_score || 0) >= (project.hype_score || 0) || (project.hype_score || 0) < 45
-  return true
+  if (tab === 'hidden-gems') return quality >= 50 && ((project.hidden_gem_score || 0) >= (project.hype_score || 0) || (project.hype_score || 0) < 45)
+  return quality >= 60
 }
 
 function countdown(project) {
@@ -135,6 +140,7 @@ function timeAgo(value) {
 }
 
 export default function CalendarPage() {
+  const { shareCode } = useParams()
   const { user } = useAuthStore()
   const { address, isConnected } = useAccount()
   const { plan } = useSubscription()
@@ -164,6 +170,9 @@ export default function CalendarPage() {
     contract_address: '',
     image_url: '',
     notes: '',
+    community_name: '',
+    community_x_handle: '',
+    submitter_role: 'user',
   })
   const calendarNotReady = schemaMissing || status?.schemaMissing
 
@@ -195,7 +204,7 @@ export default function CalendarPage() {
     } finally {
       setLoading(false)
     }
-  }, [isAdmin])
+  }, [isAdmin, shareCode])
 
   const fetchStatus = useCallback(async () => {
     try {
@@ -221,6 +230,7 @@ export default function CalendarPage() {
 
   const visibleProjects = useMemo(() => {
     return projects
+      .filter(project => !shareCode || project.share_code?.toLowerCase() === shareCode.toLowerCase() || project.share_slug?.toLowerCase() === shareCode.toLowerCase())
       .filter(project => tabFilter(project, activeTab))
       .filter(project => chain === 'all' || normalizeChain(project.chain) === chain)
       .filter(project => {
@@ -231,7 +241,7 @@ export default function CalendarPage() {
           .some(value => String(value).toLowerCase().includes(needle))
       })
       .sort((a, b) => scoreFor(b, activeTab) - scoreFor(a, activeTab))
-  }, [activeTab, chain, projects, query])
+  }, [activeTab, chain, projects, query, shareCode])
 
   const runSync = async () => {
     if (calendarNotReady) {
@@ -280,6 +290,9 @@ export default function CalendarPage() {
     contract_address: '',
     image_url: '',
     notes: '',
+    community_name: '',
+    community_x_handle: '',
+    submitter_role: 'user',
   })
 
   const submitProject = async () => {
@@ -310,6 +323,10 @@ export default function CalendarPage() {
         mint_type: form.mint_type || 'unknown',
         source_url: form.mint_url.trim() || form.website_url.trim() || form.x_url.trim() || null,
         created_by_wallet: address?.toLowerCase() || null,
+        community_name: form.community_name.trim() || null,
+        community_x_handle: form.community_x_handle.trim() || null,
+        submitter_role: form.submitter_role || (isAdmin ? 'admin' : 'user'),
+        submitted_by_label: form.community_name.trim() || form.community_x_handle.trim() || null,
       }
       const token = await getAuthToken()
       const res = await fetch('/api/calendar/submit', {
@@ -382,6 +399,47 @@ export default function CalendarPage() {
     }
   }
 
+  const rateProject = async (project, rating) => {
+    try {
+      const token = await getAuthToken()
+      const res = await fetch('/api/calendar/rate', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
+        body: JSON.stringify({ projectId: project.id, rating, walletAddress: address?.toLowerCase() || null }),
+      })
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok || data?.ok === false) throw new Error(data.error || 'Could not save rating')
+      toast.success('Rating saved.')
+      fetchProjects()
+    } catch (error) {
+      toast.error(friendlyError(error, 'Could not save rating.'))
+    }
+  }
+
+  const cleanupCalendar = async () => {
+    if (!isAdmin) return
+    try {
+      const token = await getAuthToken()
+      const res = await fetch('/api/calendar/cleanup', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
+      })
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok || data?.ok === false) throw new Error(data.error || 'Could not clean Calendar')
+      toast.success(`Cleanup complete: ${data.downgraded || 0} moved to review.`)
+      fetchProjects()
+      fetchStatus()
+    } catch (error) {
+      toast.error(friendlyError(error, 'Could not clean Calendar.'))
+    }
+  }
+
   return (
     <div>
       <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between mb-6">
@@ -405,6 +463,11 @@ export default function CalendarPage() {
             <button onClick={runSync} disabled={syncing || calendarNotReady} className="btn-ghost flex items-center justify-center gap-2">
               {syncing ? <Loader size={15} className="animate-spin" /> : <Radar size={15} />}
               {calendarNotReady ? 'Install Calendar SQL First' : syncing ? 'Syncing...' : 'Run Sync Now'}
+            </button>
+          )}
+          {isAdmin && (
+            <button onClick={cleanupCalendar} disabled={calendarNotReady} className="btn-ghost flex items-center justify-center gap-2">
+              Clean Bad Rows
             </button>
           )}
           <button onClick={() => setSubmitOpen(true)} className="btn-primary flex items-center justify-center gap-2">
@@ -498,6 +561,7 @@ export default function CalendarPage() {
               onOpen={() => setSelectedProject(project)}
               onAdd={() => addToMintGuard(project)}
               onStatus={status => updateStatus(project, status)}
+              onRate={rating => rateProject(project, rating)}
             />
           ))}
         </div>
@@ -521,16 +585,20 @@ export default function CalendarPage() {
           onClose={() => setSelectedProject(null)}
           onAdd={() => addToMintGuard(selectedProject)}
           onStatus={status => updateStatus(selectedProject, status)}
+          onRate={rating => rateProject(selectedProject, rating)}
         />
       )}
     </div>
   )
 }
 
-function ProjectCard({ project, tab, isAdmin, onOpen, onAdd, onStatus }) {
+function ProjectCard({ project, tab, isAdmin, onOpen, onAdd, onStatus, onRate }) {
   const live = isLive(project)
   const eligible = mintGuardEligible(project)
   const launchReady = isLaunchReadyCalendarProject(project)
+  const quality = Number(project.quality_score || calendarQualityScore(project))
+  const rating = Number(project.rating_avg || 0)
+  const ratingCount = Number(project.rating_count || 0)
   const rankValue = tab === 'hidden-gems'
     ? project.hidden_gem_score || 0
     : tab === 'new-contracts'
@@ -567,16 +635,27 @@ function ProjectCard({ project, tab, isAdmin, onOpen, onAdd, onStatus }) {
 
       <div className="mt-4 grid grid-cols-2 sm:grid-cols-4 gap-2 text-xs">
         <Signal label={tab === 'hidden-gems' ? 'Gem score' : 'Hype'} value={rankValue} />
-        <Signal label="Mints" value={project.mint_count || 0} />
+        <Signal label="Quality" value={quality} tone={quality >= 60 ? 'text-green' : 'text-accent3'} />
         <Signal label="Risk" value={project.risk_score ?? 'Review'} tone={risk > 60 ? 'text-accent2' : 'text-green'} />
-        <Signal label="Source" value={sourceLabel(project.source)} />
+        <Signal label="Rating" value={ratingCount ? `${rating}/5` : 'New'} />
       </div>
 
       <div className="mt-3 flex flex-wrap items-center gap-2 text-xs text-muted">
         <Clock size={13} />
         <span>{formatTime(project)}</span>
         {project.contract_address && <span className="font-mono text-accent">{shortAddress(project.contract_address)}</span>}
+        {project.share_code && <button onClick={() => navigator.clipboard?.writeText(project.share_code)} className="font-mono text-accent hover:underline">{project.share_code}</button>}
+        {project.submitted_by_label && <span>Shared by {project.submitted_by_label}</span>}
         {needsReview && <span className="text-accent3">Verify official links before minting</span>}
+      </div>
+
+      <div className="mt-3 flex items-center gap-1 text-xs">
+        {[1, 2, 3, 4, 5].map(value => (
+          <button key={value} onClick={() => onRate?.(value)} className="text-accent3 hover:text-accent">
+            {value <= Math.round(rating) ? '★' : '☆'}
+          </button>
+        ))}
+        <span className="text-muted ml-1">{ratingCount ? `${ratingCount} votes` : 'Rate project'}</span>
       </div>
 
       <div className="flex flex-col sm:flex-row gap-2 mt-4">
@@ -670,6 +749,16 @@ function SubmitModal({ form, setForm, submitting, onClose, onSubmit, isAdmin }) 
             </label>
             <Field label="Image URL" value={form.image_url} onChange={value => update('image_url', value)} />
           </div>
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+            <Field label="Community name" value={form.community_name} onChange={value => update('community_name', value)} />
+            <Field label="Community X handle" value={form.community_x_handle} onChange={value => update('community_x_handle', value)} placeholder="@project" />
+            <label>
+              <span className="section-label block mb-2">Submitter role</span>
+              <select className="select" value={form.submitter_role} onChange={event => update('submitter_role', event.target.value)}>
+                {['user', 'cm', 'project_team', 'admin'].map(item => <option key={item} value={item}>{item}</option>)}
+              </select>
+            </label>
+          </div>
           <label>
             <span className="section-label block mb-2">Notes</span>
             <textarea className="input min-h-24" value={form.notes} onChange={event => update('notes', event.target.value)} placeholder="Why this should be tracked, official source, community notes..." />
@@ -699,10 +788,13 @@ function Field({ label, value, onChange, placeholder = '', required = false }) {
   )
 }
 
-function DetailDrawer({ project, isAdmin, onClose, onAdd, onStatus }) {
+function DetailDrawer({ project, isAdmin, onClose, onAdd, onStatus, onRate }) {
   const eligible = mintGuardEligible(project)
   const launchReady = isLaunchReadyCalendarProject(project)
   const needsReview = !launchReady || (project.source_confidence || project.mint_date_confidence || 'low') === 'low'
+  const quality = Number(project.quality_score || calendarQualityScore(project))
+  const rating = Number(project.rating_avg || 0)
+  const ratingCount = Number(project.rating_count || 0)
   return (
     <div className="fixed inset-0 z-50 bg-black/70 flex justify-end" onClick={event => event.target === event.currentTarget && onClose()}>
       <div className="w-full max-w-xl bg-surface border-l border-border h-full overflow-y-auto p-5">
@@ -720,9 +812,21 @@ function DetailDrawer({ project, isAdmin, onClose, onAdd, onStatus }) {
 
         <div className="grid grid-cols-2 gap-3 mb-5">
           <Metric label="Countdown" value={countdown(project)} tone={isLive(project) ? 'text-green' : 'text-accent3'} />
+          <Metric label="Quality" value={quality} tone={quality >= 60 ? 'text-green' : 'text-accent3'} />
           <Metric label="Risk" value={project.risk_score ?? 'Review'} tone={(project.risk_score || 0) > 60 ? 'text-accent2' : 'text-green'} />
-          <Metric label="Whale Interest" value={project.whale_interest_score || 0} />
-          <Metric label="Mint Events" value={project.mint_count || 0} />
+          <Metric label="Rating" value={ratingCount ? `${rating}/5` : 'New'} />
+        </div>
+
+        <div className="rounded-lg border border-border bg-surface2 p-3 mb-4">
+          <div className="section-label mb-2">Community Rating</div>
+          <div className="flex items-center gap-2">
+            {[1, 2, 3, 4, 5].map(value => (
+              <button key={value} onClick={() => onRate?.(value)} className="text-accent3 hover:text-accent">
+                {value <= Math.round(rating) ? '★' : '☆'}
+              </button>
+            ))}
+            <span className="text-sm text-muted">{ratingCount ? `${ratingCount} votes` : 'Be first to rate'}</span>
+          </div>
         </div>
 
         <div className="space-y-3 text-sm">
@@ -736,6 +840,8 @@ function DetailDrawer({ project, isAdmin, onClose, onAdd, onStatus }) {
           <Info label="Mint type" value={project.mint_type || 'unknown'} />
           <Info label="Contract" value={project.contract_address || 'Not detected yet'} mono />
           <Info label="Source" value={`${sourceLabel(project.source)} · ${project.source_confidence || 'low'} confidence`} />
+          <Info label="Share code" value={project.share_code || 'Generated after migration'} mono />
+          <Info label="Submitted by" value={project.submitted_by_label || project.community_name || project.community_x_handle || 'Alpha Hub source sync'} />
           <Info label="What Alpha Hub found" value={`Mint events: ${project.mint_count || 0}. Holders/supply signal: ${project.holder_count ?? 'unknown'}. Hidden gem score: ${project.hidden_gem_score || 0}. Hype score: ${project.hype_score || 0}.`} />
           <Info label="What is missing" value={[
             !project.image_url ? 'project image' : null,
