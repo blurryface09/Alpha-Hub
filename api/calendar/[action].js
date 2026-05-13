@@ -100,8 +100,8 @@ function mintGuardName(project) {
 
 function calendarMintTypeToWlType(value) {
   const type = String(value || '').toLowerCase()
-  if (type.includes('allow') || type.includes('white')) return 'WL'
   if (type.includes('free')) return 'FREE'
+  if (type.includes('fcfs')) return 'FCFS'
   return 'PUBLIC'
 }
 
@@ -227,6 +227,27 @@ async function insertMintGuardProject(supabase, payload) {
   OPTIONAL_MINTGUARD_FIELDS.forEach(field => delete withoutOptional[field])
   attempts.push(withoutOptional)
 
+  const legacySafe = {
+    ...withoutOptional,
+    source_type: 'website',
+    wl_type: 'UNKNOWN',
+    status: 'upcoming',
+  }
+  attempts.push(legacySafe)
+
+  attempts.push({
+    user_id: payload.user_id,
+    name: payload.name,
+    source_url: payload.source_url,
+    source_type: 'website',
+    chain: payload.chain,
+    contract_address: payload.contract_address,
+    mint_date: payload.mint_date,
+    mint_price: payload.mint_price,
+    wl_type: 'UNKNOWN',
+    status: 'upcoming',
+  })
+
   attempts.push({
     user_id: payload.user_id,
     name: payload.name,
@@ -254,19 +275,19 @@ async function insertMintGuardProject(supabase, payload) {
     user_id: payload.user_id,
     name: payload.name,
     source_url: payload.source_url,
-    source_type: payload.source_type,
+    source_type: 'website',
     chain: payload.chain,
     contract_address: payload.contract_address,
     mint_date: payload.mint_date,
     mint_price: payload.mint_price,
-    wl_type: payload.wl_type,
+    wl_type: 'UNKNOWN',
   })
 
   attempts.push({
     user_id: payload.user_id,
     name: payload.name,
     source_url: payload.source_url,
-    source_type: payload.source_type,
+    source_type: 'website',
     chain: payload.chain,
     contract_address: payload.contract_address,
   })
@@ -275,7 +296,7 @@ async function insertMintGuardProject(supabase, payload) {
     user_id: payload.user_id,
     name: payload.name,
     source_url: payload.source_url,
-    source_type: payload.source_type,
+    source_type: 'website',
     chain: payload.chain,
   })
 
@@ -283,7 +304,16 @@ async function insertMintGuardProject(supabase, payload) {
     user_id: payload.user_id,
     name: payload.name,
     source_url: payload.source_url,
-    source_type: payload.source_type,
+    source_type: 'website',
+    wl_type: 'UNKNOWN',
+    status: 'upcoming',
+  })
+
+  attempts.push({
+    user_id: payload.user_id,
+    name: payload.name,
+    source_url: payload.source_url,
+    source_type: 'website',
   })
 
   attempts.push({
@@ -509,14 +539,15 @@ export default async function handler(req, res) {
     const user = await requireUser(req, res)
     if (!user) return
 
-    const { projectId } = req.body || {}
-    if (!projectId) return res.status(400).json({ ok: false, error: 'Project is required' })
+    const { projectId, calendarProjectId } = req.body || {}
+    const targetProjectId = projectId || calendarProjectId
+    if (!targetProjectId) return res.status(400).json({ ok: false, error: 'Project is required' })
 
     const supabase = createServiceClient()
     const { data: project, error: projectError } = await supabase
       .from('calendar_projects')
       .select('*')
-      .eq('id', projectId)
+      .eq('id', targetProjectId)
       .single()
 
     if (projectError || !project) return res.status(404).json({ ok: false, error: 'Calendar project not found' })
@@ -574,7 +605,11 @@ export default async function handler(req, res) {
       return res.status(200).json({ ok: true, project: row })
     } catch (error) {
       console.error('calendar add-to-mintguard failed:', error)
-      return res.status(500).json({ ok: false, error: 'Could not add this project to MintGuard' })
+      if (String(error?.code || '') === '23505') {
+        const existing = await findExistingMintGuardProject(supabase, user.id, project, payload)
+        if (existing) return res.status(200).json({ ok: true, duplicate: true, project: existing })
+      }
+      return res.status(500).json({ ok: false, error: 'Could not add this project to MintGuard.' })
     }
   }
 

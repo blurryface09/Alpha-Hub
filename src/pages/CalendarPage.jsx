@@ -430,7 +430,7 @@ export default function CalendarPage() {
           'Content-Type': 'application/json',
           ...(token ? { Authorization: `Bearer ${token}` } : {}),
         },
-        body: JSON.stringify({ projectId: project.id }),
+        body: JSON.stringify({ calendarProjectId: project.id }),
       })
       const data = await res.json().catch(() => ({}))
       if (!res.ok || data?.ok === false) throw new Error(data.error || 'Could not add this project to MintGuard')
