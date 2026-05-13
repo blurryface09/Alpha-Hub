@@ -10,6 +10,12 @@ import { supabase, getAuthToken } from '../lib/supabase'
 import { useAuthStore } from '../store'
 import { useSubscription } from '../hooks/useSubscription'
 import { friendlyError } from '../lib/errors'
+import {
+  isActiveMintCalendarProject,
+  isLaunchReadyCalendarProject,
+  isRawCalendarDiscovery,
+  mintGuardEligible,
+} from '../lib/calendarQuality'
 
 const ADMIN_WALLET = import.meta.env.VITE_ADMIN_WALLET?.toLowerCase()
 
@@ -53,11 +59,10 @@ function isLive(project) {
 }
 
 function tabFilter(project, tab) {
-  const rawOnchain = project.source === 'onchain' &&
-    (project.source_confidence === 'low' || (!project.image_url && !project.website_url && !project.mint_url && !project.source_url))
-  if (rawOnchain && tab !== 'new-contracts') return false
-  if (tab === 'minting-now') return isLive(project)
-  if (tab === 'new-contracts') return project.source === 'onchain' || !project.mint_date || project.status === 'pending_review'
+  const raw = isRawCalendarDiscovery(project)
+  if (tab === 'new-contracts') return raw || project.status === 'pending_review' || !project.mint_date
+  if (tab === 'minting-now') return isActiveMintCalendarProject(project)
+  if (!isLaunchReadyCalendarProject(project)) return false
   if (tab === 'hidden-gems') return (project.hidden_gem_score || 0) >= (project.hype_score || 0) || (project.hype_score || 0) < 45
   return true
 }
@@ -97,7 +102,7 @@ function shortAddress(address) {
 
 function projectTitle(project) {
   const name = String(project.name || '').trim()
-  if (name && !name.toLowerCase().startsWith('detected mint 0x')) return name
+  if (name && !isRawCalendarDiscovery({ ...project, name })) return name
   if (project.contract_address) return `NFT Contract ${shortAddress(project.contract_address)}`
   return 'Untitled Mint Project'
 }
@@ -354,6 +359,10 @@ export default function CalendarPage() {
       toast.error('Sign in again before adding to MintGuard.')
       return
     }
+    if (!mintGuardEligible(project)) {
+      toast.error('This project needs real metadata before it can be added to MintGuard.')
+      return
+    }
     toast.loading('Adding to MintGuard...', { id: 'calendar-add' })
     try {
       const token = await getAuthToken()
@@ -470,7 +479,7 @@ export default function CalendarPage() {
           <p className="text-sm text-muted mt-2 max-w-md">
             {calendarNotReady
               ? 'Calendar storage is not ready yet. Apply the Calendar SQL migration in Supabase before syncing real projects.'
-              : 'OpenSea, Reservoir, or Zora source data is needed for curated project listings. Raw onchain contracts only appear under New Contracts for review.'}
+              : 'OpenSea, Alchemy, or Zora source data is needed for curated project listings. Raw onchain contracts only appear under New Contracts for review.'}
           </p>
           <div className="flex flex-col sm:flex-row gap-2 mt-4">
             {isAdmin && !calendarNotReady && <button onClick={runSync} disabled={syncing} className="btn-primary text-xs">{syncing ? 'Syncing...' : 'Run Sync Now'}</button>}
@@ -520,13 +529,15 @@ export default function CalendarPage() {
 
 function ProjectCard({ project, tab, isAdmin, onOpen, onAdd, onStatus }) {
   const live = isLive(project)
+  const eligible = mintGuardEligible(project)
+  const launchReady = isLaunchReadyCalendarProject(project)
   const rankValue = tab === 'hidden-gems'
     ? project.hidden_gem_score || 0
     : tab === 'new-contracts'
     ? project.source_confidence || 'review'
     : project.hype_score || 0
   const risk = Number(project.risk_score || 0)
-  const needsReview = (project.source_confidence || project.mint_date_confidence || 'low') === 'low'
+  const needsReview = !launchReady || (project.source_confidence || project.mint_date_confidence || 'low') === 'low'
 
   return (
     <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} className="card overflow-hidden p-4">
@@ -543,7 +554,7 @@ function ProjectCard({ project, tab, isAdmin, onOpen, onAdd, onStatus }) {
             {live && <span className="badge badge-green animate-pulse-slow">LIVE NOW</span>}
             <span className="badge badge-cyan">{normalizeChain(project.chain).toUpperCase()}</span>
             <span className={`badge ${confidenceClass(project.source_confidence || project.mint_date_confidence)}`}>{confidenceText(project)}</span>
-            {project.status === 'pending_review' && <span className="badge badge-yellow">Needs Review</span>}
+            {(project.status === 'pending_review' || !launchReady) && <span className="badge badge-yellow">Needs Review</span>}
           </div>
           <h2 className="font-bold truncate">{projectTitle(project)}</h2>
           <p className="text-xs text-muted mt-1 line-clamp-2">{projectSummary(project)}</p>
@@ -569,7 +580,14 @@ function ProjectCard({ project, tab, isAdmin, onOpen, onAdd, onStatus }) {
       </div>
 
       <div className="flex flex-col sm:flex-row gap-2 mt-4">
-        <button onClick={onAdd} className="btn-primary flex-1">Add to MintGuard</button>
+        <button
+          onClick={onAdd}
+          disabled={!eligible}
+          className={`flex-1 ${eligible ? 'btn-primary' : 'btn-ghost opacity-60 cursor-not-allowed'}`}
+          title={eligible ? 'Add this sourced project to MintGuard' : 'Needs real metadata before MintGuard'}
+        >
+          {eligible ? 'Add to MintGuard' : 'Needs Metadata'}
+        </button>
         <button onClick={onOpen} className="btn-ghost flex-1">Details</button>
         {project.source_url && (
           <a href={project.source_url} target="_blank" rel="noreferrer" className="btn-ghost flex items-center justify-center gap-2">
@@ -682,7 +700,9 @@ function Field({ label, value, onChange, placeholder = '', required = false }) {
 }
 
 function DetailDrawer({ project, isAdmin, onClose, onAdd, onStatus }) {
-  const needsReview = (project.source_confidence || project.mint_date_confidence || 'low') === 'low'
+  const eligible = mintGuardEligible(project)
+  const launchReady = isLaunchReadyCalendarProject(project)
+  const needsReview = !launchReady || (project.source_confidence || project.mint_date_confidence || 'low') === 'low'
   return (
     <div className="fixed inset-0 z-50 bg-black/70 flex justify-end" onClick={event => event.target === event.currentTarget && onClose()}>
       <div className="w-full max-w-xl bg-surface border-l border-border h-full overflow-y-auto p-5">
@@ -708,7 +728,7 @@ function DetailDrawer({ project, isAdmin, onClose, onAdd, onStatus }) {
         <div className="space-y-3 text-sm">
           {needsReview && (
             <div className="rounded-lg border border-accent3/30 bg-accent3/10 p-3 text-sm text-accent3">
-              This project needs review. Alpha Hub found onchain activity, but official project metadata is limited.
+              This project needs review. Alpha Hub found activity, but official project metadata is limited. Add an official link or wait for Alchemy/OpenSea enrichment before using MintGuard.
             </div>
           )}
           <Info label="Mint time" value={formatTime(project)} />
@@ -727,7 +747,13 @@ function DetailDrawer({ project, isAdmin, onClose, onAdd, onStatus }) {
         </div>
 
         <div className="flex flex-col sm:flex-row gap-2 mt-6">
-          <button onClick={onAdd} className="btn-primary flex-1">Add to MintGuard</button>
+          <button
+            onClick={onAdd}
+            disabled={!eligible}
+            className={`flex-1 ${eligible ? 'btn-primary' : 'btn-ghost opacity-60 cursor-not-allowed'}`}
+          >
+            {eligible ? 'Add to MintGuard' : 'Needs Metadata'}
+          </button>
           {project.source_url && <a className="btn-ghost flex-1 text-center" href={project.source_url} target="_blank" rel="noreferrer">Open Source</a>}
         </div>
         {isAdmin && (

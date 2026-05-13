@@ -1,4 +1,5 @@
 import { normalizeProject } from '../normalize.js'
+import { isAddressLikeName } from '../../../lib/calendarQuality.js'
 
 const CHAINS = {
   eth: {
@@ -117,7 +118,7 @@ export async function fetchAlchemyProjects({ limit = 12 } = {}) {
         try {
           const json = await fetchContractMetadata(chain, key, contract)
           const meta = pickMetadata(json)
-          if (!meta.name) {
+          if (!meta.name || isAddressLikeName(meta.name)) {
             errors.push(`${chain}:${contract}: metadata missing name`)
             continue
           }

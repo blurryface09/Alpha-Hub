@@ -3,6 +3,7 @@ import { createServiceClient, getBearerToken, isAdminUser, createAnonClient, req
 import { rateLimit, sendRateLimit } from '../_lib/redis.js'
 import { runCalendarSync, getCalendarStatus } from '../../src/server/calendar/sync.js'
 import { normalizeProject } from '../../src/server/calendar/normalize.js'
+import { isRawCalendarDiscovery, mintGuardEligible } from '../../src/lib/calendarQuality.js'
 
 const OPTIONAL_MINTGUARD_FIELDS = [
   'calendar_project_id',
@@ -65,7 +66,7 @@ function shortAddress(address) {
 
 function mintGuardName(project) {
   const name = String(project?.name || '').trim()
-  if (name && !name.toLowerCase().startsWith('detected mint 0x')) return name
+  if (name && !isRawCalendarDiscovery({ ...project, name })) return name
   if (project?.contract_address) return `NFT Contract ${shortAddress(project.contract_address)}`
   return 'Calendar Mint Project'
 }
@@ -212,6 +213,12 @@ export default async function handler(req, res) {
     if (projectError || !project) return res.status(404).json({ ok: false, error: 'Calendar project not found' })
     if (!['approved', 'live', 'ended', 'pending_review'].includes(project.status)) {
       return res.status(400).json({ ok: false, error: 'This project is not available for MintGuard' })
+    }
+    if (!mintGuardEligible(project)) {
+      return res.status(400).json({
+        ok: false,
+        error: 'This project needs real metadata before it can be added to MintGuard',
+      })
     }
 
     const chain = normalizeChain(project.chain)

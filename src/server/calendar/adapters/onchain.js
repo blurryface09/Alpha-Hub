@@ -123,7 +123,7 @@ export async function fetchOnchainProjects({ limit = 20 } = {}) {
             : `Alpha Hub detected live NFT mint activity from this contract. Project metadata was not available from the contract, so verify the official source before tracking.`,
           mint_count: mintCount,
           holder_count: metadata.totalSupply,
-          status: hasName ? 'live' : 'pending_review',
+          status: 'pending_review',
           source_confidence: hasName ? 'medium' : 'low',
           mint_date: new Date().toISOString(),
           mint_date_source: 'onchain.mint_activity',

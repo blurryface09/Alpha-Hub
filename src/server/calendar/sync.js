@@ -4,6 +4,7 @@ import { fetchOpenSeaProjects } from './adapters/opensea.js'
 import { fetchAlchemyProjects } from './adapters/alchemy.js'
 import { fetchZoraProjects } from './adapters/zora.js'
 import { fetchOnchainProjects } from './adapters/onchain.js'
+import { isRawCalendarDiscovery } from '../../lib/calendarQuality.js'
 
 const ADAPTERS = {
   opensea: fetchOpenSeaProjects,
@@ -73,6 +74,27 @@ async function upsertProject(supabase, project) {
   return 'imported'
 }
 
+async function downgradeWeakDiscoveryRows(supabase) {
+  const { data } = await supabase
+    .from('calendar_projects')
+    .select('id,name,source,status,source_confidence,image_url,website_url,mint_url,source_url')
+    .in('source', ['opensea', 'onchain'])
+    .in('status', ['approved', 'live'])
+    .limit(200)
+
+  const weakIds = (data || [])
+    .filter(row => row.source === 'onchain' || isRawCalendarDiscovery(row))
+    .map(row => row.id)
+
+  if (!weakIds.length) return 0
+  const { error } = await supabase
+    .from('calendar_projects')
+    .update({ status: 'pending_review', updated_at: new Date().toISOString() })
+    .in('id', weakIds)
+  if (error) throw error
+  return weakIds.length
+}
+
 export async function runCalendarSync(supabase, { sources = Object.keys(ADAPTERS), limit = 12 } = {}) {
   const summary = {
     ok: true,
@@ -125,6 +147,12 @@ export async function runCalendarSync(supabase, { sources = Object.keys(ADAPTERS
         finished_at: new Date().toISOString(),
       })
     } catch {}
+  }
+
+  try {
+    summary.downgradedForReview = await downgradeWeakDiscoveryRows(supabase)
+  } catch (error) {
+    summary.cleanupError = error.message
   }
 
   return summary
