@@ -6,7 +6,7 @@ import {
 } from 'lucide-react'
 import toast from 'react-hot-toast'
 import { useAccount } from 'wagmi'
-import { supabase, directInsert, getAuthToken } from '../lib/supabase'
+import { supabase, getAuthToken } from '../lib/supabase'
 import { useAuthStore } from '../store'
 import { useSubscription } from '../hooks/useSubscription'
 import { friendlyError } from '../lib/errors'
@@ -53,6 +53,9 @@ function isLive(project) {
 }
 
 function tabFilter(project, tab) {
+  const rawOnchain = project.source === 'onchain' &&
+    (project.source_confidence === 'low' || (!project.image_url && !project.website_url && !project.mint_url && !project.source_url))
+  if (rawOnchain && tab !== 'new-contracts') return false
   if (tab === 'minting-now') return isLive(project)
   if (tab === 'new-contracts') return project.source === 'onchain' || !project.mint_date || project.status === 'pending_review'
   if (tab === 'hidden-gems') return (project.hidden_gem_score || 0) >= (project.hype_score || 0) || (project.hype_score || 0) < 45
@@ -351,40 +354,22 @@ export default function CalendarPage() {
       toast.error('Sign in again before adding to MintGuard.')
       return
     }
+    toast.loading('Adding to MintGuard...', { id: 'calendar-add' })
     try {
-      const mintGuardProject = {
-        user_id: user.id,
-        name: project.name,
-        source_url: project.mint_url || project.source_url || project.website_url || null,
-        source_type: 'calendar',
-        calendar_project_id: project.id,
-        chain: normalizeChain(project.chain),
-        contract_address: project.contract_address || null,
-        mint_date: project.mint_date || null,
-        mint_price: project.mint_price || null,
-        wl_type: String(project.mint_type || 'UNKNOWN').toUpperCase(),
-        mint_mode: 'confirm',
-        automint_enabled: false,
-        max_mint: 1,
-        gas_limit: 200000,
-        mint_time_source: project.mint_date_source || project.source || 'calendar',
-        mint_time_confidence: project.mint_date_confidence || project.source_confidence || 'low',
-        mint_time_confirmed: Boolean(project.mint_time_confirmed),
-        mint_time_confirmed_at: project.mint_time_confirmed ? new Date().toISOString() : null,
-        notes: `Added from Alpha Hub Calendar. Confidence: ${project.source_confidence || 'low'}. Confirm official mint time before Auto Beta.`,
-        status: isLive(project) ? 'live' : 'upcoming',
-      }
-      try {
-        await directInsert('wl_projects', mintGuardProject)
-      } catch (schemaError) {
-        if (!String(schemaError.message || '').toLowerCase().includes('schema')) throw schemaError
-        const fallbackProject = { ...mintGuardProject }
-        delete fallbackProject.calendar_project_id
-        await directInsert('wl_projects', fallbackProject)
-      }
-      toast.success('Added to MintGuard in Confirm Mode.')
+      const token = await getAuthToken()
+      const res = await fetch('/api/calendar/add-to-mintguard', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
+        body: JSON.stringify({ projectId: project.id }),
+      })
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok || data?.ok === false) throw new Error(data.error || 'Could not add this project to MintGuard')
+      toast.success('Added to MintGuard in Confirm Mode.', { id: 'calendar-add' })
     } catch (error) {
-      toast.error(friendlyError(error, 'Could not add this project to MintGuard.'))
+      toast.error(friendlyError(error, 'Could not add this project to MintGuard.'), { id: 'calendar-add' })
     }
   }
 
@@ -481,11 +466,11 @@ export default function CalendarPage() {
       ) : visibleProjects.length === 0 ? (
         <div className="card flex flex-col items-center justify-center py-16 text-center">
           <Sparkles size={32} className="text-muted mb-3" />
-          <h2 className="text-base font-bold">No approved calendar projects yet</h2>
+          <h2 className="text-base font-bold">No verified project listings yet</h2>
           <p className="text-sm text-muted mt-2 max-w-md">
             {calendarNotReady
               ? 'Calendar storage is not ready yet. Apply the Calendar SQL migration in Supabase before syncing real projects.'
-              : 'No real sourced projects were found for this tab yet. Submit an official project link or run a calendar sync.'}
+              : 'OpenSea, Reservoir, or Zora source data is needed for curated project listings. Raw onchain contracts only appear under New Contracts for review.'}
           </p>
           <div className="flex flex-col sm:flex-row gap-2 mt-4">
             {isAdmin && !calendarNotReady && <button onClick={runSync} disabled={syncing} className="btn-primary text-xs">{syncing ? 'Syncing...' : 'Run Sync Now'}</button>}

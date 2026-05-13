@@ -4,6 +4,20 @@ import { rateLimit, sendRateLimit } from '../_lib/redis.js'
 import { runCalendarSync, getCalendarStatus } from '../../src/server/calendar/sync.js'
 import { normalizeProject } from '../../src/server/calendar/normalize.js'
 
+const OPTIONAL_MINTGUARD_FIELDS = [
+  'calendar_project_id',
+  'automint_enabled',
+  'max_mint_price',
+  'max_gas_fee',
+  'max_total_spend',
+  'mint_time_source',
+  'mint_time_confidence',
+  'mint_time_confirmed',
+  'mint_time_confirmed_at',
+  'execution_status',
+  'notes',
+]
+
 function calendarSchemaMissingResponse() {
   return {
     ok: false,
@@ -24,6 +38,78 @@ function isCalendarSchemaError(error) {
     message.includes('relation') ||
     message.includes('does not exist')
   )
+}
+
+function isWriteShapeError(error) {
+  const message = String(error?.message || error || '').toLowerCase()
+  return (
+    message.includes('schema cache') ||
+    message.includes('column') ||
+    message.includes('check constraint') ||
+    message.includes('violates') ||
+    message.includes('null value')
+  )
+}
+
+function normalizeChain(chain) {
+  const value = String(chain || 'eth').toLowerCase()
+  if (value.includes('base')) return 'base'
+  if (value.includes('bnb') || value.includes('bsc')) return 'bnb'
+  return 'eth'
+}
+
+function shortAddress(address) {
+  if (!address) return ''
+  return `${String(address).slice(0, 6)}...${String(address).slice(-4)}`
+}
+
+function mintGuardName(project) {
+  const name = String(project?.name || '').trim()
+  if (name && !name.toLowerCase().startsWith('detected mint 0x')) return name
+  if (project?.contract_address) return `NFT Contract ${shortAddress(project.contract_address)}`
+  return 'Calendar Mint Project'
+}
+
+async function insertMintGuardProject(supabase, payload) {
+  const attempts = []
+  attempts.push(payload)
+
+  const withoutOptional = { ...payload }
+  OPTIONAL_MINTGUARD_FIELDS.forEach(field => delete withoutOptional[field])
+  attempts.push(withoutOptional)
+
+  attempts.push({
+    user_id: payload.user_id,
+    name: payload.name,
+    source_url: payload.source_url,
+    source_type: payload.source_type,
+    chain: payload.chain,
+    contract_address: payload.contract_address,
+    mint_date: payload.mint_date,
+    mint_price: payload.mint_price,
+    wl_type: payload.wl_type,
+    status: payload.status,
+  })
+
+  attempts.push({
+    user_id: payload.user_id,
+    name: payload.name,
+    source_url: payload.source_url,
+    source_type: payload.source_type,
+    chain: payload.chain,
+    status: payload.status,
+  })
+
+  let lastError = null
+  for (const attempt of attempts) {
+    const clean = Object.fromEntries(Object.entries(attempt).filter(([, value]) => value !== undefined))
+    const { data, error } = await supabase.from('wl_projects').insert(clean).select().single()
+    if (!error) return data
+    lastError = error
+    if (!isWriteShapeError(error)) break
+  }
+
+  throw lastError || new Error('Could not add project to MintGuard')
 }
 
 async function getOptionalUser(req) {
@@ -106,6 +192,62 @@ export default async function handler(req, res) {
     const { data, error } = await supabase.from('calendar_projects').insert(row).select().single()
     if (error) return res.status(500).json({ ok: false, error: 'Could not submit calendar project' })
     return res.status(200).json({ ok: true, project: data })
+  }
+
+  if (action === 'add-to-mintguard') {
+    if (req.method !== 'POST') return res.status(405).json({ ok: false, error: 'Method not allowed' })
+    const user = await requireUser(req, res)
+    if (!user) return
+
+    const { projectId } = req.body || {}
+    if (!projectId) return res.status(400).json({ ok: false, error: 'Project is required' })
+
+    const supabase = createServiceClient()
+    const { data: project, error: projectError } = await supabase
+      .from('calendar_projects')
+      .select('*')
+      .eq('id', projectId)
+      .single()
+
+    if (projectError || !project) return res.status(404).json({ ok: false, error: 'Calendar project not found' })
+    if (!['approved', 'live', 'ended', 'pending_review'].includes(project.status)) {
+      return res.status(400).json({ ok: false, error: 'This project is not available for MintGuard' })
+    }
+
+    const chain = normalizeChain(project.chain)
+    const payload = {
+      user_id: user.id,
+      name: mintGuardName(project),
+      source_url: project.mint_url || project.source_url || project.website_url || null,
+      source_type: project.source === 'onchain' ? 'contract' : 'calendar',
+      calendar_project_id: project.id,
+      chain,
+      contract_address: project.contract_address || null,
+      mint_date: project.mint_date || null,
+      mint_price: project.mint_price || null,
+      wl_type: String(project.mint_type || 'PUBLIC').toUpperCase(),
+      mint_mode: 'confirm',
+      automint_enabled: false,
+      max_mint: 1,
+      gas_limit: 200000,
+      mint_time_source: project.mint_date_source || project.source || 'calendar',
+      mint_time_confidence: project.mint_date_confidence || project.source_confidence || 'low',
+      mint_time_confirmed: Boolean(project.mint_time_confirmed),
+      mint_time_confirmed_at: project.mint_time_confirmed ? new Date().toISOString() : null,
+      execution_status: 'queued',
+      notes: project.source === 'onchain'
+        ? 'Added from Alpha Hub Calendar onchain discovery. Verify official links before Auto Beta.'
+        : 'Added from Alpha Hub Calendar in Confirm Mode.',
+      status: project.status === 'live' ? 'live' : 'upcoming',
+    }
+
+    try {
+      const row = await insertMintGuardProject(supabase, payload)
+      return res.status(200).json({ ok: true, project: row })
+    } catch (error) {
+      console.error('calendar add-to-mintguard failed:', error)
+      return res.status(500).json({ ok: false, error: 'Could not add this project to MintGuard' })
+    }
   }
 
   if (action === 'moderate') {
