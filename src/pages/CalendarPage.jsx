@@ -1,5 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react'
-import { motion } from 'framer-motion'
+import React, { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   CalendarDays, Clock, ExternalLink, Gem, Loader, Plus, Radar, Share2,
   Search, Shield, Sparkles, TrendingUp, Zap
@@ -220,15 +219,15 @@ export default function CalendarPage() {
   })
   const calendarNotReady = schemaMissing || status?.schemaMissing
 
-  const fetchProjects = useCallback(async () => {
-    setLoading(true)
+  const fetchProjects = useCallback(async ({ silent = false } = {}) => {
+    if (!silent) setLoading(true)
     try {
       let request = supabase
         .from('calendar_projects')
         .select('*')
         .in('status', isAdmin ? ['pending_review', 'approved', 'live', 'ended'] : ['approved', 'live'])
         .order('last_seen_at', { ascending: false, nullsFirst: false })
-        .limit(80)
+        .limit(isAdmin ? 60 : 36)
 
       const { data, error } = await request
       if (error) {
@@ -244,9 +243,9 @@ export default function CalendarPage() {
       setProjects(mergeLocalRatings(data || []))
     } catch (error) {
       toast.error(friendlyError(error, 'Calendar could not refresh.'))
-      setProjects([])
+      if (!silent) setProjects([])
     } finally {
-      setLoading(false)
+      if (!silent) setLoading(false)
     }
   }, [isAdmin, shareCode])
 
@@ -266,8 +265,14 @@ export default function CalendarPage() {
     fetchStatus()
   }, [fetchProjects, fetchStatus])
 
+  const lastResumeRefresh = useRef(0)
+
   useEffect(() => {
-    const refreshOnResume = () => fetchProjects()
+    const refreshOnResume = () => {
+      if (Date.now() - lastResumeRefresh.current < 5 * 60 * 1000) return
+      lastResumeRefresh.current = Date.now()
+      fetchProjects({ silent: true })
+    }
     window.addEventListener('alphahub:resume', refreshOnResume)
     return () => window.removeEventListener('alphahub:resume', refreshOnResume)
   }, [fetchProjects])
@@ -712,7 +717,7 @@ export default function CalendarPage() {
   )
 }
 
-function ProjectCard({ project, tab, isAdmin, onOpen, onAdd, onSave, onStatus, onRate, onShare, ratingBusy }) {
+const ProjectCard = memo(function ProjectCard({ project, tab, isAdmin, onOpen, onAdd, onSave, onStatus, onRate, onShare, ratingBusy }) {
   const live = isLive(project)
   const launchReady = isLaunchReadyCalendarProject(project)
   const quality = Number(project.quality_score || calendarQualityScore(project))
@@ -727,7 +732,7 @@ function ProjectCard({ project, tab, isAdmin, onOpen, onAdd, onSave, onStatus, o
   const needsReview = !launchReady || (project.source_confidence || project.mint_date_confidence || 'low') === 'low'
 
   return (
-    <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} className="card overflow-hidden p-4 hover:border-accent/40 hover:-translate-y-0.5 transition-all duration-200">
+    <div className="card overflow-hidden p-4 hover:border-accent/40 hover:-translate-y-0.5 transition-all duration-200">
       {project.image_url && (
         <div className="mb-4 aspect-[16/7] overflow-hidden rounded-2xl border border-border bg-surface2">
           <img src={project.image_url} alt={projectTitle(project)} className="h-full w-full object-cover" loading="lazy" />
@@ -801,9 +806,9 @@ function ProjectCard({ project, tab, isAdmin, onOpen, onAdd, onSave, onStatus, o
           <button onClick={() => onStatus('hidden')} className="btn-danger text-xs flex-1">Hide</button>
         </div>
       )}
-    </motion.div>
+    </div>
   )
-}
+})
 
 function RatingControl({ rating, ratingCount, onRate, busy }) {
   return (
