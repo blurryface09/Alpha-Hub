@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react'
 import { motion } from 'framer-motion'
 import { useNavigate } from 'react-router-dom'
+import { useAccount } from 'wagmi'
 import { Radar, Plus, Trash2, Eye, Sparkles } from 'lucide-react'
 import toast from 'react-hot-toast'
 import { supabase } from '../lib/supabase'
@@ -20,6 +21,7 @@ const EXPLORER_HOSTS = {
 export default function WhaleRadarPage() {
   const navigate = useNavigate()
   const { user } = useAuthStore()
+  const { address, isConnected } = useAccount()
   const { activity, fetch: fetchActivity, subscribe } = useWhaleStore()
   const { plan, limits, hasAccess, refresh } = useSubscription()
   const [watchlist, setWatchlist] = useState([])
@@ -27,7 +29,8 @@ export default function WhaleRadarPage() {
   const [showAddModal, setShowAddModal] = useState(false)
   const [activeChain, setActiveChain] = useState('all')
   const [upgradeRequired, setUpgradeRequired] = useState(false)
-  const isAdmin = plan === 'admin'
+  const ADMIN_WALLET = import.meta.env.VITE_ADMIN_WALLET?.toLowerCase()
+  const isAdmin = isConnected && address?.toLowerCase() === ADMIN_WALLET
 
   const fetchWatchlist = useCallback(async () => {
     if (!user) return
@@ -243,7 +246,10 @@ export default function WhaleRadarPage() {
           <div className="card">
             <div className="section-label">Watchlist ({watchlist.length})</div>
             {loading ? (
-              <div className="flex justify-center py-8"><div className="spinner" /></div>
+              <div className="flex flex-col items-center justify-center py-8 text-center">
+                <div className="alpha-loader scale-75" />
+                <p className="mt-2 text-xs text-muted">Loading watched wallets...</p>
+              </div>
             ) : watchlist.length === 0 ? (
               <div className="text-center py-8">
                 <Sparkles size={28} className="text-accent mx-auto mb-2" />

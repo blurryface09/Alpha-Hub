@@ -92,6 +92,37 @@ function mintGuardName(project) {
   return 'Calendar Mint Project'
 }
 
+function calendarMintTypeToWlType(value) {
+  const type = String(value || '').toLowerCase()
+  if (type.includes('allow') || type.includes('white')) return 'WL'
+  if (type.includes('free')) return 'FREE'
+  return 'PUBLIC'
+}
+
+async function saveRatingWithAggregateFallback(supabase, projectId, numericRating) {
+  const { data: project, error: loadError } = await supabase
+    .from('calendar_projects')
+    .select('rating_avg,rating_count')
+    .eq('id', projectId)
+    .single()
+  if (loadError) throw loadError
+
+  const currentCount = Number(project?.rating_count || 0)
+  const currentAvg = Number(project?.rating_avg || 0)
+  const nextCount = currentCount + 1
+  const nextAvg = ((currentAvg * currentCount) + numericRating) / nextCount
+  const { error: updateError } = await supabase
+    .from('calendar_projects')
+    .update({
+      rating_avg: Number(nextAvg.toFixed(2)),
+      rating_count: nextCount,
+      updated_at: new Date().toISOString(),
+    })
+    .eq('id', projectId)
+  if (updateError) throw updateError
+  return { ratingAvg: Number(nextAvg.toFixed(2)), ratingCount: nextCount, localOnly: true }
+}
+
 async function insertMintGuardProject(supabase, payload) {
   const attempts = []
   attempts.push(payload)
@@ -249,7 +280,17 @@ export default async function handler(req, res) {
     const { error } = await supabase
       .from('calendar_project_ratings')
       .upsert(payload, { onConflict: 'project_id,user_id' })
-    if (error) return res.status(500).json({ ok: false, error: 'Could not save rating' })
+    if (error) {
+      if (isWriteShapeError(error) || isCalendarSchemaError(error)) {
+        try {
+          const fallback = await saveRatingWithAggregateFallback(supabase, projectId, numericRating)
+          return res.status(200).json({ ok: true, ...fallback })
+        } catch (fallbackError) {
+          console.error('calendar rating fallback failed:', fallbackError)
+        }
+      }
+      return res.status(500).json({ ok: false, error: 'Could not save rating' })
+    }
 
     const { data: ratings } = await supabase
       .from('calendar_project_ratings')
@@ -337,7 +378,7 @@ export default async function handler(req, res) {
       contract_address: project.contract_address || null,
       mint_date: project.mint_date || null,
       mint_price: project.mint_price || null,
-      wl_type: String(project.mint_type || 'PUBLIC').toUpperCase(),
+      wl_type: calendarMintTypeToWlType(project.mint_type),
       mint_mode: 'confirm',
       automint_enabled: false,
       max_mint: 1,

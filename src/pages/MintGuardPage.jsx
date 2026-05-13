@@ -516,8 +516,9 @@ export default function MintGuardPage() {
 
       {/* Projects list */}
       {loading ? (
-        <div className="flex items-center justify-center py-16">
-          <div className="spinner" />
+        <div className="flex flex-col items-center justify-center py-16 text-center">
+          <div className="alpha-loader" />
+          <p className="mt-4 text-sm text-muted">Preparing your mint radar...</p>
         </div>
       ) : filtered.length === 0 ? (
         <div className="empty-state">

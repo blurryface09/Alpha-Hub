@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react'
 import { motion } from 'framer-motion'
 import {
-  CalendarDays, Clock, ExternalLink, Gem, Loader, Plus, Radar,
+  CalendarDays, Clock, ExternalLink, Gem, Loader, Plus, Radar, Share2,
   Search, Shield, Sparkles, TrendingUp, Zap
 } from 'lucide-react'
 import toast from 'react-hot-toast'
@@ -127,6 +127,21 @@ function confidenceText(project) {
   return 'Needs review'
 }
 
+function shareUrl(project) {
+  const code = project.share_code || project.share_slug || project.id
+  return `${window.location.origin}/calendar/${encodeURIComponent(code)}`
+}
+
+async function copyShare(project) {
+  const url = shareUrl(project)
+  try {
+    await navigator.clipboard?.writeText(url)
+    toast.success('Share link copied.')
+  } catch {
+    toast.error('Could not copy link. Long-press and copy from details.')
+  }
+}
+
 function timeAgo(value) {
   if (!value) return 'never'
   const diff = Date.now() - new Date(value).getTime()
@@ -154,6 +169,7 @@ export default function CalendarPage() {
   const [submitOpen, setSubmitOpen] = useState(false)
   const [submitting, setSubmitting] = useState(false)
   const [selectedProject, setSelectedProject] = useState(null)
+  const [ratingBusy, setRatingBusy] = useState(null)
   const [query, setQuery] = useState('')
   const [chain, setChain] = useState('all')
   const [form, setForm] = useState({
@@ -400,6 +416,11 @@ export default function CalendarPage() {
   }
 
   const rateProject = async (project, rating) => {
+    if (!user?.id) {
+      toast.error('Sign in to rate projects.')
+      return
+    }
+    setRatingBusy(project.id)
     try {
       const token = await getAuthToken()
       const res = await fetch('/api/calendar/rate', {
@@ -412,10 +433,25 @@ export default function CalendarPage() {
       })
       const data = await res.json().catch(() => ({}))
       if (!res.ok || data?.ok === false) throw new Error(data.error || 'Could not save rating')
-      toast.success('Rating saved.')
-      fetchProjects()
+      setProjects(prev => prev.map(item => item.id === project.id
+        ? {
+            ...item,
+            rating_avg: data.ratingAvg ?? rating,
+            rating_count: data.ratingCount ?? Math.max(1, Number(item.rating_count || 0)),
+          }
+        : item))
+      setSelectedProject(prev => prev?.id === project.id
+        ? {
+            ...prev,
+            rating_avg: data.ratingAvg ?? rating,
+            rating_count: data.ratingCount ?? Math.max(1, Number(prev.rating_count || 0)),
+          }
+        : prev)
+      toast.success(data.localOnly ? 'Rating saved with fallback storage.' : 'Rating saved.')
     } catch (error) {
       toast.error(friendlyError(error, 'Could not save rating.'))
+    } finally {
+      setRatingBusy(null)
     }
   }
 
@@ -472,10 +508,12 @@ export default function CalendarPage() {
                 Clean low-quality rows
               </button>
             )}
-            <button onClick={() => setSubmitOpen(true)} className="btn-primary flex items-center justify-center gap-2">
-              <Plus size={15} />
-              Add Alpha
-            </button>
+            {isAdmin && (
+              <button onClick={() => setSubmitOpen(true)} className="btn-primary flex items-center justify-center gap-2">
+                <Plus size={15} />
+                Add Alpha
+              </button>
+            )}
           </div>
         </div>
       </div>
@@ -535,8 +573,9 @@ export default function CalendarPage() {
       </div>
 
       {loading ? (
-        <div className="flex items-center justify-center py-16">
-          <Loader size={22} className="animate-spin text-accent" />
+        <div className="flex flex-col items-center justify-center py-16 text-center">
+          <div className="alpha-loader" />
+          <p className="mt-4 text-sm text-muted">Scanning fresh alpha...</p>
         </div>
       ) : visibleProjects.length === 0 ? (
         <div className="card flex flex-col items-center justify-center py-16 text-center">
@@ -550,7 +589,7 @@ export default function CalendarPage() {
           <div className="flex flex-col sm:flex-row gap-2 mt-4">
             {isAdmin && !calendarNotReady && <button onClick={runSync} disabled={syncing} className="btn-primary text-xs">{syncing ? 'Syncing...' : 'Run Sync Now'}</button>}
             {isAdmin && calendarNotReady && <button disabled className="btn-ghost text-xs">Install Calendar SQL First</button>}
-            <button onClick={() => setSubmitOpen(true)} className="btn-ghost text-xs">Submit Project</button>
+            {isAdmin && <button onClick={() => setSubmitOpen(true)} className="btn-ghost text-xs">Add Alpha</button>}
           </div>
         </div>
       ) : (
@@ -565,6 +604,8 @@ export default function CalendarPage() {
               onAdd={() => addToMintGuard(project)}
               onStatus={status => updateStatus(project, status)}
               onRate={rating => rateProject(project, rating)}
+              onShare={() => copyShare(project)}
+              ratingBusy={ratingBusy === project.id}
             />
           ))}
         </div>
@@ -589,13 +630,15 @@ export default function CalendarPage() {
           onAdd={() => addToMintGuard(selectedProject)}
           onStatus={status => updateStatus(selectedProject, status)}
           onRate={rating => rateProject(selectedProject, rating)}
+          onShare={() => copyShare(selectedProject)}
+          ratingBusy={ratingBusy === selectedProject.id}
         />
       )}
     </div>
   )
 }
 
-function ProjectCard({ project, tab, isAdmin, onOpen, onAdd, onStatus, onRate }) {
+function ProjectCard({ project, tab, isAdmin, onOpen, onAdd, onStatus, onRate, onShare, ratingBusy }) {
   const live = isLive(project)
   const eligible = mintGuardEligible(project)
   const launchReady = isLaunchReadyCalendarProject(project)
@@ -611,7 +654,12 @@ function ProjectCard({ project, tab, isAdmin, onOpen, onAdd, onStatus, onRate })
   const needsReview = !launchReady || (project.source_confidence || project.mint_date_confidence || 'low') === 'low'
 
   return (
-    <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} className="card overflow-hidden p-4">
+    <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} className="card overflow-hidden p-4 hover:border-accent/40 hover:-translate-y-0.5 transition-all duration-200">
+      {project.image_url && (
+        <div className="mb-4 aspect-[16/7] overflow-hidden rounded-2xl border border-border bg-surface2">
+          <img src={project.image_url} alt={projectTitle(project)} className="h-full w-full object-cover" loading="lazy" />
+        </div>
+      )}
       <div className="flex items-start gap-4">
         <div className="w-14 h-14 rounded-lg bg-surface2 border border-border overflow-hidden flex items-center justify-center shrink-0">
           {project.image_url ? (
@@ -652,25 +700,14 @@ function ProjectCard({ project, tab, isAdmin, onOpen, onAdd, onStatus, onRate })
         {needsReview && <span className="text-accent3">Verify official links before minting</span>}
       </div>
 
-      <div className="mt-3 flex items-center gap-1 text-xs">
-        {[1, 2, 3, 4, 5].map(value => (
-          <button key={value} onClick={() => onRate?.(value)} className="text-accent3 hover:text-accent">
-            {value <= Math.round(rating) ? '★' : '☆'}
-          </button>
-        ))}
-        <span className="text-muted ml-1">{ratingCount ? `${ratingCount} votes` : 'Rate project'}</span>
-      </div>
+      <RatingControl rating={rating} ratingCount={ratingCount} onRate={onRate} busy={ratingBusy} />
 
       <div className="flex flex-col sm:flex-row gap-2 mt-4">
-        <button
-          onClick={onAdd}
-          disabled={!eligible}
-          className={`flex-1 ${eligible ? 'btn-primary' : 'btn-ghost opacity-60 cursor-not-allowed'}`}
-          title={eligible ? 'Add this sourced project to MintGuard' : 'Needs real metadata before MintGuard'}
-        >
-          {eligible ? 'Add to MintGuard' : 'Needs Metadata'}
+        <button onClick={onOpen} className="btn-primary flex-1">View Details</button>
+        <button onClick={onShare} className="btn-ghost flex-1 flex items-center justify-center gap-2">
+          <Share2 size={14} />
+          Share
         </button>
-        <button onClick={onOpen} className="btn-ghost flex-1">Details</button>
         {project.source_url && (
           <a href={project.source_url} target="_blank" rel="noreferrer" className="btn-ghost flex items-center justify-center gap-2">
             <ExternalLink size={13} />
@@ -680,12 +717,51 @@ function ProjectCard({ project, tab, isAdmin, onOpen, onAdd, onStatus, onRate })
 
       {isAdmin && (
         <div className="flex gap-2 mt-3">
+          <button
+            onClick={onAdd}
+            disabled={!eligible}
+            className={`btn-ghost text-xs flex-1 ${eligible ? '' : 'opacity-60 cursor-not-allowed'}`}
+            title={eligible ? 'Add this sourced project to MintGuard' : 'Needs real metadata before MintGuard'}
+          >
+            Track
+          </button>
           <button onClick={() => onStatus('approved')} className="btn-ghost text-xs flex-1">Approve</button>
           <button onClick={() => onStatus('live')} className="btn-ghost text-xs flex-1">Mark Live</button>
           <button onClick={() => onStatus('hidden')} className="btn-danger text-xs flex-1">Hide</button>
         </div>
       )}
     </motion.div>
+  )
+}
+
+function RatingControl({ rating, ratingCount, onRate, busy }) {
+  return (
+    <div className="mt-3 rounded-2xl border border-border bg-surface2/80 px-3 py-2">
+      <div className="flex items-center justify-between gap-3">
+        <div className="flex items-center gap-1" aria-label="Project rating">
+          {[1, 2, 3, 4, 5].map(value => {
+            const active = value <= Math.round(rating)
+            return (
+              <button
+                key={value}
+                onClick={() => onRate?.(value)}
+                disabled={busy}
+                className={`text-xl leading-none transition-all hover:scale-125 active:scale-95 disabled:opacity-60 ${
+                  active ? 'text-accent3 drop-shadow-[0_0_8px_rgba(255,184,77,0.35)]' : 'text-muted2 hover:text-accent3'
+                }`}
+                title={`Rate ${value} star${value > 1 ? 's' : ''}`}
+              >
+                ★
+              </button>
+            )
+          })}
+        </div>
+        <div className="text-right">
+          <div className="text-xs font-semibold text-text">{ratingCount ? `${Number(rating).toFixed(1)}/5` : 'New'}</div>
+          <div className="text-[10px] text-muted">{busy ? 'Saving...' : ratingCount ? `${ratingCount} vote${ratingCount === 1 ? '' : 's'}` : 'Tap to rate'}</div>
+        </div>
+      </div>
+    </div>
   )
 }
 
@@ -791,7 +867,7 @@ function Field({ label, value, onChange, placeholder = '', required = false }) {
   )
 }
 
-function DetailDrawer({ project, isAdmin, onClose, onAdd, onStatus, onRate }) {
+function DetailDrawer({ project, isAdmin, onClose, onAdd, onStatus, onRate, onShare, ratingBusy }) {
   const eligible = mintGuardEligible(project)
   const launchReady = isLaunchReadyCalendarProject(project)
   const needsReview = !launchReady || (project.source_confidence || project.mint_date_confidence || 'low') === 'low'
@@ -800,7 +876,17 @@ function DetailDrawer({ project, isAdmin, onClose, onAdd, onStatus, onRate }) {
   const ratingCount = Number(project.rating_count || 0)
   return (
     <div className="fixed inset-0 z-50 bg-black/70 flex justify-end" onClick={event => event.target === event.currentTarget && onClose()}>
-      <div className="w-full max-w-xl bg-surface border-l border-border h-full overflow-y-auto p-5">
+      <div className="w-full max-w-2xl bg-surface border-l border-border h-full overflow-y-auto">
+        {project.image_url ? (
+          <div className="h-52 bg-surface2">
+            <img src={project.image_url} alt={projectTitle(project)} className="h-full w-full object-cover" />
+          </div>
+        ) : (
+          <div className="h-36 bg-gradient-to-br from-accent/20 via-purple/10 to-accent2/10 flex items-center justify-center">
+            <Sparkles size={36} className="text-accent" />
+          </div>
+        )}
+        <div className="p-5">
         <div className="flex items-start justify-between gap-4 mb-5">
           <div>
             <div className="flex flex-wrap items-center gap-2 mb-2">
@@ -822,14 +908,7 @@ function DetailDrawer({ project, isAdmin, onClose, onAdd, onStatus, onRate }) {
 
         <div className="rounded-lg border border-border bg-surface2 p-3 mb-4">
           <div className="section-label mb-2">Community Rating</div>
-          <div className="flex items-center gap-2">
-            {[1, 2, 3, 4, 5].map(value => (
-              <button key={value} onClick={() => onRate?.(value)} className="text-accent3 hover:text-accent">
-                {value <= Math.round(rating) ? '★' : '☆'}
-              </button>
-            ))}
-            <span className="text-sm text-muted">{ratingCount ? `${ratingCount} votes` : 'Be first to rate'}</span>
-          </div>
+          <RatingControl rating={rating} ratingCount={ratingCount} onRate={onRate} busy={ratingBusy} />
         </div>
 
         <div className="space-y-3 text-sm">
@@ -856,13 +935,19 @@ function DetailDrawer({ project, isAdmin, onClose, onAdd, onStatus, onRate }) {
         </div>
 
         <div className="flex flex-col sm:flex-row gap-2 mt-6">
-          <button
-            onClick={onAdd}
-            disabled={!eligible}
-            className={`flex-1 ${eligible ? 'btn-primary' : 'btn-ghost opacity-60 cursor-not-allowed'}`}
-          >
-            {eligible ? 'Add to MintGuard' : 'Needs Metadata'}
+          <button onClick={onShare} className="btn-primary flex-1 flex items-center justify-center gap-2">
+            <Share2 size={14} />
+            Copy Share Link
           </button>
+          {isAdmin && (
+            <button
+              onClick={onAdd}
+              disabled={!eligible}
+              className={`flex-1 ${eligible ? 'btn-ghost' : 'btn-ghost opacity-60 cursor-not-allowed'}`}
+            >
+              {eligible ? 'Track in My Mints' : 'Needs Metadata'}
+            </button>
+          )}
           {project.source_url && <a className="btn-ghost flex-1 text-center" href={project.source_url} target="_blank" rel="noreferrer">Open Source</a>}
         </div>
         {isAdmin && (
@@ -871,6 +956,7 @@ function DetailDrawer({ project, isAdmin, onClose, onAdd, onStatus, onRate }) {
             <button onClick={() => onStatus('rejected')} className="btn-danger text-xs flex-1">Reject</button>
           </div>
         )}
+        </div>
       </div>
     </div>
   )
