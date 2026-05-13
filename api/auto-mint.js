@@ -467,23 +467,27 @@ export default async function handler(req, res) {
         confirmed_at: nowIso(),
       })
 
-      await supabase.from('mint_log').insert({
-        user_id: project.user_id,
-        project_id: project.id,
-        wallet_address: walletRow.wallet_address,
-        chain: project.chain || 'eth',
-        tx_hash: txHash,
-        status: 'success',
-        executed_at: new Date().toISOString(),
-      }).then(() => {}).catch(() => {})
+      try {
+        await supabase.from('mint_log').insert({
+          user_id: project.user_id,
+          project_id: project.id,
+          wallet_address: walletRow.wallet_address,
+          chain: project.chain || 'eth',
+          tx_hash: txHash,
+          status: 'success',
+          executed_at: new Date().toISOString(),
+        })
+      } catch {}
 
-      await supabase.from('notifications').insert({
-        user_id: project.user_id,
-        type: 'mint_success',
-        title: `✅ Auto-Mint Success — ${project.name}`,
-        message: `Transaction confirmed on-chain. TX: ${txHash.slice(0, 18)}...`,
-        data: { tx_hash: txHash, project_id: project.id },
-      }).then(() => {}).catch(() => {})
+      try {
+        await supabase.from('notifications').insert({
+          user_id: project.user_id,
+          type: 'mint_success',
+          title: `✅ Auto-Mint Success — ${project.name}`,
+          message: `Transaction confirmed on-chain. TX: ${txHash.slice(0, 18)}...`,
+          data: { tx_hash: txHash, project_id: project.id },
+        })
+      } catch {}
 
       await tgNotify(chatId,
         `✅ <b>Auto-Mint Confirmed: ${project.name}</b>\n\nTX: <code>${txHash.slice(0, 20)}...</code>\nWallet: ${walletRow.wallet_address.slice(0, 10)}...`
@@ -508,15 +512,17 @@ export default async function handler(req, res) {
         simulation_error: publicMsg,
       })
 
-      await supabase.from('mint_log').insert({
-        user_id: project.user_id,
-        project_id: project.id,
-        wallet_address: walletRow?.wallet_address || 'server',
-        chain: project.chain || 'eth',
-        status: 'failed',
-        error_message: msg.slice(0, 200),
-        executed_at: new Date().toISOString(),
-      }).then(() => {}).catch(() => {})
+      try {
+        await supabase.from('mint_log').insert({
+          user_id: project.user_id,
+          project_id: project.id,
+          wallet_address: walletRow?.wallet_address || 'server',
+          chain: project.chain || 'eth',
+          status: 'failed',
+          error_message: msg.slice(0, 200),
+          executed_at: new Date().toISOString(),
+        })
+      } catch {}
 
       await tgNotify(chatMap[project.user_id],
         `❌ <b>Auto-Mint Failed: ${project.name}</b>\n\n${publicMsg}`

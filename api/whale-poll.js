@@ -169,13 +169,15 @@ export default async function handler(req, res) {
 
           if (!upsertError && insertedRow) {
             inserted++
-            supabase.from('notifications').insert({
-              user_id: wallet.user_id,
-              type: row.is_mint ? 'whale_mint' : 'whale_move',
-              title: `${row.is_mint ? 'WHALE MINTING' : 'Whale Move'} - ${wallet.label || wallet.wallet_address.slice(0, 10)}...`,
-              message: `${row.method_name} · ${row.value_eth} ${CHAINS[row.chain]?.symbol || 'ETH'} · ${CHAINS[row.chain]?.name || row.chain}`,
-              data: { tx_hash: tx.hash, wallet: wallet.wallet_address, chain: row.chain },
-            }).then(() => {}).catch(() => {})
+            try {
+              await supabase.from('notifications').insert({
+                user_id: wallet.user_id,
+                type: row.is_mint ? 'whale_mint' : 'whale_move',
+                title: `${row.is_mint ? 'WHALE MINTING' : 'Whale Move'} - ${wallet.label || wallet.wallet_address.slice(0, 10)}...`,
+                message: `${row.method_name} · ${row.value_eth} ${CHAINS[row.chain]?.symbol || 'ETH'} · ${CHAINS[row.chain]?.name || row.chain}`,
+                data: { tx_hash: tx.hash, wallet: wallet.wallet_address, chain: row.chain },
+              })
+            } catch {}
           }
         }
 

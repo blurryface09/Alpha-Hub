@@ -4,6 +4,28 @@ import { rateLimit, sendRateLimit } from '../_lib/redis.js'
 import { runCalendarSync, getCalendarStatus } from '../../src/server/calendar/sync.js'
 import { normalizeProject } from '../../src/server/calendar/normalize.js'
 
+function calendarSchemaMissingResponse() {
+  return {
+    ok: false,
+    schemaMissing: true,
+    error: 'Calendar database table is not installed yet. Apply the Calendar SQL migration, then run sync.',
+    message: 'Calendar database table is not installed yet. Apply the Calendar SQL migration, then run sync.',
+  }
+}
+
+function isCalendarSchemaError(error) {
+  const message = String(error?.message || error || '').toLowerCase()
+  const code = String(error?.code || '')
+  return (
+    code === '42P01' ||
+    message.includes('calendar_projects') ||
+    message.includes('calendar_sync_runs') ||
+    message.includes('schema cache') ||
+    message.includes('relation') ||
+    message.includes('does not exist')
+  )
+}
+
 async function getOptionalUser(req) {
   const token = getBearerToken(req)
   if (!token) return null
@@ -35,8 +57,13 @@ export default async function handler(req, res) {
   if (action === 'status') {
     if (req.method !== 'GET') return res.status(405).json({ ok: false, error: 'Method not allowed' })
     const supabase = createServiceClient()
-    const status = await getCalendarStatus(supabase)
-    return res.status(200).json(status)
+    try {
+      const status = await getCalendarStatus(supabase)
+      return res.status(200).json(status)
+    } catch (error) {
+      if (isCalendarSchemaError(error)) return res.status(200).json(calendarSchemaMissingResponse())
+      return res.status(200).json({ ok: false, error: 'Calendar status is temporarily unavailable' })
+    }
   }
 
   if (action === 'submit') {
@@ -117,11 +144,18 @@ export default async function handler(req, res) {
     const supabase = createServiceClient()
     const requestedSources = Array.isArray(req.body?.sources) ? req.body.sources : null
     const limit = Math.max(3, Math.min(20, Number(req.body?.limit || 12)))
-    const summary = await runCalendarSync(supabase, {
-      sources: requestedSources || undefined,
-      limit,
-    })
-    return res.status(200).json(summary)
+    try {
+      const status = await getCalendarStatus(supabase)
+      if (status?.schemaMissing) return res.status(200).json(calendarSchemaMissingResponse())
+      const summary = await runCalendarSync(supabase, {
+        sources: requestedSources || undefined,
+        limit,
+      })
+      return res.status(200).json(summary)
+    } catch (error) {
+      if (isCalendarSchemaError(error)) return res.status(200).json(calendarSchemaMissingResponse())
+      return res.status(200).json({ ok: false, error: 'Calendar sync is temporarily unavailable' })
+    }
   }
 
   return res.status(404).json({ ok: false, error: 'Unknown calendar action' })

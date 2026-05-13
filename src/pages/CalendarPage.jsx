@@ -130,6 +130,7 @@ export default function CalendarPage() {
     image_url: '',
     notes: '',
   })
+  const calendarNotReady = schemaMissing || status?.schemaMissing
 
   const fetchProjects = useCallback(async () => {
     setLoading(true)
@@ -165,7 +166,10 @@ export default function CalendarPage() {
     try {
       const res = await fetch('/api/calendar/status')
       const data = await res.json()
-      if (res.ok) setStatus(data)
+      if (res.ok) {
+        setStatus(data)
+        if (data?.schemaMissing) setSchemaMissing(true)
+      }
     } catch {}
   }, [])
 
@@ -195,6 +199,10 @@ export default function CalendarPage() {
   }, [activeTab, chain, projects, query])
 
   const runSync = async () => {
+    if (calendarNotReady) {
+      toast.error('Install the Calendar SQL migration in Supabase before running sync.')
+      return
+    }
     setSyncing(true)
     try {
       const token = await getAuthToken()
@@ -208,6 +216,11 @@ export default function CalendarPage() {
       })
       const data = await res.json()
       if (!res.ok) throw new Error(data.error || 'Calendar sync failed')
+      if (data?.schemaMissing) {
+        setSchemaMissing(true)
+        throw new Error(data.message || data.error || 'Calendar database table is not installed yet.')
+      }
+      if (data?.ok === false) throw new Error(data.error || 'Calendar sync failed')
       toast.success(`Calendar sync complete: ${data.totalImported || 0} imported, ${data.totalUpdated || 0} updated.`)
       fetchProjects()
       fetchStatus()
@@ -368,9 +381,9 @@ export default function CalendarPage() {
         </div>
         <div className="flex flex-col sm:flex-row gap-2">
           {isAdmin && (
-            <button onClick={runSync} disabled={syncing} className="btn-ghost flex items-center justify-center gap-2">
+            <button onClick={runSync} disabled={syncing || calendarNotReady} className="btn-ghost flex items-center justify-center gap-2">
               {syncing ? <Loader size={15} className="animate-spin" /> : <Radar size={15} />}
-              {syncing ? 'Syncing...' : 'Run Sync Now'}
+              {calendarNotReady ? 'Install Calendar SQL First' : syncing ? 'Syncing...' : 'Run Sync Now'}
             </button>
           )}
           <button onClick={() => setSubmitOpen(true)} className="btn-primary flex items-center justify-center gap-2">
@@ -443,10 +456,13 @@ export default function CalendarPage() {
           <Sparkles size={32} className="text-muted mb-3" />
           <h2 className="text-base font-bold">No approved calendar projects yet</h2>
           <p className="text-sm text-muted mt-2 max-w-md">
-            No real sourced projects were found for this tab yet. Submit an official project link or run a calendar sync.
+            {calendarNotReady
+              ? 'Calendar storage is not ready yet. Apply the Calendar SQL migration in Supabase before syncing real projects.'
+              : 'No real sourced projects were found for this tab yet. Submit an official project link or run a calendar sync.'}
           </p>
           <div className="flex flex-col sm:flex-row gap-2 mt-4">
-            {isAdmin && <button onClick={runSync} disabled={syncing} className="btn-primary text-xs">{syncing ? 'Syncing...' : 'Run Sync Now'}</button>}
+            {isAdmin && !calendarNotReady && <button onClick={runSync} disabled={syncing} className="btn-primary text-xs">{syncing ? 'Syncing...' : 'Run Sync Now'}</button>}
+            {isAdmin && calendarNotReady && <button disabled className="btn-ghost text-xs">Install Calendar SQL First</button>}
             <button onClick={() => setSubmitOpen(true)} className="btn-ghost text-xs">Submit Project</button>
           </div>
         </div>

@@ -23,7 +23,9 @@ export function friendlyError(error, fallback = 'Something went wrong. Please tr
     message.includes('duplicate key') ||
     message.includes('null value') ||
     message.includes('relation') ||
-    message.includes('column')
+    message.includes('column') ||
+    message.includes('expected pattern') ||
+    message.includes('not a function')
   ) {
     return fallback
   }

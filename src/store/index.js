@@ -99,11 +99,20 @@ export const useAuthStore = create((set, get) => ({
 
       if (data?.user) {
         set({ user: data.user, signingIn: false })
-        await supabase.from('profiles').upsert({
+        const profilePayload = {
           id: data.user.id,
           username: 'user_' + data.user.id.slice(0, 6),
           wallet_address: address.toLowerCase(),
-        }).catch(() => {})
+        }
+        const { error: profileError } = await supabase.from('profiles').upsert(profilePayload)
+        if (profileError) {
+          // Older production schemas may not have wallet_address yet. Sign-in must not fail because
+          // optional profile metadata could not be written.
+          await supabase.from('profiles').upsert({
+            id: data.user.id,
+            username: profilePayload.username,
+          })
+        }
         await get().fetchProfile(data.user.id)
         return { success: true }
       }

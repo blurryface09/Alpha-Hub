@@ -176,16 +176,18 @@ export function useMint() {
         )
       }
 
-      // Log to mint_log
-      await supabase.from('mint_log').insert({
-        user_id: userId,
-        project_id: project.id,
-        wallet_address: address,
-        chain: project.chain || 'eth',
-        tx_hash: txHash,
-        status: 'pending',
-        executed_at: new Date().toISOString(),
-      }).then(() => {}).catch(() => {}) // non-critical, don't fail the mint
+      // Log to mint_log; non-critical, don't fail a submitted mint.
+      try {
+        await supabase.from('mint_log').insert({
+          user_id: userId,
+          project_id: project.id,
+          wallet_address: address,
+          chain: project.chain || 'eth',
+          tx_hash: txHash,
+          status: 'pending',
+          executed_at: new Date().toISOString(),
+        })
+      } catch {}
 
       toast.success('Mint submitted! TX: ' + txHash.slice(0, 12) + '...', { id: 'mint-tx', duration: 8000 })
       return { success: true, txHash }
@@ -196,15 +198,17 @@ export function useMint() {
 
       // Log failure (non-critical)
       if (userId) {
-        supabase.from('mint_log').insert({
-          user_id: userId,
-          project_id: project.id,
-          wallet_address: address || 'unknown',
-          chain: project.chain || 'eth',
-          status: 'failed',
-          error_message: msg.slice(0, 200),
-          executed_at: new Date().toISOString(),
-        }).then(() => {}).catch(() => {})
+        try {
+          await supabase.from('mint_log').insert({
+            user_id: userId,
+            project_id: project.id,
+            wallet_address: address || 'unknown',
+            chain: project.chain || 'eth',
+            status: 'failed',
+            error_message: msg.slice(0, 200),
+            executed_at: new Date().toISOString(),
+          })
+        } catch {}
       }
       return { success: false, error: msg }
     }

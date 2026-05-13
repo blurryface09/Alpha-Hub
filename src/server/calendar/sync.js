@@ -12,6 +12,19 @@ const ADAPTERS = {
   onchain: fetchOnchainProjects,
 }
 
+function isSchemaError(error) {
+  const message = String(error?.message || error || '').toLowerCase()
+  const code = String(error?.code || '')
+  return (
+    code === '42P01' ||
+    message.includes('calendar_projects') ||
+    message.includes('calendar_sync_runs') ||
+    message.includes('schema cache') ||
+    message.includes('relation') ||
+    message.includes('does not exist')
+  )
+}
+
 function emptySource() {
   return { imported: 0, updated: 0, errors: [] }
 }
@@ -97,16 +110,18 @@ export async function runCalendarSync(supabase, { sources = Object.keys(ADAPTERS
     summary.totalImported += sourceSummary.imported
     summary.totalUpdated += sourceSummary.updated
 
-    await supabase.from('calendar_sync_runs').insert({
-      source,
-      status: sourceSummary.errors.length ? 'degraded' : 'healthy',
-      imported_count: sourceSummary.imported,
-      updated_count: sourceSummary.updated,
-      error_count: sourceSummary.errors.length,
-      errors: sourceSummary.errors,
-      started_at: summary.ts,
-      finished_at: new Date().toISOString(),
-    }).catch(() => {})
+    try {
+      await supabase.from('calendar_sync_runs').insert({
+        source,
+        status: sourceSummary.errors.length ? 'degraded' : 'healthy',
+        imported_count: sourceSummary.imported,
+        updated_count: sourceSummary.updated,
+        error_count: sourceSummary.errors.length,
+        errors: sourceSummary.errors,
+        started_at: summary.ts,
+        finished_at: new Date().toISOString(),
+      })
+    } catch {}
   }
 
   return summary
@@ -118,6 +133,21 @@ export async function getCalendarStatus(supabase) {
     supabase.from('calendar_sync_runs').select('*').order('created_at', { ascending: false }).limit(20),
   ])
 
+  if (isSchemaError(projects.error) || isSchemaError(runs.error)) {
+    return {
+      ok: false,
+      schemaMissing: true,
+      message: 'Calendar database table is not installed yet. Apply the Calendar SQL migration, then run sync.',
+      lastSync: null,
+      projectCount: 0,
+      upcomingCount: 0,
+      liveCount: 0,
+      pendingCount: 0,
+      newContractCount: 0,
+      sources: {},
+    }
+  }
+
   const rows = projects.data || []
   const now = Date.now()
   const liveCount = rows.filter(row => row.status === 'live' || (row.mint_date && new Date(row.mint_date).getTime() <= now)).length
@@ -128,6 +158,7 @@ export async function getCalendarStatus(supabase) {
 
   return {
     ok: !projects.error,
+    schemaMissing: false,
     lastSync: latestRun?.finished_at || latestRun?.created_at || null,
     projectCount: projects.count || rows.length,
     upcomingCount,
