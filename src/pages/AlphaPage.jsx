@@ -1,13 +1,33 @@
 import React, { useState } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
-import { Search, Shield, RefreshCw } from 'lucide-react'
+import { Search, Shield, RefreshCw, Sparkles, Wand2 } from 'lucide-react'
 import toast from 'react-hot-toast'
 import { getWalletData, getContractData, CHAINS, decodeMethodName } from '../lib/blockchain'
 import { analyzeWallet, auditContract } from '../lib/ai'
+import { useSubscription } from '../hooks/useSubscription'
 
 const TABS = ['wallet', 'contract']
 
+function renderAiText(text) {
+  const lines = String(text || '').split('\n')
+  return lines.map((line, lineIndex) => {
+    const parts = line.split(/(\*\*.*?\*\*)/g).filter(Boolean)
+    return (
+      <React.Fragment key={lineIndex}>
+        {parts.map((part, partIndex) => {
+          if (part.startsWith('**') && part.endsWith('**')) {
+            return <strong key={partIndex}>{part.slice(2, -2)}</strong>
+          }
+          return <React.Fragment key={partIndex}>{part}</React.Fragment>
+        })}
+        {lineIndex < lines.length - 1 ? <br /> : null}
+      </React.Fragment>
+    )
+  })
+}
+
 export default function AlphaPage() {
+  const { plan } = useSubscription()
   const [activeTab, setActiveTab] = useState('wallet')
   const [chain, setChain] = useState('eth')
   const [address, setAddress] = useState('')
@@ -22,7 +42,7 @@ export default function AlphaPage() {
 
   const handleAnalyze = async () => {
     if (!address || !address.startsWith('0x')) {
-      toast.error('Enter a valid 0x address')
+      toast.error('This address does not look right.')
       return
     }
     setLoading(true)
@@ -65,7 +85,7 @@ export default function AlphaPage() {
       }
     } catch (err) {
       setError(err.message)
-      toast.error(err.message)
+      toast.error('Could not read this address yet. Check the chain and try again.')
     } finally {
       setLoading(false)
       setAiLoading(false)
@@ -77,11 +97,31 @@ export default function AlphaPage() {
 
   return (
     <div>
-      <div className="flex items-center gap-2 mb-1">
-        <Search size={20} className="text-accent" />
-        <h1 className="text-xl font-bold">Alpha Tools</h1>
+      <div className="hero-panel mb-6">
+        <div className="hero-content">
+          <div className="flex flex-wrap items-center gap-2 mb-3">
+            <span className="mascot-orb"><Search size={17} /></span>
+            <span className="badge badge-cyan">Tools</span>
+            <span className="badge badge-purple">Plain-English checks</span>
+          </div>
+          <h1 className="text-3xl font-black tracking-tight">Check the signal before you act.</h1>
+          <p className="mt-2 max-w-2xl text-sm text-muted leading-relaxed">
+            Paste a wallet or contract. Alpha Hub turns raw chain data into safe signs, risk signs, and a simple next step.
+          </p>
+          <div className="mt-4 grid grid-cols-1 gap-2 sm:grid-cols-3">
+            {[
+              ['Analyze wallet behavior', 'Who is behind this activity?'],
+              ['Check project risk', 'What looks safe or suspicious?'],
+              ['Explain the mint', 'What should I watch first?'],
+            ].map(([title, body]) => (
+              <div key={title} className="rounded-2xl border border-border bg-surface2/70 p-3">
+                <div className="flex items-center gap-2 text-sm font-semibold"><Sparkles size={14} className="text-accent" />{title}</div>
+                <p className="mt-1 text-xs text-muted">{body}</p>
+              </div>
+            ))}
+          </div>
+        </div>
       </div>
-      <p className="text-sm text-muted mb-6">Forensic wallet analysis and smart contract auditing.</p>
 
       <div className="card mb-4">
         <div className="flex gap-2 flex-wrap mb-4">
@@ -94,7 +134,7 @@ export default function AlphaPage() {
                   activeTab === t ? 'bg-surface text-accent border border-border2' : 'text-muted'
                 }`}
               >
-                {t === 'wallet' ? '🔍 Wallet' : '🛡️ Contract'}
+                {t === 'wallet' ? 'Analyze wallet' : 'Check contract'}
               </button>
             ))}
           </div>
@@ -115,18 +155,34 @@ export default function AlphaPage() {
         <div className="flex gap-2">
           <input
             className="input"
-            placeholder={activeTab === 'wallet' ? 'Enter wallet address (0x...)' : 'Enter contract address (0x...)'}
+            placeholder={activeTab === 'wallet' ? 'Paste a wallet address (0x...)' : 'Paste a contract address (0x...)'}
             value={address}
             onChange={e => setAddress(e.target.value)}
             onKeyDown={e => e.key === 'Enter' && handleAnalyze()}
           />
           <button onClick={handleAnalyze} disabled={loading} className="btn-primary flex items-center gap-2 whitespace-nowrap">
             {loading ? <div className="spinner w-3.5 h-3.5" /> : <Search size={14} />}
-            Analyze
+            {activeTab === 'wallet' ? 'Analyze wallet' : 'Check risk'}
           </button>
         </div>
-        {error && <p className="text-accent2 text-sm mt-2">⚠ {error}</p>}
+        {error && <p className="text-accent2 text-sm mt-2">This check failed. Try another chain or address.</p>}
       </div>
+
+      {import.meta.env.DEV && plan === 'admin' && !walletData && !contractData && !loading && (
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-3 mb-4">
+          {[
+            { title: 'Wallet intelligence', body: 'Paste a wallet to classify behavior, risk, failed txs, and copy-trading suitability.' },
+            { title: 'Contract readiness', body: 'Paste a contract to check verification, risk signals, launch readiness, and automint fit.' },
+            { title: 'Confidence labels', body: 'Reports include data source, last updated, confidence level, and why confidence is limited.' },
+          ].map((item) => (
+            <div key={item.title} className="card border-accent/10 bg-accent/5">
+              <div className="section-label">Local preview</div>
+              <div className="text-sm font-semibold">{item.title}</div>
+              <p className="text-xs text-muted mt-2">{item.body}</p>
+            </div>
+          ))}
+        </div>
+      )}
 
       {/* Wallet Results */}
       {walletData && (
@@ -235,7 +291,10 @@ export default function AlphaPage() {
           {/* AI */}
           <div className="card">
             <div className="flex items-center justify-between mb-3">
-              <div className="section-label mb-0">Forensic AI Analysis</div>
+              <div>
+                <div className="section-label mb-0">Forensic AI Analysis</div>
+                <p className="text-[11px] text-muted mt-1">Source: on-chain data · Last updated now · Confidence shown in report</p>
+              </div>
               {(aiAnalysis || aiLoading) && (
                 <button
                   onClick={async () => {
@@ -264,14 +323,9 @@ export default function AlphaPage() {
                 Running deep forensic analysis...
               </div>
             ) : aiAnalysis ? (
-              <div
-                className="ai-result text-sm leading-relaxed"
-                dangerouslySetInnerHTML={{
-                  __html: aiAnalysis
-                    .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
-                    .replace(/\n/g, '<br/>')
-                }}
-              />
+              <div className="ai-result text-sm leading-relaxed">
+                {renderAiText(aiAnalysis)}
+              </div>
             ) : null}
           </div>
         </motion.div>
@@ -321,7 +375,10 @@ export default function AlphaPage() {
 
           <div className="card">
             <div className="flex items-center justify-between mb-3">
-              <div className="section-label mb-0">AI Security Audit</div>
+              <div>
+                <div className="section-label mb-0">AI Security Audit</div>
+                <p className="text-[11px] text-muted mt-1">Source: contract metadata + recent calls · Last updated now · Confidence shown in report</p>
+              </div>
               {(aiAnalysis || aiLoading) && (
                 <button
                   onClick={async () => {
@@ -348,14 +405,9 @@ export default function AlphaPage() {
                 Auditing contract...
               </div>
             ) : aiAnalysis ? (
-              <div
-                className="ai-result text-sm leading-relaxed"
-                dangerouslySetInnerHTML={{
-                  __html: aiAnalysis
-                    .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
-                    .replace(/\n/g, '<br/>')
-                }}
-              />
+              <div className="ai-result text-sm leading-relaxed">
+                {renderAiText(aiAnalysis)}
+              </div>
             ) : null}
           </div>
         </motion.div>

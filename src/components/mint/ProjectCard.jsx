@@ -4,94 +4,7 @@ import EditProjectModal from './EditProjectModal'
 import { motion } from 'framer-motion'
 import { Zap, Trash2, Clock, ChevronDown, ChevronUp, ToggleLeft, ToggleRight, ExternalLink, RefreshCw, Twitter, AlertCircle, Gift, Bell } from 'lucide-react'
 import toast from 'react-hot-toast'
-
-const GROQ_URL = 'https://api.groq.com/openai/v1/chat/completions'
-const GROQ_KEY = import.meta.env.VITE_GROQ_API_KEY
-
-async function fetchProjectIntel(project) {
-  if (!GROQ_KEY) return { error: 'No Groq API key. Add VITE_GROQ_API_KEY to Vercel.' }
-  const prompt = `You are a crypto/NFT project researcher. Research this NFT project.
-
-Project: ${project.name}
-Source URL: ${project.source_url || 'unknown'}
-WL Type: ${project.wl_type}
-Chain: ${project.chain}
-Mint Date: ${project.mint_date || 'not set'}
-Notes: ${project.notes || 'none'}
-
-Respond with ONLY valid JSON, no markdown:
-{"summary":"2 sentence description","wl_giveaway_likely":false,"giveaway_note":"","red_flags":[],"green_flags":[],"hype_score":5,"hype_reason":"one sentence","advice":"one sharp sentence","discord_tip":"what to look for","twitter_tip":"search terms for X"}`
-
-  try {
-    const r = await fetch(GROQ_URL, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': 'Bearer ' + GROQ_KEY,
-      },
-      body: JSON.stringify({
-        model: 'llama-3.3-70b-versatile',
-        messages: [{ role: 'user', content: prompt }],
-        max_tokens: 1024,
-        temperature: 0.7,
-      }),
-    })
-    const d = await r.json()
-    if (d.error) return { error: d.error.message }
-    const text = d.choices?.[0]?.message?.content || ''
-    // Strip markdown, code blocks, and any text before/after JSON
-    const clean = text
-      .replace(/```json\n?/g, '')
-      .replace(/```\n?/g, '')
-      .replace(/^[^{]*/s, '')
-      .trim()
-    // Find the JSON object - be greedy to get the full object
-    const jsonMatch = clean.match(/\{[\s\S]*\}/)
-    if (jsonMatch) {
-      try {
-        return JSON.parse(jsonMatch[0])
-      } catch {
-        // Try to fix common JSON issues
-        try {
-          const fixed = jsonMatch[0]
-            .replace(/,\s*}/g, '}')      // trailing commas
-            .replace(/,\s*]/g, ']')      // trailing commas in arrays
-            .replace(/([{,]\s*)(\w+):/g, '$1"$2":') // unquoted keys
-          return JSON.parse(fixed)
-        } catch {
-          // Last resort - return partial data from text
-          return {
-            summary: text.slice(0, 200),
-            hype_score: 5,
-            advice: 'AI response could not be fully parsed — try refreshing.',
-            red_flags: [],
-            green_flags: [],
-            wl_giveaway_likely: false,
-            giveaway_note: '',
-            hype_reason: '',
-            discord_tip: '',
-            twitter_tip: '',
-          }
-        }
-      }
-    }
-    // No JSON found — still return something useful
-    return {
-      summary: text.slice(0, 300),
-      hype_score: 5,
-      advice: text.slice(0, 150),
-      red_flags: [],
-      green_flags: [],
-      wl_giveaway_likely: false,
-      giveaway_note: '',
-      hype_reason: '',
-      discord_tip: '',
-      twitter_tip: '',
-    }
-  } catch(e) {
-    return { error: e.message }
-  }
-}
+import { fetchProjectIntel } from '../../lib/ai'
 
 const STATUS_STYLES = {
   upcoming:  { dot: "dot-warning", badge: "badge-yellow", label: "UPCOMING" },
@@ -109,6 +22,18 @@ const WL_BADGE = {
   UNKNOWN: "badge-cyan",
 }
 
+function looksLikeAddress(value) {
+  return /^0x[a-fA-F0-9]{40}$/.test(String(value || '').trim())
+}
+
+function displayMintPrice(value) {
+  const clean = String(value || '').trim()
+  if (!clean || looksLikeAddress(clean)) return null
+  if (/free/i.test(clean)) return 'Free'
+  if (!/[0-9]/.test(clean)) return null
+  return clean.replace(/\s*(ETH|BNB)$/i, '')
+}
+
 function Countdown({ mintDate, onLive, isAuto }) {
   const [timeLeft, setTimeLeft] = React.useState("")
   const fired = React.useRef(false)
@@ -123,7 +48,8 @@ function Countdown({ mintDate, onLive, isAuto }) {
         }
         return
       }
-      fired.current = false
+      // Never reset fired — once countdown reaches zero it stays fired
+      // (removed: fired.current = false)
       const d = Math.floor(diff / 86400000)
       const h = Math.floor((diff % 86400000) / 3600000)
       const m = Math.floor((diff % 3600000) / 60000)
@@ -147,6 +73,7 @@ export default function ProjectCard({ project, isMinting, onMint, onDelete, onSt
   const [intel, setIntel] = useState(null)
   const [intelLoading, setIntelLoading] = useState(false)
   const status = STATUS_STYLES[project.status] || STATUS_STYLES.upcoming
+  const mintPrice = displayMintPrice(project.mint_price)
 
   const handleFetchIntel = async function() {
     setIntelLoading(true)
@@ -191,16 +118,20 @@ export default function ProjectCard({ project, isMinting, onMint, onDelete, onSt
                     {(project.status === "upcoming" || project.status === "live")
                       ? <Countdown
                     mintDate={project.mint_date}
-                    isAuto={project.mint_mode === 'auto' && (project.status === 'upcoming' || project.status === 'live')}
-                    onLive={() => onMint(true)}
+                    isAuto={false}
                   />
                       : <span className="font-mono text-xs text-muted">{new Date(project.mint_date).toLocaleDateString()}</span>
                     }
                   </div>
                 )}
-                {project.mint_price && (
+                {mintPrice && (
                   <span className="text-xs font-mono font-semibold text-green bg-green/10 border border-green/20 px-1.5 py-0.5 rounded">
-                    {project.mint_price} {project.chain === 'bnb' ? 'BNB' : 'ETH'}
+                    {mintPrice === 'Free' ? 'Free' : `${mintPrice} ${project.chain === 'bnb' ? 'BNB' : 'ETH'}`}
+                  </span>
+                )}
+                {project.mint_mode === 'auto' && (
+                  <span className="text-xs font-mono font-semibold text-amber-300 bg-amber-500/10 border border-amber-500/25 px-1.5 py-0.5 rounded">
+                    AUTO BETA OPT-IN
                   </span>
                 )}
                 {intel && intel.hype_score && (
@@ -216,18 +147,16 @@ export default function ProjectCard({ project, isMinting, onMint, onDelete, onSt
                 className={"flex items-center gap-1.5 text-xs px-2 py-1 rounded-md border transition-all " + (project.mint_mode === "auto" ? "border-green/40 text-green bg-green/8" : "border-border2 text-muted hover:border-accent hover:text-accent")}
               >
                 {project.mint_mode === "auto" ? React.createElement(ToggleRight, { size: 12 }) : React.createElement(ToggleLeft, { size: 12 })}
-                {project.mint_mode === "auto" ? "Auto" : "Confirm"}
+                {project.mint_mode === "auto" ? "Strike" : "Fast"}
               </button>
               {project.contract_address && project.mint_mode === 'auto' && project.status !== 'minted' && (
-                <button
-                  onClick={() => onMint(true)}
-                  disabled={isMinting}
-                  title="Test fire — triggers auto-mint regardless of status"
-                  className="text-xs px-2 py-1.5 rounded-md border border-accent3/40 text-accent3 hover:bg-accent3/10 transition-all flex items-center gap-1"
+                <span
+                  title="Strike Mode runs Alpha Vault safety checks before sending any transaction"
+                  className="text-xs px-2 py-1.5 rounded-md border border-amber-500/25 text-amber-300 bg-amber-500/10 flex items-center gap-1"
                 >
                   {React.createElement(Zap, { size: 11 })}
-                  Test
-                </button>
+                  Queued
+                </span>
               )}
               {(project.status === "live" || project.status === "upcoming") && project.contract_address && (
                 <button onClick={() => onMint(false)} disabled={isMinting} className="btn-primary text-xs px-3 py-1.5 flex items-center gap-1.5">
@@ -279,12 +208,12 @@ export default function ProjectCard({ project, isMinting, onMint, onDelete, onSt
               </div>
               <button onClick={handleFetchIntel} disabled={intelLoading} className="btn-ghost text-xs px-2 py-1 flex items-center gap-1.5">
                 {intelLoading ? React.createElement("div", { className: "spinner w-3 h-3" }) : React.createElement(RefreshCw, { size: 11 })}
-                {intelLoading ? "Fetching..." : intel ? "Refresh" : "Fetch Intel"}
+                    {intelLoading ? "Checking..." : intel ? "Refresh" : "Project Intelligence"}
               </button>
             </div>
 
             {!intel && !intelLoading && (
-              <p className="text-xs text-muted2 italic">Click Fetch Intel for AI analysis - WL giveaway detection, hype score, red flags and tips.</p>
+              <p className="text-xs text-muted2 italic">Run Project Intelligence for phase clues, hype, red flags, and mint guidance.</p>
             )}
 
             {intel && !intel.error && (

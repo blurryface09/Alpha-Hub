@@ -1,7 +1,8 @@
-import React, { useState } from 'react'
+import React, { useState, useEffect } from 'react'
 import { motion } from 'framer-motion'
 import { X, Shield, Loader } from 'lucide-react'
 import toast from 'react-hot-toast'
+import { friendlyError } from '../../lib/errors'
 import DateTimePicker from '../shared/DateTimePicker'
 
 const WL_TYPES = [
@@ -12,22 +13,26 @@ const WL_TYPES = [
   { val: 'UNKNOWN', label: 'Unknown — Not confirmed yet' },
 ]
 const MINT_MODES = [
-  { val: 'confirm', label: 'Confirm', icon: '✓', desc: 'App asks you before minting' },
-  { val: 'auto', label: 'Auto', icon: '⚡', desc: 'Fires immediately when live' },
+  { val: 'confirm', label: 'Fast Mint', icon: '✓', desc: 'Prepared wallet confirmation' },
+  { val: 'auto', label: 'Strike Mode', icon: '⚡', desc: 'Alpha Vault auto execution' },
 ]
+
+const STATUS_OPTIONS = ['upcoming', 'live', 'minted', 'missed', 'cancelled']
+const ETH_ADDRESS_RE = /^0x[a-fA-F0-9]{40}$/
 
 export default function EditProjectModal({ project, onSave, onClose }) {
   const [form, setForm] = useState({
     name: project.name || '',
     chain: project.chain || 'eth',
     contract_address: project.contract_address || '',
-    mint_date: project.mint_date || '',
+    mint_date: project.mint_date || '',  // stored as UTC ISO, DateTimePicker converts to local on display
     mint_price: project.mint_price || '',
     wl_type: project.wl_type || 'UNKNOWN',
     mint_mode: project.mint_mode || 'confirm',
     max_mint: project.max_mint || 1,
     gas_limit: project.gas_limit || 200000,
     notes: project.notes || '',
+    status: project.status || 'upcoming',
   })
   const [loading, setLoading] = useState(false)
 
@@ -35,19 +40,26 @@ export default function EditProjectModal({ project, onSave, onClose }) {
 
   const handleSave = async () => {
     if (!form.name.trim()) { toast.error('Project name is required'); return }
+    if (form.mint_mode === 'auto' && !form.contract_address?.trim()) {
+      toast.error('Strike Mode needs a contract address')
+      return
+    }
     setLoading(true)
     try {
+      const rawContract = form.contract_address?.trim() || ''
+      const rawMintPrice = form.mint_price?.trim() || ''
+      const priceLooksLikeAddress = ETH_ADDRESS_RE.test(rawMintPrice)
       await onSave({
         ...form,
         gas_limit: parseInt(form.gas_limit) || 200000,
         max_mint: parseInt(form.max_mint) || 1,
-        contract_address: form.contract_address?.trim() || null,
+        contract_address: rawContract || (priceLooksLikeAddress ? rawMintPrice : null),
         mint_date: form.mint_date || null,
-        mint_price: form.mint_price?.trim() || null,
+        mint_price: priceLooksLikeAddress ? null : (rawMintPrice || null),
         notes: form.notes?.trim() || null,
       })
     } catch(err) {
-      toast.error('Update failed: ' + err.message)
+      toast.error(friendlyError(err, 'Could not update this project. Please try again.'))
     } finally {
       setLoading(false)
     }
@@ -78,7 +90,7 @@ export default function EditProjectModal({ project, onSave, onClose }) {
             <input className="input" value={form.name} onChange={e => set('name', e.target.value)} />
           </div>
 
-          <div className="grid grid-cols-2 gap-3">
+          <div className="grid grid-cols-3 gap-3">
             <div>
               <label className="text-xs font-mono text-muted uppercase tracking-wider block mb-1.5">Chain</label>
               <select className="input" value={form.chain} onChange={e => set('chain', e.target.value)}>
@@ -93,17 +105,27 @@ export default function EditProjectModal({ project, onSave, onClose }) {
                 {WL_TYPES.map(t => <option key={t.val} value={t.val}>{t.label}</option>)}
               </select>
             </div>
+            <div>
+              <label className="text-xs font-mono text-muted uppercase tracking-wider block mb-1.5">Status</label>
+              <select className="input" value={form.status} onChange={e => set('status', e.target.value)}>
+                {STATUS_OPTIONS.map(s => <option key={s} value={s}>{s.charAt(0).toUpperCase() + s.slice(1)}</option>)}
+              </select>
+            </div>
+            {form.mint_mode === 'auto' && (
+              <div className="mt-2 rounded-lg border border-amber-500/25 bg-amber-500/10 p-3 text-xs text-amber-200">
+                Strike Mode is opt-in. It can submit a real transaction through Alpha Vault when your rules pass.
+              </div>
+            )}
           </div>
 
-          <div className="grid grid-cols-2 gap-3">
-            <div>
-              <label className="text-xs font-mono text-muted uppercase tracking-wider block mb-1.5">Mint Date</label>
-              <DateTimePicker value={form.mint_date} onChange={utcStr => set('mint_date', utcStr)} />
-            </div>
-            <div>
-              <label className="text-xs font-mono text-muted uppercase tracking-wider block mb-1.5">Mint Price</label>
-              <input className="input" placeholder="e.g. 0.08 ETH" value={form.mint_price} onChange={e => set('mint_price', e.target.value)} />
-            </div>
+          <DateTimePicker
+            value={form.mint_date}
+            onChange={val => set('mint_date', val)}
+          />
+
+          <div>
+            <label className="text-xs font-mono text-muted uppercase tracking-wider block mb-1.5">Mint Price</label>
+            <input className="input" placeholder="e.g. 0.08 ETH" value={form.mint_price} onChange={e => set('mint_price', e.target.value)} />
           </div>
 
           <div>

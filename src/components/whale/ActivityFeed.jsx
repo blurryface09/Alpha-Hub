@@ -1,5 +1,5 @@
 import React from 'react'
-import { Zap, ArrowRight, Activity, ExternalLink } from 'lucide-react'
+import { Zap, ArrowRight, Activity, ExternalLink, CopyPlus } from 'lucide-react'
 
 function timeAgo(ts) {
   if (!ts) return '—'
@@ -24,13 +24,13 @@ const CHAIN_SYMBOL = {
   bnb: 'BNB',
 }
 
-export default function ActivityFeed({ activity }) {
+export default function ActivityFeed({ activity, onCopyMint }) {
   if (!activity || !activity.length) {
     return (
       <div className="text-center py-10">
         <Activity size={28} className="text-muted mx-auto mb-2" />
         <p className="text-muted text-sm">No activity yet</p>
-        <p className="text-xs text-muted2 mt-1">Add wallets and hit Refresh to see their moves</p>
+        <p className="text-xs text-muted2 mt-1">Copy Mint appears automatically when a tracked whale mint includes a contract address.</p>
       </div>
     )
   }
@@ -43,6 +43,7 @@ export default function ActivityFeed({ activity }) {
         const isLarge = val > 0.5
         const explorer = EXPLORER[a.chain] || 'etherscan.io'
         const txUrl = a.tx_hash ? `https://${explorer}/tx/${a.tx_hash}` : null
+        const canCopyMint = Boolean(a.contract_address && onCopyMint)
 
         return (
           <div
@@ -65,7 +66,7 @@ export default function ActivityFeed({ activity }) {
                       ? a.wallet_label
                       : a.wallet_address?.slice(0, 8) + '...' + a.wallet_address?.slice(-4)}
                   </span>
-                  {isMint && <span className="badge badge-green text-[10px]">🟢 MINT</span>}
+                  {isMint && <span className="badge badge-green text-[10px]">MINT</span>}
                   {isLarge && !isMint && <span className="badge badge-cyan text-[10px]">LARGE</span>}
                   <span className={`badge text-[10px] ${a.chain === 'eth' ? 'badge-purple' : 'badge-cyan'}`}>
                     {(a.chain || 'eth').toUpperCase()}
@@ -81,15 +82,27 @@ export default function ActivityFeed({ activity }) {
                   )}
                 </div>
 
-                {txUrl && (
-                  <a
-                    href={txUrl}
-                    target="_blank"
-                    rel="noreferrer"
-                    className="text-[10px] text-accent hover:underline flex items-center gap-1 mt-0.5"
-                  >
-                    View tx <ExternalLink size={9} />
-                  </a>
+                {(txUrl || canCopyMint) && (
+                  <div className="flex items-center gap-3 mt-1">
+                    {txUrl && (
+                    <a
+                      href={txUrl}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="text-[10px] text-accent hover:underline flex items-center gap-1"
+                    >
+                      View tx <ExternalLink size={9} />
+                    </a>
+                    )}
+                    {canCopyMint && (
+                      <button
+                        onClick={() => onCopyMint(a)}
+                        className="text-[10px] text-green hover:underline flex items-center gap-1"
+                      >
+                        {isMint ? 'Copy Mint' : 'Copy as Mint'} <CopyPlus size={9} />
+                      </button>
+                    )}
+                  </div>
                 )}
               </div>
 

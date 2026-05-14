@@ -5,10 +5,12 @@ Multi-chain wallet tracker, mint assistant, whale radar and rug detector.
 ## Stack
 - React + Vite + Tailwind
 - Supabase (database + auth + realtime)
+- Upstash Redis (rate limiting + short-lived blockchain cache)
 - Alchemy (blockchain data)
 - Etherscan V2 API
 - wagmi + WalletConnect (wallet connection)
-- Gemini AI (forensic analysis)
+- Groq AI (forensic analysis)
+- Sentry (frontend error monitoring)
 
 ## Setup
 
@@ -25,15 +27,32 @@ cp .env.example .env
 ```
 
 Required keys:
-- `VITE_SUPABASE_URL` — your Supabase project URL ✅ (already set)
-- `VITE_SUPABASE_ANON_KEY` — your Supabase anon key ✅ (already set)
-- `VITE_ALCHEMY_API_KEY` — from alchemy.com (free)
-- `VITE_WALLETCONNECT_PROJECT_ID` — from cloud.walletconnect.com (free)
-- `VITE_ETHERSCAN_API_KEY` — from etherscan.io/apis (free)
-- `VITE_GEMINI_API_KEY` — from aistudio.google.com (free)
+- `VITE_SUPABASE_URL` — public Supabase project URL
+- `VITE_SUPABASE_ANON_KEY` — public Supabase anon key
+- `VITE_WALLETCONNECT_PROJECT_ID` — public WalletConnect project ID
+- `VITE_RECEIVER_WALLET` — public wallet that receives subscription payments
+- `VITE_ADMIN_WALLET` — public admin wallet used for UI visibility only
+- `VITE_SENTRY_DSN` — optional public Sentry DSN for frontend error monitoring
+- `SUPABASE_SERVICE_KEY` or `SUPABASE_SERVICE_ROLE_KEY` — server-only Supabase service role key
+- `ETHERSCAN_API_KEY` — server-only Etherscan API key
+- `GROQ_API_KEY` — server-only Groq API key for AI analysis
+- `ALCHEMY_API_KEY` — server-only Alchemy key for server auto-mint RPC
+- `WALLET_ENCRYPTION_KEY` — server-only long random secret for encrypted burner wallets
+- `ADMIN_WALLET` or `ADMIN_USER_ID` — server-only admin authorization
+- `UPSTASH_REDIS_REST_URL`, `UPSTASH_REDIS_REST_TOKEN` — server-only Redis credentials for rate limits and cache
+- `VITE_SENTRY_DSN`, `VITE_SENTRY_TRACES_SAMPLE_RATE` — frontend monitoring config
+- `TELEGRAM_BOT_TOKEN`, `TELEGRAM_WEBHOOK_SECRET`, `CRON_SECRET` — server-only Telegram/cron secrets
 
 ### 3. Run the database schema
-Go to Supabase → SQL Editor → paste the schema from `src/lib/supabase.js` → Run ✅ (already done)
+Go to Supabase → SQL Editor → run your base schema, then run:
+
+```bash
+security/rls_policies.sql
+```
+
+After running the RLS script, add your own user ID to `public.admins` or set `ADMIN_USER_ID`/`ADMIN_WALLET` in Vercel.
+
+The RLS script also creates `public.audit_logs`, enables RLS on known user-owned tables, and adds optional policies for `tracked_wallets` and `whale_alerts` if those tables exist in your deployed schema.
 
 ### 4. Run locally
 ```bash
@@ -80,8 +99,9 @@ Then drag the `dist` folder to vercel.com, or connect your GitHub repo.
 
 ```
 Frontend (React/Vite) → Vercel
+API guards → Redis rate limits/cache
 Database (Supabase) → Central EU
 Blockchain data → Alchemy + Etherscan V2
-AI Analysis → Gemini 2.0 Flash
-Wallet signing → MetaMask via wagmi
+AI Analysis → Groq
+Wallet signing → Supabase Web3 auth + wagmi signatures
 ```

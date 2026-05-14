@@ -1,9 +1,9 @@
 import React, { useState, useEffect } from 'react'
 import { motion } from 'framer-motion'
-import { Settings, Key, Wallet, Save, Eye, EyeOff, Check, ExternalLink } from 'lucide-react'
+import { Settings, Key, Wallet, Save, Eye, EyeOff, Check, ExternalLink, Send, Link2, RefreshCw, CheckCircle, Zap, AlertTriangle, Trash2, Copy, QrCode } from 'lucide-react'
 import toast from 'react-hot-toast'
 import { useAuthStore, useSettingsStore } from '../store'
-import { supabase } from '../lib/supabase'
+import { supabase, getAuthToken } from '../lib/supabase'
 
 export default function SettingsPage() {
   const { user, profile, fetchProfile } = useAuthStore()
@@ -17,12 +17,146 @@ export default function SettingsPage() {
   })
   const [username, setUsername] = useState(profile?.username || '')
   const [walletAddress, setWalletAddress] = useState(profile?.wallet_address || '')
+  const [telegramLinked, setTelegramLinked] = useState(false)
+  const [telegramLinkCode, setTelegramLinkCode] = useState(null)
+  const [telegramLoading, setTelegramLoading] = useState(false)
+
+  // Minting wallet
+  const [mintWalletAddress, setMintWalletAddress] = useState(null)
+  const [mintPrivateKey, setMintPrivateKey] = useState('')
+  const [mintWalletLoading, setMintWalletLoading] = useState(false)
+  const [showMintKey, setShowMintKey] = useState(false)
+  const [vaultWallets, setVaultWallets] = useState([])
+  const [vaultLoading, setVaultLoading] = useState(false)
+  const [depositVault, setDepositVault] = useState(null)
 
   // Sync form when profile loads/updates from Supabase
   useEffect(() => {
     if (profile?.username) setUsername(profile.username)
     if (profile?.wallet_address) setWalletAddress(profile.wallet_address)
+    if (profile?.telegram_chat_id) setTelegramLinked(true)
   }, [profile])
+
+  // Load minting wallet address on mount
+  useEffect(() => {
+    if (!user) return
+    getAuthToken().then(async token => {
+      if (!token) return
+      try {
+        const r = await fetch('/api/wallet', { headers: { Authorization: 'Bearer ' + token } })
+        const d = await r.json()
+        if (d.wallet?.wallet_address) setMintWalletAddress(d.wallet.wallet_address)
+      } catch {}
+      await refreshVaults(token)
+    })
+  }, [user])
+
+  const refreshVaults = async (existingToken) => {
+    setVaultLoading(true)
+    try {
+      const token = existingToken || await getAuthToken()
+      if (!token) return
+      const r = await fetch('/api/vault/list', { headers: { Authorization: 'Bearer ' + token } })
+      const d = await r.json()
+      if (d.wallets) setVaultWallets(d.wallets)
+    } catch {
+      toast.error('Could not refresh Alpha Vault.')
+    } finally {
+      setVaultLoading(false)
+    }
+  }
+
+  const copyVaultAddress = async (address) => {
+    try {
+      await navigator.clipboard.writeText(address)
+      toast.success('Vault address copied.')
+    } catch {
+      toast.error('Could not copy address.')
+    }
+  }
+
+  const createAlphaVault = async () => {
+    setVaultLoading(true)
+    try {
+      const token = await getAuthToken()
+      if (!token) throw new Error('Sign in again before creating Alpha Vault')
+      const r = await fetch('/api/vault/create', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + token },
+        body: JSON.stringify({ label: 'Alpha Vault' }),
+      })
+      const d = await r.json()
+      if (!r.ok || d.ok === false) throw new Error(d.error || 'Could not create Alpha Vault')
+      setVaultWallets(prev => [d.wallet, ...prev.filter(item => item.id !== d.wallet.id)])
+      toast.success('Alpha Vault created. Fund it lightly before Strike Mode.')
+    } catch (err) {
+      toast.error(err.message || 'Could not create Alpha Vault')
+    } finally {
+      setVaultLoading(false)
+    }
+  }
+
+  const saveMintWallet = async () => {
+    if (!mintPrivateKey.trim()) { toast.error('Paste a private key first'); return }
+    setMintWalletLoading(true)
+    try {
+      const token = await getAuthToken()
+      if (!token) throw new Error('Not authenticated — please refresh the page')
+      const r = await fetch('/api/wallet', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + token },
+        body: JSON.stringify({ private_key: mintPrivateKey }),
+      })
+      const d = await r.json()
+      if (!r.ok) throw new Error(d.error || 'Save failed')
+      setMintWalletAddress(d.address)
+      setMintPrivateKey('')
+      toast.success('Minting wallet saved!')
+    } catch (err) {
+      toast.error(err.message)
+    } finally {
+      setMintWalletLoading(false)
+    }
+  }
+
+  const removeMintWallet = async () => {
+    if (!confirm('Remove the stored Alpha Vault wallet? Strike Mode will stop working.')) return
+    const token = await getAuthToken()
+    await fetch('/api/wallet', {
+      method: 'DELETE',
+      headers: { Authorization: 'Bearer ' + token },
+    })
+    setMintWalletAddress(null)
+    toast.success('Minting wallet removed')
+  }
+
+  const generateTelegramLink = async () => {
+    setTelegramLoading(true)
+    try {
+      const token = Math.random().toString(36).slice(2, 10).toUpperCase()
+
+      const { error } = await supabase.from('telegram_link_tokens').insert({
+        user_id: user.id,
+        token,
+      })
+      if (error) throw new Error(error.message || JSON.stringify(error))
+      setTelegramLinkCode(token)
+    } catch (err) {
+      toast.error('Could not generate link: ' + (err.message || 'Unknown error'), { duration: 6000 })
+    } finally {
+      setTelegramLoading(false)
+    }
+  }
+
+  const disconnectTelegram = async () => {
+    const { error } = await supabase.from('profiles')
+      .update({ telegram_chat_id: null })
+      .eq('id', user.id)
+    if (error) { toast.error(error.message); return }
+    setTelegramLinked(false)
+    await fetchProfile(user.id)
+    toast.success('Telegram disconnected')
+  }
   const [show, setShow] = useState({})
   const [saving, setSaving] = useState(false)
 
@@ -36,12 +170,20 @@ export default function SettingsPage() {
   const saveProfile = async () => {
     setSaving(true)
     try {
-      const { error } = await supabase.from('profiles').upsert({
+      const payload = {
         id: user.id,
         username,
         wallet_address: walletAddress,
         updated_at: new Date().toISOString(),
-      })
+      }
+      let { error } = await supabase.from('profiles').update(payload).eq('id', user.id)
+      if (error?.code === '42703') {
+        error = (await supabase.from('profiles').update({
+          id: user.id,
+          username,
+          updated_at: new Date().toISOString(),
+        }).eq('id', user.id)).error
+      }
       if (error) throw error
       await fetchProfile(user.id)
       toast.success('Profile updated')
@@ -183,6 +325,224 @@ export default function SettingsPage() {
           <Save size={14} />
           Save All Keys
         </button>
+      </div>
+
+      {/* Alpha Vault */}
+      <div className="card mb-4">
+        <div className="flex items-center gap-2 mb-3">
+          <Zap size={14} className="text-green" />
+          <div className="section-label mb-0">Alpha Vault</div>
+          {(mintWalletAddress || vaultWallets.length > 0) && (
+            <span className="badge badge-green text-[10px] ml-auto flex items-center gap-1">
+              <CheckCircle size={9} /> Active
+            </span>
+          )}
+        </div>
+
+        <div className="flex items-start gap-2 bg-accent3/8 border border-accent3/20 rounded-lg p-3 mb-3">
+          <AlertTriangle size={12} className="text-accent3 flex-shrink-0 mt-0.5" />
+          <p className="text-xs text-accent3 leading-relaxed">
+            <b>Use a dedicated burner wallet only.</b> Alpha Vault is custodial burner infrastructure for Strike Mode. Private keys are encrypted server-side using your vault encryption key and are never returned to the browser. Fund it with small amounts only.
+          </p>
+        </div>
+
+        <div className="mb-4 rounded-lg border border-border bg-surface2 p-3">
+          <div className="flex items-center justify-between gap-3">
+            <div>
+              <p className="text-sm font-semibold">Generate a personal burner wallet</p>
+              <p className="text-xs text-muted mt-1">Private key is encrypted server-side and never returned to the browser.</p>
+            </div>
+            <div className="flex gap-2">
+              <button onClick={() => refreshVaults()} disabled={vaultLoading} className="btn-ghost text-xs whitespace-nowrap">
+                <RefreshCw size={12} className={vaultLoading ? 'animate-spin' : ''} />
+              </button>
+              <button onClick={createAlphaVault} disabled={vaultLoading} className="btn-primary text-xs whitespace-nowrap">
+              {vaultLoading ? 'Creating...' : 'Create Vault'}
+              </button>
+            </div>
+          </div>
+          {vaultWallets.length > 0 && (
+            <div className="mt-3 space-y-2">
+              {vaultWallets.map(wallet => (
+                <div key={wallet.id} className="rounded-lg border border-border bg-surface px-3 py-3 space-y-3">
+                  <div className="flex items-start justify-between gap-3">
+                    <div>
+                      <div className="text-xs text-muted">{wallet.label || 'Alpha Vault'} · {wallet.status || 'active'}</div>
+                      <div className="font-mono text-sm text-green break-all">{wallet.address}</div>
+                    </div>
+                    <button onClick={() => copyVaultAddress(wallet.address)} className="btn-ghost text-xs">
+                      <Copy size={12} />
+                    </button>
+                  </div>
+                  <div className="grid grid-cols-2 gap-2 text-xs">
+                    <div className="rounded-md bg-surface2 border border-border p-2">
+                      <span className="text-muted block">Ethereum</span>
+                      <b>{wallet.balances?.eth == null ? 'N/A' : `${Number(wallet.balances.eth).toFixed(5)} ETH`}</b>
+                    </div>
+                    <div className="rounded-md bg-surface2 border border-border p-2">
+                      <span className="text-muted block">Base</span>
+                      <b>{wallet.balances?.base == null ? 'N/A' : `${Number(wallet.balances.base).toFixed(5)} ETH`}</b>
+                    </div>
+                  </div>
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                    <button onClick={() => setDepositVault(wallet)} className="btn-ghost text-xs"><QrCode size={12} /> Deposit</button>
+                    <button onClick={() => refreshVaults()} className="btn-ghost text-xs"><RefreshCw size={12} /> Balance</button>
+                    <button disabled className="btn-ghost text-xs opacity-50"><Send size={12} /> Withdraw</button>
+                    <button disabled className="btn-ghost text-xs opacity-50">History</button>
+                  </div>
+                  <p className="text-[11px] text-muted">Withdrawals stay disabled until Strike Mode exits private beta. This prevents accidental fund movement while launch testing.</p>
+                </div>
+              ))}
+            </div>
+          )}
+          {depositVault && (
+            <div className="mt-3 rounded-lg border border-cyan/30 bg-cyan/5 p-3">
+              <div className="flex items-center justify-between gap-2 mb-2">
+                <p className="text-sm font-semibold">Deposit to Alpha Vault</p>
+                <button className="text-xs text-muted hover:text-text" onClick={() => setDepositVault(null)}>Close</button>
+              </div>
+              <img
+                alt="Vault deposit QR"
+                className="w-36 h-36 rounded-lg bg-white p-2 mb-2"
+                src={`https://api.qrserver.com/v1/create-qr-code/?size=180x180&data=${encodeURIComponent(`ethereum:${depositVault.address}@8453`)}`}
+              />
+              <p className="font-mono text-xs break-all text-green">{depositVault.address}</p>
+              <p className="text-xs text-muted mt-1">Send ETH on Base or Ethereum. Use small amounts only.</p>
+            </div>
+          )}
+        </div>
+
+        {mintWalletAddress ? (
+          <div className="space-y-3">
+            <div className="bg-surface2 rounded-lg p-3 border border-border">
+              <p className="text-xs text-muted mb-1">Active minting wallet</p>
+              <p className="font-mono text-sm text-green">{mintWalletAddress}</p>
+              <p className="text-xs text-muted mt-1">Legacy minting wallet. Alpha Vault is recommended for Strike Mode.</p>
+            </div>
+            <button onClick={removeMintWallet} className="btn-ghost text-xs text-accent2 border-accent2/30 hover:border-accent2 flex items-center gap-1.5">
+              <Trash2 size={11} /> Remove Wallet
+            </button>
+          </div>
+        ) : (
+          <div className="space-y-3">
+            <p className="text-sm text-muted">
+              Prefer Create Vault above. Import only a burner wallet if you already made one outside Alpha Hub.
+            </p>
+            <div>
+              <label className="text-xs font-mono text-muted uppercase tracking-wider block mb-1.5">
+                Private Key (burner wallet)
+              </label>
+              <div className="relative">
+                <input
+                  type={showMintKey ? 'text' : 'password'}
+                  className="input pr-10 font-mono text-xs"
+                  placeholder="0x... or raw hex key"
+                  value={mintPrivateKey}
+                  onChange={e => setMintPrivateKey(e.target.value)}
+                />
+                <button
+                  onClick={() => setShowMintKey(s => !s)}
+                  className="absolute right-3 top-1/2 -translate-y-1/2 text-muted hover:text-text"
+                >
+                  {showMintKey ? <EyeOff size={14} /> : <Eye size={14} />}
+                </button>
+              </div>
+              <p className="text-xs text-muted mt-1">
+                Key is encrypted server-side with AES-256-GCM. Only the wallet address is ever returned to the client.
+              </p>
+            </div>
+            <button
+              onClick={saveMintWallet}
+              disabled={mintWalletLoading || !mintPrivateKey.trim()}
+              className="btn-primary flex items-center gap-2"
+            >
+              {mintWalletLoading ? <div className="spinner w-3.5 h-3.5" /> : <Zap size={14} />}
+              Save Minting Wallet
+            </button>
+          </div>
+        )}
+      </div>
+
+      {/* Telegram */}
+      <div className="card mb-4">
+        <div className="flex items-center gap-2 mb-3">
+          <Send size={14} className="text-accent" />
+          <div className="section-label mb-0">Telegram Notifications</div>
+          {telegramLinked && (
+            <span className="badge badge-green text-[10px] ml-auto flex items-center gap-1">
+              <CheckCircle size={9} /> Connected
+            </span>
+          )}
+        </div>
+
+        {telegramLinked ? (
+          <div className="space-y-3">
+            <p className="text-sm text-text">
+              ✅ Your Telegram is connected. You'll get real-time mint alerts and can confirm/skip mints directly from Telegram.
+            </p>
+            <p className="text-xs text-muted">
+              Bot commands: <code className="bg-surface2 px-1 rounded">/dashboard</code> · <code className="bg-surface2 px-1 rounded">/live</code> · <code className="bg-surface2 px-1 rounded">/upcoming</code>
+            </p>
+            <button onClick={disconnectTelegram} className="btn-ghost text-xs text-accent2 border-accent2/30 hover:border-accent2">
+              Disconnect Telegram
+            </button>
+          </div>
+        ) : (
+          <div className="space-y-3">
+            <p className="text-sm text-muted">
+              Connect Telegram to get real-time mint alerts, 30-min reminders, and confirm/skip mints with one tap.
+            </p>
+
+            {!telegramLinkCode ? (
+              <button
+                onClick={generateTelegramLink}
+                disabled={telegramLoading}
+                className="btn-primary flex items-center gap-2"
+              >
+                {telegramLoading
+                  ? <div className="spinner w-3.5 h-3.5" />
+                  : <Link2 size={14} />}
+                Generate Link Code
+              </button>
+            ) : (
+              <div className="space-y-3">
+                <div className="bg-surface2 border border-border rounded-lg p-3">
+                  <p className="text-xs text-muted mb-2">1. Open Telegram and message this bot:</p>
+                  <a
+                    href="https://t.me/AlphaHubMintBot"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-sm font-mono text-accent hover:underline flex items-center gap-1"
+                  >
+                    @AlphaHubMintBot <ExternalLink size={11} />
+                  </a>
+                  <p className="text-xs text-muted mt-3 mb-1">2. Send this message to the bot:</p>
+                  <div className="bg-surface rounded-md p-2 font-mono text-sm flex items-center justify-between">
+                    <span>/start {telegramLinkCode}</span>
+                    <button
+                      onClick={() => { navigator.clipboard.writeText(`/start ${telegramLinkCode}`); toast.success('Copied!') }}
+                      className="text-accent text-xs hover:underline ml-2"
+                    >
+                      Copy
+                    </button>
+                  </div>
+                  <p className="text-xs text-muted mt-2">⏱ Code expires in 15 minutes</p>
+                </div>
+                <div className="flex gap-2">
+                  <button
+                    onClick={async () => { await fetchProfile(user.id); if (profile?.telegram_chat_id) setTelegramLinked(true) }}
+                    className="btn-ghost text-xs flex items-center gap-1.5"
+                  >
+                    <RefreshCw size={11} /> Check connection
+                  </button>
+                  <button onClick={() => setTelegramLinkCode(null)} className="btn-ghost text-xs">
+                    Cancel
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+        )}
       </div>
 
       {/* Account info */}

@@ -1,40 +1,31 @@
-import { createPublicClient, http, parseAbi } from 'viem'
-import { mainnet, base, bsc } from 'viem/chains'
+import { parseAbi } from 'viem'
+import { getAuthToken } from './supabase'
 
-const ALCHEMY_KEY = import.meta.env.VITE_ALCHEMY_API_KEY
-const ETHERSCAN_KEY = import.meta.env.VITE_ETHERSCAN_API_KEY
-const CORS_PROXY = 'https://corsproxy.io/?'
-const ETHERSCAN_V2 = 'https://api.etherscan.io/v2/api'
 
 export const CHAINS = {
-  eth:  { id: 1,    name: 'Ethereum', symbol: 'ETH', rpc: `https://eth-mainnet.g.alchemy.com/v2/${ALCHEMY_KEY}`,  explorer: 'etherscan.io' },
-  base: { id: 8453, name: 'Base',     symbol: 'ETH', rpc: `https://base-mainnet.g.alchemy.com/v2/${ALCHEMY_KEY}`, explorer: 'basescan.org' },
-  bnb:  { id: 56,   name: 'BNB Chain',symbol: 'BNB', rpc: `https://bnb-mainnet.g.alchemy.com/v2/${ALCHEMY_KEY}`,  explorer: 'bscscan.com' },
-}
-
-export const viemClients = {
-  eth:  createPublicClient({ chain: mainnet, transport: http(CHAINS.eth.rpc) }),
-  base: createPublicClient({ chain: base,    transport: http(CHAINS.base.rpc) }),
-  bnb:  createPublicClient({ chain: bsc,     transport: http(CHAINS.bnb.rpc) }),
+  eth:  { id: 1,    name: 'Ethereum', symbol: 'ETH', explorer: 'etherscan.io' },
+  base: { id: 8453, name: 'Base',     symbol: 'ETH', explorer: 'basescan.org' },
+  bnb:  { id: 56,   name: 'BNB Chain',symbol: 'BNB', explorer: 'bscscan.com' },
 }
 
 // --- Etherscan V2 fetch with CORS proxy fallback -----------------
 async function etherscanFetch(chainKey, params) {
   const chain = CHAINS[chainKey]
   if (!chain) return { status: '0', message: 'NOTOK', result: 'Unknown chain' }
-  if (!ETHERSCAN_KEY || ETHERSCAN_KEY === 'your_etherscan_api_key') {
-    return { status: '0', message: 'NOTOK', result: 'No Etherscan API key set' }
-  }
-  
-  let url = `${ETHERSCAN_V2}?chainid=${chain.id}&apikey=${ETHERSCAN_KEY}`
-  Object.entries(params).forEach(([k, v]) => url += `&${k}=${encodeURIComponent(v)}`)
-  
-  const urls = [url, CORS_PROXY + encodeURIComponent(url)]
+  const token = await getAuthToken()
+  if (!token) return { status: '0', message: 'NOTOK', result: 'Not authenticated' }
+
+  const url = new URL('/api/etherscan', window.location.origin)
+  url.searchParams.set('chainid', chain.id)
+  Object.entries(params).forEach(([k, v]) => url.searchParams.set(k, v))
   let lastError = null
-  
-  for (const u of urls) {
+
+  for (let attempt = 0; attempt < 2; attempt++) {
     try {
-      const r = await fetch(u, { signal: AbortSignal.timeout(15000) })
+      const r = await fetch(url, {
+        headers: { Authorization: `Bearer ${token}` },
+        signal: AbortSignal.timeout(15000),
+      })
       if (!r.ok) { lastError = new Error('HTTP ' + r.status); continue }
       const d = await r.json()
       if (!d) { lastError = new Error('Empty response'); continue }

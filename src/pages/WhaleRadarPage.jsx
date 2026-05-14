@@ -1,103 +1,67 @@
-import React, { useState, useEffect, useRef, useCallback } from 'react'
+import React, { useState, useEffect, useCallback } from 'react'
 import { motion } from 'framer-motion'
-import { Radar, Plus, Trash2, Eye } from 'lucide-react'
+import { useNavigate } from 'react-router-dom'
+import { useAccount } from 'wagmi'
+import { Radar, Plus, Trash2, Eye, Sparkles } from 'lucide-react'
 import toast from 'react-hot-toast'
 import { supabase } from '../lib/supabase'
 import { useAuthStore, useWhaleStore } from '../store'
-import { getLatestActivity, decodeMethodName, CHAINS } from '../lib/blockchain'
+import { useSubscription } from '../hooks/useSubscription'
+import { friendlyError } from '../lib/errors'
+import Paywall from '../components/Paywall'
 import AddWalletModal from '../components/whale/AddWalletModal'
 import ActivityFeed from '../components/whale/ActivityFeed'
 
-const POLL_INTERVAL = 30000 // 30 seconds
+const EXPLORER_HOSTS = {
+  eth: 'etherscan.io',
+  base: 'basescan.org',
+  bnb: 'bscscan.com',
+}
 
 export default function WhaleRadarPage() {
+  const navigate = useNavigate()
   const { user } = useAuthStore()
+  const { address, isConnected } = useAccount()
   const { activity, fetch: fetchActivity, subscribe } = useWhaleStore()
+  const { plan, limits, hasAccess, refresh } = useSubscription()
   const [watchlist, setWatchlist] = useState([])
   const [loading, setLoading] = useState(true)
-  const [polling, setPolling] = useState(false)
   const [showAddModal, setShowAddModal] = useState(false)
   const [activeChain, setActiveChain] = useState('all')
-  const pollRef = useRef(null)
+  const [upgradeRequired, setUpgradeRequired] = useState(false)
+  const ADMIN_WALLET = import.meta.env.VITE_ADMIN_WALLET?.toLowerCase()
+  const isAdmin = isConnected && address?.toLowerCase() === ADMIN_WALLET
 
   const fetchWatchlist = useCallback(async () => {
     if (!user) return
-    const { data } = await supabase
+    let query = supabase
       .from('whale_watchlist')
       .select('*')
-      .eq('user_id', user.id)
       .eq('is_active', true)
+    if (!isAdmin) query = query.eq('user_id', user.id)
+    const { data } = await query
     setWatchlist(data || [])
     setLoading(false)
-  }, [user])
+  }, [user, isAdmin])
 
   useEffect(() => {
     fetchWatchlist()
-    fetchActivity()
-    const unsub = subscribe()
+    fetchActivity(isAdmin ? null : user?.id)
+    if (!hasAccess('pro')) return undefined
+    const unsub = subscribe(isAdmin ? null : user?.id)
     return unsub
-  }, [fetchWatchlist])
+  }, [fetchWatchlist, fetchActivity, hasAccess, subscribe, user?.id, isAdmin])
 
-  // Polling engine
   useEffect(() => {
-    if (!watchlist.length) return
-    const poll = async () => {
-      setPolling(true)
-      for (const whale of watchlist) {
-        try {
-          const chainKey = whale.chain || 'eth'
-          const newTxs = await getLatestActivity(whale.wallet_address, chainKey, whale.last_tx_hash)
-          if (!newTxs.length) continue
-
-          for (const tx of newTxs) {
-            const methodName = decodeMethodName(tx.methodId)
-            const isMint = tx.isMint
-
-            // Get AI summary - completely optional, never blocks
-            let aiSummary = null
-
-            // Store in whale_activity
-            await supabase.from('whale_activity').upsert({
-              wallet_address: whale.wallet_address,
-              wallet_label: whale.label,
-              chain: chainKey,
-              tx_hash: tx.hash,
-              action_type: methodName,
-              contract_address: tx.to,
-              value_eth: parseFloat(tx.value),
-              method_id: tx.methodId,
-              method_name: methodName,
-              is_mint: isMint,
-              timestamp: tx.timestamp.toISOString(),
-              raw_data: { ...tx, ai_summary: aiSummary },
-            }, { onConflict: 'tx_hash' })
-
-            // Notify user
-            await supabase.from('notifications').insert({
-              user_id: user.id,
-              type: isMint ? 'whale_mint' : 'whale_move',
-              title: `${isMint ? '🟢 WHALE MINTING' : '🐋 Whale Move'} -- ${whale.label || whale.wallet_address.slice(0, 10)}...`,
-              message: `${methodName} · ${tx.value} ${CHAINS[chainKey]?.symbol || 'ETH'} · ${CHAINS[chainKey]?.name}${aiSummary ? '\n' + aiSummary : ''}`,
-              data: { tx_hash: tx.hash, wallet: whale.wallet_address, chain: chainKey },
-            })
-          }
-
-          // Update last tx hash
-          await supabase.from('whale_watchlist')
-            .update({ last_tx_hash: newTxs[0].hash, last_checked: new Date().toISOString() })
-            .eq('id', whale.id)
-
-        } catch (err) {
-          console.error(`Failed polling ${whale.label || whale.wallet_address}:`, err)
-        }
-      }
-      setPolling(false)
+    const refreshOnResume = () => {
+      fetchWatchlist()
+      fetchActivity(isAdmin ? null : user?.id)
     }
-
-    poll() // immediate
-    pollRef.current = setInterval(poll, POLL_INTERVAL)
-    return () => clearInterval(pollRef.current)
-  }, [watchlist, user])
+    window.addEventListener('alphahub:resume', refreshOnResume)
+    return () => {
+      window.removeEventListener('alphahub:resume', refreshOnResume)
+    }
+  }, [fetchActivity, fetchWatchlist, user?.id, isAdmin])
 
   const addWallet = async ({ address, label, chain }) => {
     try {
@@ -105,6 +69,11 @@ export default function WhaleRadarPage() {
       if (!address || !address.startsWith('0x')) { toast.error('Invalid wallet address'); return }
       if (watchlist.find(w => w.wallet_address.toLowerCase() === address.toLowerCase() && w.chain === chain)) {
         toast.error('Already watching this wallet')
+        return
+      }
+      if (watchlist.length >= limits.trackedWallets) {
+        setUpgradeRequired(true)
+        toast.error(`Your ${plan || 'Free'} plan tracks ${limits.trackedWallets} wallet${limits.trackedWallets === 1 ? '' : 's'}. Upgrade to add more.`)
         return
       }
       const insertPromise = supabase
@@ -121,7 +90,7 @@ export default function WhaleRadarPage() {
 
       if (error) {
         console.error('Supabase whale error:', error.code, error.message)
-        toast.error(`Failed: ${error.message}`, { duration: 6000 })
+        toast.error(friendlyError(error, 'Could not save this wallet. Please try again.'), { duration: 6000 })
         return
       }
       setWatchlist(prev => [...prev, data])
@@ -129,7 +98,7 @@ export default function WhaleRadarPage() {
       setShowAddModal(false)
     } catch (err) {
       console.error('Unexpected error adding wallet:', err)
-      toast.error(`Unexpected error: ${err.message}`)
+      toast.error(friendlyError(err, 'Could not save this wallet. Please try again.'))
     }
   }
 
@@ -139,34 +108,105 @@ export default function WhaleRadarPage() {
     toast.success(`Removed ${label || 'wallet'}`)
   }
 
-  const filteredActivity = activeChain === 'all'
+  const copyMint = async (activityItem) => {
+    if (!hasAccess('pro')) {
+      setUpgradeRequired(true)
+      toast.error('Copy minting requires Pro.')
+      return
+    }
+    if (!user?.id) {
+      toast.error('Sign in again before copying this mint.')
+      return
+    }
+    if (!activityItem?.contract_address) {
+      toast.error('This whale mint does not include a contract address.')
+      return
+    }
+
+    try {
+      const { count } = await supabase
+        .from('wl_projects')
+        .select('id', { count: 'exact', head: true })
+        .eq('user_id', user.id)
+
+      if ((count || 0) >= limits.mintProjects) {
+        setUpgradeRequired(true)
+        toast.error(`Your ${plan || 'current'} plan tracks ${limits.mintProjects} mint projects. Upgrade to copy more.`)
+        return
+      }
+
+      const token = await getAuthToken()
+      if (!token) throw new Error('Sign in again before copying this mint.')
+      const res = await fetch('/api/calendar/copy-mint', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ activity: activityItem }),
+      })
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok || data?.ok === false) throw new Error(data.error || 'Could not copy this mint.')
+      toast.success(data.duplicate ? 'Already in MintGuard.' : 'Copied to MintGuard. Review it before minting.')
+      navigate('/mintguard')
+    } catch (err) {
+      console.error('copy mint error:', err)
+      toast.error(friendlyError(err, 'Could not copy this mint. Please try again.'))
+    }
+  }
+
+  const realActivity = activeChain === 'all'
     ? activity
     : activity.filter(a => a.chain === activeChain)
+  const filteredActivity = realActivity
 
   const mintActivity = activity.filter(a => a.is_mint)
   const largeMovers = activity.filter(a => parseFloat(a.value_eth) > 1)
 
+  if (upgradeRequired) {
+    return (
+      <Paywall
+        onSuccess={refresh}
+        showBack
+        requiredPlan="pro"
+        currentPlan={plan || 'free'}
+        lockMessage="More tracked wallets require Pro."
+      />
+    )
+  }
+
   return (
     <div>
       {/* Header */}
-      <div className="flex items-start justify-between mb-6">
-        <div>
-          <div className="flex items-center gap-2 mb-1">
-            <Radar size={20} className="text-accent" />
-            <h1 className="text-xl font-bold">WhaleRadar</h1>
-            {polling && <div className="spinner w-3 h-3" />}
+      <div className="hero-panel mb-6">
+        <div className="hero-content flex flex-col gap-5 lg:flex-row lg:items-center lg:justify-between">
+          <div className="max-w-2xl">
+            <div className="flex flex-wrap items-center gap-2 mb-3">
+              <span className="mascot-orb"><Radar size={17} /></span>
+              <span className="badge badge-green">Live watchlist</span>
+              <span className="badge badge-cyan">Copy Mint</span>
+            </div>
+            <h1 className="text-3xl font-black tracking-tight">Follow wallets that move first.</h1>
+            <p className="mt-2 text-sm text-muted leading-relaxed">
+              Track smart wallets, deployers, and mint hunters. When a watched wallet mints, Alpha Hub can turn that signal into a personal MintGuard project.
+            </p>
+            <div className="mt-4 flex flex-wrap gap-2">
+              <span className="filter-chip active">{watchlist.length} watching</span>
+              <span className="filter-chip">{mintActivity.length} mint signals</span>
+              <span className="filter-chip">
+                {plan === 'admin'
+                  ? 'Admin Mode'
+                  : plan === 'free' || !plan
+                  ? `${watchlist.length}/${limits.trackedWallets} free slots`
+                  : `${watchlist.length}/${limits.trackedWallets} ${plan?.toUpperCase()} slots`}
+              </span>
+            </div>
           </div>
-          <p className="text-sm text-muted">
-            Track smart money. Know what they're minting before everyone else.
-          </p>
+          <button onClick={() => {
+            if (!user) { toast.error('Please sign out and back in, then try again.'); return }
+            setShowAddModal(true)
+          }} className="btn-primary flex items-center justify-center gap-2">
+            <Plus size={15} />
+            Track Wallet
+          </button>
         </div>
-        <button onClick={() => {
-          if (!user) { toast.error('Not authenticated - please sign out and back in'); return }
-          setShowAddModal(true)
-        }} className="btn-primary flex items-center gap-2">
-          <Plus size={15} />
-          Watch Wallet
-        </button>
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 mb-6">
@@ -191,11 +231,16 @@ export default function WhaleRadarPage() {
           <div className="card">
             <div className="section-label">Watchlist ({watchlist.length})</div>
             {loading ? (
-              <div className="flex justify-center py-8"><div className="spinner" /></div>
+              <div className="flex flex-col items-center justify-center py-8 text-center">
+                <div className="alpha-loader scale-75" />
+                <p className="mt-2 text-xs text-muted">Loading watched wallets...</p>
+              </div>
             ) : watchlist.length === 0 ? (
               <div className="text-center py-8">
-                <Eye size={28} className="text-muted mx-auto mb-2" />
-                <p className="text-muted text-sm">No wallets being tracked</p>
+                <Sparkles size={28} className="text-accent mx-auto mb-2" />
+                <p className="text-text text-sm font-semibold">Track smart wallets before the timeline reacts</p>
+                <p className="text-xs text-muted mt-1">Add whales, deployers, or sniper wallets. Alpha Hub monitors mint activity and alerts you when something moves.</p>
+                <button onClick={() => setShowAddModal(true)} className="btn-ghost mt-4 text-xs">Track a wallet</button>
               </div>
             ) : (
               <div className="space-y-2">
@@ -240,7 +285,9 @@ export default function WhaleRadarPage() {
         <div className="lg:col-span-3">
           <div className="card">
             <div className="flex items-center justify-between mb-3">
-              <div className="section-label mb-0">Live Activity Feed</div>
+              <div>
+                <div className="section-label mb-0">Live Activity Feed</div>
+              </div>
               <div className="flex gap-1">
                 {['all', 'eth', 'base', 'bnb'].map(c => (
                   <button
@@ -255,7 +302,21 @@ export default function WhaleRadarPage() {
                 ))}
               </div>
             </div>
-            <ActivityFeed activity={filteredActivity} />
+            {!realActivity.length && (
+              <div className="mb-3 flex flex-col gap-2 rounded-lg border border-accent/20 bg-accent/8 p-3 sm:flex-row sm:items-center sm:justify-between">
+                <div>
+                  <div className="text-sm font-semibold text-text">Copy Mint turns wallet movement into a tracked launch.</div>
+                  <div className="text-xs text-muted">Real whale mint activity will appear here once tracked wallets move.</div>
+                </div>
+                <button
+                  onClick={() => setShowAddModal(true)}
+                  className="btn-ghost text-xs whitespace-nowrap"
+                >
+                  Watch Wallet
+                </button>
+              </div>
+            )}
+            <ActivityFeed activity={filteredActivity} onCopyMint={copyMint} />
           </div>
         </div>
       </div>

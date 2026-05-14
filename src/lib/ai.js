@@ -1,31 +1,20 @@
-const GROQ_URL = 'https://api.groq.com/openai/v1/chat/completions'
-const GROQ_KEY = import.meta.env.VITE_GROQ_API_KEY
+import { getAuthToken } from './supabase'
 
-const SYSTEM = `You are an expert on-chain forensics analyst and smart contract auditor for a professional crypto and NFT trading community. You have deep knowledge of DeFi protocols, DEX mechanics, NFT markets, MEV/sandwich attacks, rug pull patterns, and on-chain behavior analysis. You give structured forensic reports with clear section headers. You decode failed transactions precisely, identify bot behavior, jeet patterns, honeypots and contract backdoors. You write in direct crypto community language. No financial disclaimers. Ever.`
-
-
-async function callGroq(prompt) {
-  if (!GROQ_KEY) return 'No Groq API key set. Add VITE_GROQ_API_KEY to Vercel environment variables.'
+async function callAI(type, prompt) {
+  const token = await getAuthToken()
+  if (!token) return 'Sign in again to use AI analysis.'
   try {
-    const r = await fetch(GROQ_URL, {
+    const r = await fetch('/api/ai-analysis', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'Authorization': `Bearer ${GROQ_KEY}`,
+        Authorization: `Bearer ${token}`,
       },
-      body: JSON.stringify({
-        model: 'llama-3.3-70b-versatile',
-        messages: [
-          { role: 'system', content: SYSTEM },
-          { role: 'user', content: prompt }
-        ],
-        max_tokens: 2048,
-        temperature: 0.7,
-      }),
+      body: JSON.stringify({ type, prompt }),
     })
     const d = await r.json()
-    if (d.error) return `AI error: ${d.error.message}`
-    return d.choices?.[0]?.message?.content || 'Analysis unavailable.'
+    if (!r.ok || d.error) return `AI error: ${d.error || 'Request failed'}`
+    return d.content || 'Analysis unavailable.'
   } catch(e) {
     return `AI unavailable: ${e.message}`
   }
@@ -81,29 +70,32 @@ ${recentPattern}
 FAILED TRANSACTIONS:
 ${failedContext || 'None'}
 
-Write a forensic report with EXACTLY these sections:
+Write a forensic report with EXACTLY these sections and concrete signals only:
 
-**VERDICT**
-One line classification: whale / degen / jeet / diamond hands / bot / normie / rug deployer. One sentence why.
+**WALLET SUMMARY**
+Age window, tx count, chains used, volume, activity pattern, and likely user type: collector / sniper / deployer / trader / inactive wallet / bot-like wallet.
 
-**BEHAVIOR PATTERN**
-What does this wallet actually do? Which protocols, which strategies, how they move money. Specific.
+**RISK SCORE**
+0-100 with label Low Risk / Medium Risk / High Risk / Unknown. Explain the score in one sentence.
 
-**JEET ANALYSIS**
-Based on ${jeetScore}/100 score and token activity. Do they dump early? Hold through dips? Evidence from data.
-
-**FAILED TX FORENSICS**
-Explain each failed tx in plain English. Was it bad slippage? Sandwich attack? Honeypot trap? Gas too low? Out-competed? If none, say so.
+**BEHAVIORAL SIGNALS**
+Recent activity velocity, repeated contract interactions, failed tx rate, NFT mint frequency, token swap frequency, gas aggression, interaction diversity, and funding clues if visible.
 
 **RED FLAGS**
-Any suspicious patterns, bot-like regularity, rug connections, wash trading, or anything the community must know.
+Specific risks only: fresh high-value activity, failed tx rate, risky contracts, suspicious funding, concentration, bot-like timing, unknown deployer interaction.
 
-**BOTTOM LINE**
-One punchy sentence: trust this wallet, copy their moves, or stay away?
+**GREEN FLAGS**
+Specific positives only: wallet age, diversified activity, verified marketplace interactions, low failed tx rate, organic history.
 
-Max 400 words. Be direct. Crypto language.`
+**ACTIONABLE RECOMMENDATION**
+Pick one: Safe to monitor / Track but do not auto-copy / Avoid automint without manual review / High-confidence smart wallet candidate. Add one reason.
 
-  return callGroq(prompt)
+**CONFIDENCE**
+High / Medium / Low with reason. Mention data source: on-chain transaction data from ${chain.name}, last updated now.
+
+No vague DYOR filler. Max 450 words.`
+
+  return callAI('wallet', prompt)
 }
 
 // --- Contract Security Audit -------------------------------------
@@ -147,27 +139,27 @@ READ THE CODE for: hidden mint functions, owner withdraw backdoors, blacklist/pa
 
 Write an audit with EXACTLY these sections:
 
-**VERDICT**
-SAFE / CAUTION / HARD AVOID — one sentence biggest reason.
+**CONTRACT INTELLIGENCE**
+Verified status, likely type, chain, owner/deployer clues if visible, supply/max supply if visible, mint price/start time if visible, and marketplace presence if inferable.
 
-**WHAT THIS CONTRACT DOES**
-Plain English: token, NFT, DEX, vault? What's its purpose?
+**RISK SIGNALS**
+List concrete risks: unverified source, owner pause/price control, suspicious mint function, no supply cap, no launch time, low holder diversity, high fail rate.
 
-**CODE VULNERABILITIES**
-${srcSnippet ? 'List dangerous functions found: owner drain, hidden mint, blacklist, pause, fee manipulation. Quote function names.' : 'Explain unverified contract risks in detail.'}
+**LAUNCH READINESS**
+Choose one: Ready to track / Needs manual review / Unsafe for Strike Mode. Explain why.
 
-**OWNERSHIP & CONTROL**
-Renounced or not? What can the deployer still do? Rug risk level.
+**AUTOMINT RECOMMENDATION**
+Choose one: Safe Mint recommended / Strike Mode not recommended / Strike Mode allowed after user confirmation / Missing required data.
 
 **TRANSACTION PATTERN**
-What do recent calls reveal? Normal activity or suspicious?
+What recent calls reveal: minting, transfers, approvals, failed interactions, or quiet contract.
 
-**COMMUNITY VERDICT**
-One sentence: ape in, proceed careful, or hard avoid?
+**CONFIDENCE**
+High / Medium / Low with reason. Mention data source: contract metadata and recent on-chain calls from ${chain.name}, last updated now.
 
-Max 350 words. Direct. No fluff.`
+No vague DYOR filler. Max 400 words.`
 
-  return callGroq(prompt)
+  return callAI('contract', prompt)
 }
 
 // --- Whale Activity Summary --------------------------------------
@@ -186,18 +178,77 @@ If it's a mint, explain why this matters (new project, following smart money, et
 If it's a large trade, explain what it signals (bullish, bearish, accumulation, distribution).
 Keep it sharp, 2 sentences max. Crypto slang welcome.`
 
-  return callGroq(prompt)
+  return callAI('whale', prompt)
 }
 
 // --- Project Metadata from URL -----------------------------------
-// Metadata extraction is now handled server-side at /api/metadata
-// (real OpenSea/Zora API calls + Groq fallback, no CORS issues)
 export async function extractProjectMetadata(url) {
+  const prompt = `A user pasted this URL for an NFT/crypto project: ${url}
+
+Based on the URL alone, extract and return ONLY a JSON object (no markdown, no explanation) with:
+{
+  "name": "project name if obvious from URL, else null",
+  "source_type": "twitter" or "opensea" or "website",
+  "chain": "eth" or "base" or "unknown",
+  "notes": "one sentence about what this likely is"
+}
+
+Return only valid JSON.`
+
   try {
-    const r = await fetch(`/api/metadata?url=${encodeURIComponent(url)}`)
-    if (!r.ok) throw new Error('API error')
-    return await r.json()
-  } catch {
-    return { name: null, source_type: 'website', chain: 'eth', notes: null, confidence: {}, missing_fields: [] }
+    const result = await callAI('project', prompt)
+    const jsonMatch = result.match(/\{[\s\S]*\}/)
+    if (jsonMatch) return JSON.parse(jsonMatch[0])
+  } catch {}
+  return { name: null, source_type: 'website', chain: 'eth', notes: null }
+}
+
+export async function fetchProjectIntel(project) {
+  const prompt = `You are a crypto/NFT project researcher. Research this NFT project.
+
+Project: ${project.name}
+Source URL: ${project.source_url || 'unknown'}
+WL Type: ${project.wl_type}
+Chain: ${project.chain}
+Mint Date: ${project.mint_date || 'not set'}
+Notes: ${project.notes || 'none'}
+
+Respond with ONLY valid JSON, no markdown:
+{"summary":"2 sentence execution-focused description","wl_giveaway_likely":false,"giveaway_note":"","red_flags":[],"green_flags":[],"hype_score":5,"hype_reason":"one sentence","mint_interest_label":"Low/Medium/High","launch_readiness":"Ready to track/Needs manual review/Unsafe for Strike Mode","automint_recommendation":"Safe Mint recommended/Strike Mode not recommended/Strike Mode allowed after user confirmation/Missing required data","confidence":"Low/Medium/High","confidence_reason":"one sentence","advice":"one sharp action","discord_tip":"what to verify","twitter_tip":"search terms for X"}`
+
+  try {
+    const text = await callAI('project', prompt)
+    if (text.startsWith('AI error:') || text.startsWith('AI unavailable:')) return { error: text }
+    const clean = text
+      .replace(/```json\n?/g, '')
+      .replace(/```\n?/g, '')
+      .replace(/^[^{]*/s, '')
+      .trim()
+    const jsonMatch = clean.match(/\{[\s\S]*\}/)
+    if (jsonMatch) {
+      try {
+        return JSON.parse(jsonMatch[0])
+      } catch {
+        const fixed = jsonMatch[0]
+          .replace(/,\s*}/g, '}')
+          .replace(/,\s*]/g, ']')
+          .replace(/([{,]\s*)(\w+):/g, '$1"$2":')
+        return JSON.parse(fixed)
+      }
+    }
+    return {
+      summary: text.slice(0, 300),
+      hype_score: 5,
+      advice: text.slice(0, 150),
+      red_flags: [],
+      green_flags: [],
+      wl_giveaway_likely: false,
+      giveaway_note: '',
+      hype_reason: '',
+      discord_tip: '',
+      twitter_tip: '',
+    }
+  } catch (e) {
+    return { error: e.message }
   }
 }

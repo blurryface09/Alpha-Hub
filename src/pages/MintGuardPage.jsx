@@ -1,18 +1,52 @@
 import React, { useState, useEffect, useCallback } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
-import { Plus, Shield } from 'lucide-react'
+import { Plus, Shield, Sparkles, Wand2 } from 'lucide-react'
 import toast from 'react-hot-toast'
-import { supabase, directInsert, directUpdate } from '../lib/supabase'
+import { supabase, directInsert, directUpdate, getAuthToken } from '../lib/supabase'
 import { useMint } from '../hooks/useMint'
+import { useSubscription } from '../hooks/useSubscription'
 import { useAuthStore } from '../store'
+import { friendlyError } from '../lib/errors'
+import Paywall from '../components/Paywall'
 import AddProjectModal from '../components/mint/AddProjectModal'
 import MintConfirmModal from '../components/mint/MintConfirmModal'
 import ProjectCard from '../components/mint/ProjectCard'
 
 const STATUS_TABS = ['all', 'upcoming', 'live', 'minted', 'missed']
+const OPTIONAL_PROJECT_FIELDS = [
+  'automint_enabled',
+  'max_mint_price',
+  'max_gas_fee',
+  'max_total_spend',
+  'mint_time_source',
+  'mint_time_confidence',
+  'mint_time_confirmed',
+  'mint_time_confirmed_at',
+  'prepared_to',
+  'prepared_data',
+  'prepared_value',
+  'prepared_chain_id',
+  'execution_status',
+]
+
+// Send a notification to the user's Telegram (fire-and-forget)
+async function notifyTelegram(project, type, userToken) {
+  if (!userToken) return
+  try {
+    await fetch('/api/telegram', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': 'Bearer ' + userToken,
+      },
+      body: JSON.stringify({ project, type }),
+    })
+  } catch {}
+}
 
 export default function MintGuardPage() {
   const { user } = useAuthStore()
+  const { plan, limits, hasAccess, refresh } = useSubscription()
   const { executeMint: mintHook, isConnected } = useMint()
   const [projects, setProjects] = useState([])
   const [loading, setLoading] = useState(true)
@@ -20,7 +54,11 @@ export default function MintGuardPage() {
   const [showAddModal, setShowAddModal] = useState(false)
   const [confirmMint, setConfirmMint] = useState(null) // project to confirm mint for
   const [mintingId, setMintingId] = useState(null)
+  const [telegramChatId, setTelegramChatId] = useState(null)
+  const [userToken, setUserToken] = useState(null)
+  const [upgradeRequired, setUpgradeRequired] = useState(null)
   const autoFired = React.useRef(new Set())
+  const tgNotified = React.useRef(new Set()) // prevent duplicate Telegram notifications
 
   // Auto-update project status based on mint date
   const autoUpdateStatus = async (projects) => {
@@ -63,14 +101,14 @@ export default function MintGuardPage() {
     if (!user) { setLoading(false); return }
     try {
       if (showLoader) setLoading(true)
-      const { data, error } = await supabase
+      let query = supabase
         .from('wl_projects')
         .select('*')
         .eq('user_id', user.id)
         .order('mint_date', { ascending: true, nullsFirst: false })
+      const { data, error } = await query
       if (error) { console.error('fetchProjects error:', error); return }
-      if (data) {
-        // Auto-update statuses based on dates
+      if (Array.isArray(data)) {
         const updated = await autoUpdateStatus(data)
         setProjects(updated)
       }
@@ -83,15 +121,32 @@ export default function MintGuardPage() {
 
   // First load with spinner, subsequent interval refreshes silent
   const initialLoad = React.useRef(false)
+  const lastVisibilityRefresh = React.useRef(0)
 
   useEffect(() => {
+    setProjects([])
+    setLoading(true)
+    initialLoad.current = false
     if (!initialLoad.current) {
       initialLoad.current = true
       fetchProjects(true) // show spinner on first load
     }
     // Silent background refresh every 60s -- never clears projects
     const interval = setInterval(() => fetchProjects(false), 60000)
-    return () => clearInterval(interval)
+
+    // Re-fetch when tab/app becomes visible — small delay lets Supabase finish token refresh first
+    const onVisibility = () => {
+      if (document.visibilityState !== 'visible') return
+      if (Date.now() - lastVisibilityRefresh.current < 4 * 60 * 1000) return
+      lastVisibilityRefresh.current = Date.now()
+      setTimeout(() => fetchProjects(false), 800)
+    }
+    document.addEventListener('visibilitychange', onVisibility)
+
+    return () => {
+      clearInterval(interval)
+      document.removeEventListener('visibilitychange', onVisibility)
+    }
   }, [fetchProjects])
 
   // Real-time client-side status tick every 30s — no DB round-trip needed for UI updates
@@ -118,44 +173,120 @@ export default function MintGuardPage() {
 
   // Auto-check if any live mints need to fire (guard prevents double-trigger with Countdown)
   useEffect(() => {
-    const autoProjects = projects.filter(p => p.status === 'live' && p.mint_mode === 'auto' && p.contract_address)
+    if (!hasAccess('pro')) return
+    const autoProjects = projects.filter(p =>
+      p.status === 'live' &&
+      p.mint_mode === 'auto' &&
+      p.automint_enabled !== false &&
+      p.contract_address &&
+      !p.auto_mint_fired  // skip if server-side cron already fired it
+    )
     autoProjects.forEach(p => {
       if (!autoFired.current.has(p.id)) {
         autoFired.current.add(p.id)
-        handleMint(p, true)
+        toast.success(`${p.name} is queued for Strike Mode. Alpha Vault safety checks will run before any transaction.`)
       }
     })
   }, [projects])
 
+  // Load user's Telegram chat ID + auth token for notify calls
+  useEffect(() => {
+    if (!user) return
+    supabase.from('profiles').select('telegram_chat_id').eq('id', user.id).single()
+      .then(({ data }) => { if (data?.telegram_chat_id) setTelegramChatId(data.telegram_chat_id) })
+    getAuthToken().then(token => { if (token) setUserToken(token) })
+  }, [user])
+
+  // Send Telegram live-alert when a project transitions to 'live'
+  useEffect(() => {
+    if (!telegramChatId || !userToken || !hasAccess('pro')) return
+    projects.forEach(p => {
+      if (p.status === 'live' && !tgNotified.current.has(p.id)) {
+        tgNotified.current.add(p.id)
+        notifyTelegram({ ...p, _telegram_chat_id: telegramChatId }, 'live', userToken)
+      }
+    })
+  }, [projects, telegramChatId, userToken])
+
+  // Watch for Telegram mint approvals (user tapped "Confirm" in Telegram)
+  useEffect(() => {
+    if (!user) return
+    const channel = supabase
+      .channel('tg-mint-approvals')
+      .on('postgres_changes', {
+        event: 'UPDATE', schema: 'public', table: 'wl_projects',
+        filter: `user_id=eq.${user.id}`,
+      }, payload => {
+        const updated = payload.new
+        if (updated.telegram_mint_approved === true && updated.status !== 'minted') {
+          // Reset the flag first, then execute
+          supabase.from('wl_projects').update({ telegram_mint_approved: null }).eq('id', updated.id)
+          setProjects(prev => prev.map(p => p.id === updated.id
+            ? { ...p, ...updated, telegram_mint_approved: null } : p))
+          // Execute the mint directly (skip confirm modal — user already confirmed in Telegram)
+          executeMint({ ...updated })
+        }
+      })
+      .subscribe()
+    return () => supabase.removeChannel(channel)
+  }, [user])
+
   const filtered = activeTab === 'all' ? projects : projects.filter(p => p.status === activeTab)
 
   const handleAddProject = async (projectData) => {
+    if (!user?.id) {
+      toast.error('Not logged in — please sign out and back in')
+      throw new Error('Not logged in')
+    }
+    if (projects.length >= limits.mintProjects) {
+      setUpgradeRequired('More mint tracking requires Pro.')
+      toast.error(`Your ${plan || 'Free'} plan tracks ${limits.mintProjects} mint project${limits.mintProjects === 1 ? '' : 's'}. Upgrade to add more.`)
+      throw new Error('Plan limit reached')
+    }
+    const insertData = {
+      name: projectData.name || 'Unnamed',
+      source_url: projectData.source_url || null,
+      source_type: projectData.source_type || 'website',
+      chain: projectData.chain || 'eth',
+      contract_address: projectData.contract_address || null,
+      mint_date: projectData.mint_date || null,
+      mint_price: projectData.mint_price || null,
+      wl_type: projectData.wl_type || 'UNKNOWN',
+      mint_mode: projectData.mint_mode || 'confirm',
+      automint_enabled: projectData.automint_enabled ?? false,
+      max_mint: projectData.max_mint || 1,
+      gas_limit: projectData.gas_limit || 200000,
+      max_mint_price: projectData.max_mint_price || null,
+      max_gas_fee: projectData.max_gas_fee || null,
+      max_total_spend: projectData.max_total_spend || null,
+      mint_time_source: projectData.mint_time_source || null,
+      mint_time_confidence: projectData.mint_time_confidence || null,
+      mint_time_confirmed: projectData.mint_time_confirmed ?? Boolean(projectData.mint_date),
+      mint_time_confirmed_at: projectData.mint_time_confirmed_at || null,
+      execution_status: 'queued',
+      notes: projectData.notes || null,
+      user_id: user.id,
+      status: 'upcoming',
+    }
+    toast.loading('Saving...', { id: 'save-project' })
     try {
-      if (!user?.id) { toast.error('Not logged in -- please sign out and back in'); return }
-      const insertData = {
-        name: projectData.name || 'Unnamed',
-        source_url: projectData.source_url || 'https://unknown.com',
-        source_type: projectData.source_type || 'website',
-        chain: projectData.chain || 'eth',
-        contract_address: projectData.contract_address || null,
-        mint_date: projectData.mint_date || null,
-        mint_price: projectData.mint_price || null,
-        wl_type: projectData.wl_type || 'UNKNOWN',
-        mint_mode: projectData.mint_mode || 'confirm',
-        max_mint: projectData.max_mint || 1,
-        gas_limit: projectData.gas_limit || 200000,
-        notes: projectData.notes || null,
-        user_id: user.id,
-        status: 'upcoming',
+      let data
+      try {
+        data = await directInsert('wl_projects', insertData)
+      } catch (schemaError) {
+        if (!String(schemaError.message || '').includes('schema cache')) throw schemaError
+        const fallbackData = { ...insertData }
+        OPTIONAL_PROJECT_FIELDS.forEach((field) => delete fallbackData[field])
+        data = await directInsert('wl_projects', fallbackData)
+        console.warn('Saved project without optional automint safety columns. Apply the automint schema migration before launch.')
       }
-      toast.loading('Saving...', { id: 'save-project' })
-      const data = await directInsert('wl_projects', insertData)
       setProjects(prev => [data, ...prev])
       toast.success(`${data.name} added!`, { id: 'save-project' })
       setShowAddModal(false)
     } catch (err) {
-      console.error('Unexpected error:', err)
-      toast.error(`Unexpected error: ${err.message}`, { id: 'save-project' })
+      console.error('handleAddProject error:', err)
+      toast.error(friendlyError(err, 'Could not save this project. Please try again.'), { id: 'save-project' })
+      throw err
     }
   }
 
@@ -165,7 +296,7 @@ export default function MintGuardPage() {
     const { error } = await supabase.from('wl_projects').delete().eq('id', id)
     if (error) {
       if (snapshot) setProjects(prev => [snapshot, ...prev.filter(p => p.id !== id)])
-      toast.error('Delete failed: ' + error.message)
+      toast.error(friendlyError(error, 'Could not delete this project. Please try again.'))
       return
     }
     toast.success('Project removed')
@@ -174,7 +305,7 @@ export default function MintGuardPage() {
   const handleStatusUpdate = async (id, status) => {
     setProjects(prev => prev.map(p => p.id === id ? { ...p, status } : p))
     const { error } = await supabase.from('wl_projects').update({ status }).eq('id', id)
-    if (error) toast.error('Status update failed: ' + error.message)
+    if (error) toast.error(friendlyError(error, 'Could not update this project. Please try again.'))
   }
 
   const handleEditProject = async (id, updates) => {
@@ -184,18 +315,77 @@ export default function MintGuardPage() {
       setProjects(prev => prev.map(p => p.id === id ? { ...p, ...updates } : p))
       toast.success('Project updated!', { id: 'edit-project' })
     } catch(e) {
-      toast.error(e.message, { id: 'edit-project' })
+      toast.error(friendlyError(e, 'Could not update this project. Please try again.'), { id: 'edit-project' })
     }
   }
 
-  const handleMintModeToggle = async (id, currentMode) => {
+  const handleMintModeToggle = async (project) => {
+    if (!hasAccess('pro')) {
+      setUpgradeRequired('Automint tools require Pro.')
+      toast.error('Automint tools require Pro.')
+      return
+    }
+    const id = project.id
+    const currentMode = project.mint_mode
     const newMode = currentMode === 'confirm' ? 'auto' : 'confirm'
-    await supabase.from('wl_projects').update({ mint_mode: newMode }).eq('id', id)
-    setProjects(prev => prev.map(p => p.id === id ? { ...p, mint_mode: newMode } : p))
-    toast.success(`Switched to ${newMode === 'auto' ? '⚡ Auto-Mint' : '✓ Confirm-Mint'}`)
+    if (newMode === 'auto') {
+      const accepted = window.confirm('Strike Mode can execute real blockchain transactions through Alpha Vault. Use an isolated burner wallet and set max spend limits. Continue?')
+      if (!accepted) return
+      try {
+        const token = await getAuthToken()
+        if (!token) throw new Error('Sign in again before enabling Strike Mode.')
+        const res = await fetch('/api/mint/enable-strike', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+          body: JSON.stringify({
+            wlProjectId: project.id,
+            name: project.name,
+            contractAddress: project.contract_address,
+            chain: project.chain,
+            chainId: project.chain_id,
+            quantity: project.max_mint || 1,
+            mintPrice: project.mint_price || '0',
+            maxTotalSpend: project.max_total_spend || '0.05',
+            maxGasFee: project.max_gas_fee || null,
+            mintDate: project.mint_date || new Date().toISOString(),
+            strikeExecuteAt: project.mint_date || new Date().toISOString(),
+            acknowledgeRisk: true,
+          }),
+        })
+        const data = await res.json().catch(() => ({}))
+        if (!res.ok || data?.ok === false) throw new Error(data.error || 'Could not arm Strike Mode.')
+        toast.success(data.message || 'Strike armed. Worker is watching.')
+      } catch (error) {
+        toast.error(error?.message || friendlyError(error, 'Could not arm Strike Mode.'))
+        return
+      }
+    }
+    let { error } = await supabase
+      .from('wl_projects')
+      .update({ mint_mode: newMode, automint_enabled: newMode === 'auto' })
+      .eq('id', id)
+    if (error && String(error.message || '').includes('schema cache')) {
+      const fallback = await supabase.from('wl_projects').update({ mint_mode: newMode }).eq('id', id)
+      error = fallback.error
+    }
+    if (error) {
+      toast.error(friendlyError(error, 'Could not update mint mode.'))
+      return
+    }
+    setProjects(prev => prev.map(p => p.id === id ? { ...p, mint_mode: newMode, automint_enabled: newMode === 'auto' } : p))
+    toast.success(newMode === 'auto' ? 'Strike armed. Worker is watching.' : 'Switched to Fast Mint')
   }
 
   const handleMint = async (project, isAuto = false) => {
+    if (isAuto) {
+      toast.success(`${project.name} is queued for Strike Mode server execution.`)
+      return
+    }
+    if (!hasAccess('pro')) {
+      setUpgradeRequired('Mint execution and automint tools require Pro.')
+      toast.error('Mint execution requires Pro.')
+      return
+    }
     if (!isConnected) {
       toast.error('Connect your wallet first — use the Connect Wallet button in the header')
       return
@@ -213,6 +403,22 @@ export default function MintGuardPage() {
 
   const executeMint = async (project) => {
     setMintingId(project.id)
+    // Snapshot token/chatId at execution time — avoids stale closure issues
+    const liveToken = await getAuthToken() || userToken
+    const { data: profileData } = await supabase.from('profiles').select('telegram_chat_id').eq('id', user.id).single()
+    const liveChatId = profileData?.telegram_chat_id || telegramChatId
+    const tgProject = { ...project, _telegram_chat_id: liveChatId }
+
+    // Mark as fired in DB before attempting — prevents cron from double-firing same project
+    if (project.mint_mode === 'auto') {
+      await supabase.from('wl_projects').update({ auto_mint_fired: true }).eq('id', project.id)
+      setProjects(prev => prev.map(p => p.id === project.id ? { ...p, auto_mint_fired: true } : p))
+    }
+
+    // Notify Telegram that auto-mint is firing
+    if (liveChatId && project.mint_mode === 'auto') {
+      notifyTelegram(tgProject, 'auto', liveToken)
+    }
     try {
       const result = await mintHook(project, user.id)
       if (result?.success) {
@@ -225,6 +431,8 @@ export default function MintGuardPage() {
           message: `Transaction confirmed. Hash: ${result.txHash?.slice(0, 16)}...`,
           data: { tx_hash: result.txHash, project_id: project.id },
         })
+        // Telegram success alert
+        notifyTelegram({ ...tgProject, tx_hash: result.txHash }, 'success', liveToken)
       } else if (result && !result.success) {
         await supabase.from('notifications').insert({
           user_id: user.id,
@@ -233,6 +441,14 @@ export default function MintGuardPage() {
           message: result.error,
           data: { project_id: project.id },
         })
+        // Reset auto_mint_fired so user can retry
+        if (project.mint_mode === 'auto') {
+          await supabase.from('wl_projects').update({ auto_mint_fired: false }).eq('id', project.id)
+          setProjects(prev => prev.map(p => p.id === project.id ? { ...p, auto_mint_fired: false } : p))
+          autoFired.current.delete(project.id)
+        }
+        // Telegram failure alert
+        notifyTelegram({ ...tgProject, error: result.error }, 'failed', liveToken)
       }
     } finally {
       setMintingId(null)
@@ -243,27 +459,56 @@ export default function MintGuardPage() {
   const liveCount = projects.filter(p => p.status === 'live').length
   const upcomingCount = projects.filter(p => p.status === 'upcoming').length
 
+  if (upgradeRequired) {
+    return (
+      <Paywall
+        onSuccess={refresh}
+        showBack
+        requiredPlan="pro"
+        currentPlan={plan || 'free'}
+        lockMessage={upgradeRequired}
+      />
+    )
+  }
+
   return (
     <div>
       {/* Header */}
-      <div className="flex items-start justify-between mb-6">
-        <div>
-          <div className="flex items-center gap-2 mb-1">
-            <Shield size={20} className="text-accent" />
-            <h1 className="text-xl font-bold">MintGuard</h1>
-            {liveCount > 0 && (
-              <span className="badge badge-green animate-pulse-slow">{liveCount} LIVE</span>
-            )}
+      <div className="hero-panel mb-6">
+        <div className="hero-content flex flex-col gap-5 lg:flex-row lg:items-center lg:justify-between">
+          <div className="max-w-2xl">
+            <div className="flex flex-wrap items-center gap-2 mb-3">
+              <span className="mascot-orb"><Shield size={17} /></span>
+              <span className="badge badge-cyan">My Mints</span>
+              {liveCount > 0 && (
+                <span className="badge badge-green animate-pulse-slow">{liveCount} live now</span>
+              )}
+            </div>
+            <h1 className="text-3xl font-black tracking-tight">Track launches without the chaos.</h1>
+            <p className="mt-2 text-sm text-muted leading-relaxed">
+              Save mints, confirm launch times, get alerts, and let Alpha Hub prepare the transaction. Safe Mint and Fast Mint keep you in control by default.
+            </p>
+            <div className="mt-4 flex flex-wrap gap-2">
+              <span className="filter-chip active"><Wand2 size={13} /> Fast Mint</span>
+              <span className="filter-chip">Strike opt-in</span>
+              <span className="filter-chip">Spend limits</span>
+              <span className="filter-chip">
+                {plan === 'admin'
+                  ? 'Admin Mode'
+                  : plan === 'free' || !plan
+                  ? `${projects.length}/${limits.mintProjects} free tracks`
+                  : `${projects.length}/${limits.mintProjects} ${plan?.toUpperCase()} tracks`}
+              </span>
+            </div>
           </div>
-          <p className="text-sm text-muted">Track your WL projects. Get alerted. Auto-mint when ready.</p>
+          <button onClick={() => {
+            if (!user) { toast.error('Please sign out and back in, then try again.'); return }
+            setShowAddModal(true)
+          }} className="btn-primary flex items-center justify-center gap-2">
+            <Plus size={15} />
+            Add Alpha
+          </button>
         </div>
-        <button onClick={() => {
-          if (!user) { toast.error('Not authenticated - please sign out and back in'); return }
-          setShowAddModal(true)
-        }} className="btn-primary flex items-center gap-2">
-          <Plus size={15} />
-          Add Project
-        </button>
       </div>
 
       {/* Stats */}
@@ -301,15 +546,17 @@ export default function MintGuardPage() {
 
       {/* Projects list */}
       {loading ? (
-        <div className="flex items-center justify-center py-16">
-          <div className="spinner" />
+        <div className="flex flex-col items-center justify-center py-16 text-center">
+          <div className="alpha-loader" />
+          <p className="mt-4 text-sm text-muted">Preparing your mint radar...</p>
         </div>
       ) : filtered.length === 0 ? (
-        <div className="card flex flex-col items-center justify-center py-16 text-center">
-          <Shield size={32} className="text-muted mb-3" />
-          <p className="text-muted text-sm">No projects here yet</p>
+        <div className="empty-state">
+          <Sparkles size={32} className="text-accent mb-3" />
+          <h2 className="text-lg font-bold">No mints saved yet</h2>
+          <p className="text-muted text-sm mt-2 max-w-md">Add a mint link, contract, or project name. Alpha Hub will help detect timing and keep it in Safe Mint until you decide otherwise.</p>
           <button onClick={() => setShowAddModal(true)} className="btn-ghost mt-4 text-xs">
-            + Add your first WL project
+            Add your first alpha
           </button>
         </div>
       ) : (
@@ -323,7 +570,7 @@ export default function MintGuardPage() {
                 onMint={(isAuto) => handleMint(project, isAuto)}
                 onDelete={() => handleDelete(project.id)}
                 onStatusUpdate={(s) => handleStatusUpdate(project.id, s)}
-                onMintModeToggle={() => handleMintModeToggle(project.id, project.mint_mode)}
+                onMintModeToggle={() => handleMintModeToggle(project)}
                 onEdit={(updates) => handleEditProject(project.id, updates)}
               />
             ))}

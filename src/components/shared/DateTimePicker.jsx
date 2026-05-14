@@ -1,78 +1,133 @@
+/**
+ * DateTimePicker — clean split date + time inputs with timezone awareness.
+ *
+ * - Buffers local date/time strings internally
+ * - Only calls onChange(utcISOString) once the date is fully valid (4-digit year)
+ * - Displays the user's detected timezone so they know what time they're setting
+ * - value/onChange use UTC ISO strings (what the DB stores)
+ */
 import React, { useState, useEffect } from 'react'
+import { Clock } from 'lucide-react'
 
-// Convert a UTC ISO string to local date/time parts for display
+function tzLabel() {
+  try {
+    return new Date().toLocaleTimeString('en', { timeZoneName: 'short' }).split(' ').pop() || 'local'
+  } catch { return 'local' }
+}
+
+function tzName() {
+  try {
+    return Intl.DateTimeFormat().resolvedOptions().timeZone || 'Local time'
+  } catch { return 'Local time' }
+}
+
+function formatLocalPreview(date, time) {
+  const utc = localPartsToUtc(date, time)
+  if (!utc) return null
+  return new Date(utc).toLocaleString([], {
+    year: 'numeric',
+    month: 'short',
+    day: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+  })
+}
+
+function formatUtcPreview(date, time) {
+  const utc = localPartsToUtc(date, time)
+  if (!utc) return null
+  return new Date(utc).toLocaleString([], {
+    timeZone: 'UTC',
+    year: 'numeric',
+    month: 'short',
+    day: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+    timeZoneName: 'short',
+  })
+}
+
+// UTC ISO string → { date: 'YYYY-MM-DD', time: 'HH:MM' } in user's LOCAL time
 function utcToLocalParts(utcStr) {
   if (!utcStr) return { date: '', time: '' }
   const d = new Date(utcStr)
-  if (isNaN(d.getTime())) return { date: '', time: '' }
-  const yyyy = d.getFullYear()
-  const mm   = String(d.getMonth() + 1).padStart(2, '0')
-  const dd   = String(d.getDate()).padStart(2, '0')
-  const hh   = String(d.getHours()).padStart(2, '0')
-  const min  = String(d.getMinutes()).padStart(2, '0')
-  return { date: `${yyyy}-${mm}-${dd}`, time: `${hh}:${min}` }
-}
-
-// Convert local date+time parts back to UTC ISO string
-function localPartsToUtc(date, time) {
-  if (!date || !time) return null
-  const d = new Date(`${date}T${time}:00`)
-  if (isNaN(d.getTime())) return null
-  return d.toISOString()
-}
-
-function getTzLabel() {
-  try {
-    const tz = Intl.DateTimeFormat().resolvedOptions().timeZone
-    // Get short offset label  e.g. "GMT+1"
-    const offset = -new Date().getTimezoneOffset()
-    const sign = offset >= 0 ? '+' : '-'
-    const h = String(Math.floor(Math.abs(offset) / 60)).padStart(2, '0')
-    const m = String(Math.abs(offset) % 60).padStart(2, '0')
-    return `GMT${sign}${h}:${m}`
-  } catch {
-    return 'local'
+  if (isNaN(d)) return { date: '', time: '' }
+  const pad = n => String(n).padStart(2, '0')
+  return {
+    date: `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`,
+    time: `${pad(d.getHours())}:${pad(d.getMinutes())}`,
   }
 }
 
-/**
- * DateTimePicker — stores UTC ISO internally, shows user's local time
- * @param {string} value    - UTC ISO string (from DB)
- * @param {Function} onChange - called with UTC ISO string
- */
-export default function DateTimePicker({ value, onChange, disabled = false }) {
-  const [parts, setParts] = useState(() => utcToLocalParts(value))
-  const tz = getTzLabel()
+// LOCAL date + time strings → UTC ISO string (only when date is complete)
+function localPartsToUtc(date, time) {
+  if (!date || !/^\d{4}-\d{2}-\d{2}$/.test(date)) return null
+  const str = `${date}T${time && /^\d{2}:\d{2}$/.test(time) ? time : '00:00'}:00`
+  const d = new Date(str) // parsed as LOCAL time
+  return isNaN(d) ? null : d.toISOString()
+}
 
-  // Sync if external value changes
+export default function DateTimePicker({ value, onChange, label = 'Mint Date & Time' }) {
+  const initial = utcToLocalParts(value)
+  const [localDate, setLocalDate] = useState(initial.date)
+  const [localTime, setLocalTime] = useState(initial.time)
+  const tz = tzLabel()
+  const timezone = tzName()
+  const localPreview = formatLocalPreview(localDate, localTime)
+  const utcPreview = formatUtcPreview(localDate, localTime)
+
+  // Sync inbound value changes (e.g. when EditModal loads project data)
   useEffect(() => {
-    setParts(utcToLocalParts(value))
+    const parts = utcToLocalParts(value)
+    setLocalDate(parts.date)
+    setLocalTime(parts.time)
   }, [value])
 
-  const handleChange = (field, val) => {
-    const next = { ...parts, [field]: val }
-    setParts(next)
-    const utc = localPartsToUtc(next.date, next.time)
+  const handleDate = (e) => {
+    const d = e.target.value
+    setLocalDate(d)
+    const utc = localPartsToUtc(d, localTime)
+    if (utc) onChange(utc)      // only emit when date is fully valid
+    else if (!d) onChange(null) // cleared
+  }
+
+  const handleTime = (e) => {
+    const t = e.target.value
+    setLocalTime(t)
+    const utc = localPartsToUtc(localDate, t)
     if (utc) onChange(utc)
   }
 
   return (
-    <div className="flex gap-2 items-center">
-      <input
-        type="date"
-        className="input flex-1 min-w-0"
-        value={parts.date}
-        disabled={disabled}
-        onChange={e => handleChange('date', e.target.value)}
-      />
-      <input
-        type="time"
-        className="input w-28"
-        value={parts.time}
-        disabled={disabled}
-        onChange={e => handleChange('time', e.target.value)}
-      />
-      <span className="text-xs text-muted whitespace-nowrap font-mono">{tz}</span>
+    <div>
+      <label className="text-xs font-mono text-muted uppercase tracking-wider block mb-1.5">
+        {label}
+      </label>
+      <div className="flex gap-2">
+        <input
+          type="date"
+          className="input flex-1 min-w-0"
+          value={localDate}
+          onChange={handleDate}
+        />
+        <input
+          type="time"
+          className="input w-28"
+          value={localTime}
+          onChange={handleTime}
+        />
+      </div>
+      <p className="text-[10px] text-muted mt-1 flex items-center gap-1">
+        <Clock size={9} />
+        Enter local time · <span className="text-accent font-mono">{timezone} / {tz}</span>
+      </p>
+      {utcPreview && (
+        <div className="mt-2 rounded-lg border border-border bg-surface2/70 p-2 text-[10px] text-muted leading-relaxed">
+          <div><span className="text-text">Local:</span> {localPreview}</div>
+          <div><span className="text-text">Saved as UTC:</span> {utcPreview}</div>
+          <div className="text-muted2 mt-1">Confirm this against the official mint page before enabling Strike Mode.</div>
+        </div>
+      )}
     </div>
   )
 }
