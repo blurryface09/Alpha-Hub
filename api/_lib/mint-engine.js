@@ -48,6 +48,10 @@ function hasRealValue(value) {
   return Boolean(raw && raw !== 'undefined' && raw !== 'null')
 }
 
+function normalizeOptionalText(value) {
+  return hasRealValue(value) ? String(value).trim() : null
+}
+
 function validateRequiredUuid(value, label) {
   const normalized = normalizeOptionalUuid(value)
   if (!normalized) throw new Error(`${label} is invalid.`)
@@ -264,7 +268,7 @@ function intentPayload(user, body, status = 'draft') {
     calendar_project_id: normalizeOptionalUuid(body.calendarProjectId || body.calendar_project_id),
     wl_project_id: normalizeOptionalUuid(body.wlProjectId || body.wl_project_id),
     project_name: body.name || body.projectName || 'Mint project',
-    contract_address: body.contractAddress || body.contract_address || null,
+    contract_address: normalizeOptionalText(body.contractAddress || body.contract_address),
     chain,
     chain_id: chainIdFor(chain),
     mint_url: body.mintUrl || body.mint_url || null,
@@ -468,35 +472,37 @@ export async function handleMintAction(req, res, action) {
       const vaultWalletId = validateRequiredUuid(vault.id, 'Alpha Vault wallet id')
       const nowIso = new Date().toISOString()
       const requestedExecuteAt = body.strikeExecuteAt || body.strike_execute_at || body.mintDate || body.mint_date || nowIso
+      const bodyContract = normalizeOptionalText(body.contractAddress || body.contract_address)
       if (!intentId) {
+        const hasContract = Boolean(bodyContract)
         const created = await insertOptional(supabase, 'mint_intents', intentPayload(user, {
           ...body,
           mode: 'strike',
           maxTotalSpend,
           vaultWalletId,
-          strikeEnabled: true,
-          strikeStatus: 'armed',
-          strikeArmedAt: nowIso,
+          strikeEnabled: hasContract,
+          strikeStatus: hasContract ? 'armed' : 'needs_contract',
+          strikeArmedAt: hasContract ? nowIso : undefined,
           strikeExecuteAt: requestedExecuteAt,
-          strikeError: null,
-          status: 'armed',
-        }, 'armed'))
+          strikeError: hasContract ? null : 'Missing contract address',
+          status: hasContract ? 'armed' : 'blocked',
+        }, hasContract ? 'armed' : 'blocked'))
         intentId = created.id
         if (!intentId || created.localOnly) return res.status(500).json(safeError('Could not create Strike mint session.'))
       }
       const intent = await loadIntent(supabase, user.id, intentId)
       if (!intent) return res.status(404).json(safeError('Mint session not found.'))
       if (!intent.contract_address) {
+        console.log('Strike blocked: missing contract address', intentId)
         const blocked = await updateStrikeIntent(supabase, intentId, user.id, {
           execution_mode: 'strike',
           max_total_spend: maxTotalSpend,
           max_gas_fee: body.maxGasFee || body.max_gas_fee || intent.max_gas_fee || null,
           quantity: Number(body.quantity || intent.quantity || 1),
           vault_wallet_id: vaultWalletId,
-          strike_enabled: true,
+          strike_enabled: false,
           strike_status: 'needs_contract',
           status: 'blocked',
-          strike_armed_at: nowIso,
           strike_execute_at: requestedExecuteAt,
           strike_error: 'Missing contract address',
           last_state: 'Missing contract address',
@@ -507,7 +513,7 @@ export async function handleMintAction(req, res, action) {
           reason: 'missing_contract',
         })
         return res.status(400).json({
-          ...safeError('Strike Mode needs a contract address. Add one before the worker can execute.'),
+          ...safeError('Add contract address before enabling Strike Mode.'),
           intent: blocked,
         })
       }
