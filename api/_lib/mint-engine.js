@@ -58,6 +58,23 @@ function compactPayload(row) {
   return Object.fromEntries(Object.entries(row).filter(([, value]) => value !== undefined))
 }
 
+function logSanitizedPayload(label, row) {
+  console.log(label, {
+    project_id: row.project_id,
+    calendar_project_id: row.calendar_project_id,
+    wl_project_id: row.wl_project_id,
+    contract_address: row.contract_address,
+    chain: row.chain,
+    status: row.status,
+    strike_enabled: row.strike_enabled,
+    strike_status: row.strike_status,
+    strike_armed_at: row.strike_armed_at,
+    strike_execute_at: row.strike_execute_at,
+    strike_error: row.strike_error,
+    vault_wallet_id: row.vault_wallet_id,
+  })
+}
+
 function safeMessage(error) {
   const msg = String(error?.shortMessage || error?.message || error || '').toLowerCase()
   if (msg.includes('contract address')) return 'Contract address is needed for Fast or Strike Mint.'
@@ -257,6 +274,12 @@ function intentPayload(user, body, status = 'draft') {
     max_mint_price: body.maxMintPrice || body.max_mint_price || null,
     max_gas_fee: body.maxGasFee || body.max_gas_fee || null,
     max_total_spend: body.maxTotalSpend || body.max_total_spend || null,
+    vault_wallet_id: normalizeOptionalUuid(body.vaultWalletId || body.vault_wallet_id),
+    strike_enabled: body.strikeEnabled ?? body.strike_enabled,
+    strike_status: body.strikeStatus || body.strike_status,
+    strike_armed_at: body.strikeArmedAt || body.strike_armed_at,
+    strike_execute_at: body.strikeExecuteAt || body.strike_execute_at,
+    strike_error: body.strikeError || body.strike_error,
     status,
     last_state: status === 'prepared' ? EVENT_MESSAGES.prepared : EVENT_MESSAGES.preparing,
     updated_at: new Date().toISOString(),
@@ -264,14 +287,9 @@ function intentPayload(user, body, status = 'draft') {
 }
 
 async function insertOptional(supabase, table, row) {
-  console.log('Strike sanitized payload before insert', {
+  logSanitizedPayload('Strike sanitized payload before insert', {
     table,
-    project_id: row.project_id,
-    calendar_project_id: row.calendar_project_id,
-    wl_project_id: row.wl_project_id,
-    contract_address: row.contract_address,
-    chain: row.chain,
-    status: row.status,
+    ...row,
   })
   const { data, error } = await supabase.from(table).insert(row).select().single()
   if (!error) return data
@@ -335,10 +353,11 @@ async function updateStrikeIntent(supabase, intentId, userId, payload) {
       ...payload,
       vault_wallet_id: normalizeOptionalUuid(payload.vault_wallet_id),
     }),
-    strike_status: 'armed',
-    status: 'armed',
+    strike_status: payload.strike_status || 'armed',
+    status: payload.status || 'armed',
     updated_at: new Date().toISOString(),
   }
+  logSanitizedPayload('Strike sanitized payload before update', fullPayload)
   let { data, error } = await supabase
     .from('mint_intents')
     .update(fullPayload)
@@ -349,8 +368,8 @@ async function updateStrikeIntent(supabase, intentId, userId, payload) {
   if (!error) return data
 
   const message = String(error.message || '').toLowerCase()
-  if (message.includes('schema cache') || message.includes('column') || message.includes('strike_status') || message.includes('strike_execute_at') || message.includes('vault_wallet_id')) {
-    const { strike_status, strike_execute_at, vault_wallet_id, max_gas_fee, quantity, ...safePayload } = fullPayload
+  if (message.includes('schema cache') || message.includes('column') || message.includes('strike_status') || message.includes('strike_execute_at') || message.includes('vault_wallet_id') || message.includes('strike_armed_at') || message.includes('strike_error')) {
+    const { strike_status, strike_execute_at, strike_armed_at, strike_error, vault_wallet_id, max_gas_fee, quantity, ...safePayload } = fullPayload
     const retry = await supabase
       .from('mint_intents')
       .update(safePayload)
@@ -447,33 +466,70 @@ export async function handleMintAction(req, res, action) {
       const vault = await loadVault(supabase, user.id)
       if (!vault) return res.status(400).json(safeError('Create Alpha Vault before enabling Strike Mode.'))
       const vaultWalletId = validateRequiredUuid(vault.id, 'Alpha Vault wallet id')
+      const nowIso = new Date().toISOString()
+      const requestedExecuteAt = body.strikeExecuteAt || body.strike_execute_at || body.mintDate || body.mint_date || nowIso
       if (!intentId) {
         const created = await insertOptional(supabase, 'mint_intents', intentPayload(user, {
           ...body,
           mode: 'strike',
           maxTotalSpend,
-        }, 'prepared'))
+          vaultWalletId,
+          strikeEnabled: true,
+          strikeStatus: 'armed',
+          strikeArmedAt: nowIso,
+          strikeExecuteAt: requestedExecuteAt,
+          strikeError: null,
+          status: 'armed',
+        }, 'armed'))
         intentId = created.id
         if (!intentId || created.localOnly) return res.status(500).json(safeError('Could not create Strike mint session.'))
       }
       const intent = await loadIntent(supabase, user.id, intentId)
       if (!intent) return res.status(404).json(safeError('Mint session not found.'))
-      if (!intent.contract_address) return res.status(400).json(safeError('Strike Mode needs a contract address.'))
+      if (!intent.contract_address) {
+        const blocked = await updateStrikeIntent(supabase, intentId, user.id, {
+          execution_mode: 'strike',
+          max_total_spend: maxTotalSpend,
+          max_gas_fee: body.maxGasFee || body.max_gas_fee || intent.max_gas_fee || null,
+          quantity: Number(body.quantity || intent.quantity || 1),
+          vault_wallet_id: vaultWalletId,
+          strike_enabled: true,
+          strike_status: 'needs_contract',
+          status: 'blocked',
+          strike_armed_at: nowIso,
+          strike_execute_at: requestedExecuteAt,
+          strike_error: 'Missing contract address',
+          last_state: 'Missing contract address',
+        })
+        await logEvent(supabase, intentId, user.id, 'failed', 'Strike Mode needs a contract address.', {
+          vaultWalletId,
+          strikeExecuteAt: requestedExecuteAt,
+          reason: 'missing_contract',
+        })
+        return res.status(400).json({
+          ...safeError('Strike Mode needs a contract address. Add one before the worker can execute.'),
+          intent: blocked,
+        })
+      }
       if (!SUPPORTED_EXECUTION_CHAINS.has(intent.chain)) return res.status(400).json(safeError('This chain is not supported for Strike Mode yet.'))
       try {
         await prepareMintTransaction({ ...intent, walletAddress: vault.address || vault.wallet_address })
       } catch (error) {
         return res.status(400).json(safeError(safeMessage(error)))
       }
-      const strikeExecuteAt = body.strikeExecuteAt || body.strike_execute_at || body.mintDate || intent.mint_date || new Date().toISOString()
+      const strikeExecuteAt = body.strikeExecuteAt || body.strike_execute_at || body.mintDate || intent.mint_date || nowIso
       const armed = await updateStrikeIntent(supabase, intentId, user.id, {
         execution_mode: 'strike',
         max_total_spend: maxTotalSpend,
         max_gas_fee: body.maxGasFee || body.max_gas_fee || intent.max_gas_fee || null,
         quantity: Number(body.quantity || intent.quantity || 1),
         vault_wallet_id: vaultWalletId,
-        strike_execute_at: strikeExecuteAt,
         strike_enabled: true,
+        strike_status: 'armed',
+        status: 'armed',
+        strike_armed_at: nowIso,
+        strike_execute_at: strikeExecuteAt,
+        strike_error: null,
         last_state: EVENT_MESSAGES.watching,
       })
       console.log('Strike intent armed', intentId)

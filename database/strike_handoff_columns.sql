@@ -3,7 +3,9 @@
 
 alter table if exists public.mint_intents
   add column if not exists strike_status text default 'idle',
+  add column if not exists strike_armed_at timestamptz,
   add column if not exists strike_execute_at timestamptz,
+  add column if not exists strike_error text,
   add column if not exists vault_wallet_id uuid,
   add column if not exists strike_enabled boolean default false,
   add column if not exists max_gas_fee numeric,
