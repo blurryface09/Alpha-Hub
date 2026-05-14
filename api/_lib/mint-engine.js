@@ -295,6 +295,39 @@ async function recordAttempt(supabase, intentId, userId, status, metadata = {}) 
   return null
 }
 
+async function updateStrikeIntent(supabase, intentId, userId, payload) {
+  const fullPayload = {
+    ...payload,
+    strike_status: 'armed',
+    status: 'armed',
+    updated_at: new Date().toISOString(),
+  }
+  let { data, error } = await supabase
+    .from('mint_intents')
+    .update(fullPayload)
+    .eq('id', intentId)
+    .eq('user_id', userId)
+    .select()
+    .single()
+  if (!error) return data
+
+  const message = String(error.message || '').toLowerCase()
+  if (message.includes('schema cache') || message.includes('column') || message.includes('strike_status') || message.includes('strike_execute_at') || message.includes('vault_wallet_id')) {
+    const { strike_status, strike_execute_at, vault_wallet_id, max_gas_fee, quantity, ...safePayload } = fullPayload
+    const retry = await supabase
+      .from('mint_intents')
+      .update(safePayload)
+      .eq('id', intentId)
+      .eq('user_id', userId)
+      .select()
+      .single()
+    data = retry.data
+    error = retry.error
+  }
+  if (error) throw error
+  return data
+}
+
 async function loadVault(supabase, userId) {
   const { data, error } = await supabase
     .from('alpha_vault_wallets')
@@ -363,7 +396,9 @@ export async function handleMintAction(req, res, action) {
 
     if (action === 'enable-strike') {
       if (req.method !== 'POST') return res.status(405).json(safeError('Method not allowed.'))
-      const { intentId, acknowledgeRisk, maxTotalSpend } = req.body || {}
+      const body = req.body || {}
+      const { acknowledgeRisk, maxTotalSpend } = body
+      let { intentId } = body
       if (!AUTO_STRIKE_ENABLED || !ALPHA_VAULT_ENABLED) {
         return res.status(200).json({ ok: true, dryRun: true, error: 'Strike Mode is disabled by the global safety switch.' })
       }
@@ -371,6 +406,14 @@ export async function handleMintAction(req, res, action) {
       if (!maxTotalSpend) return res.status(400).json(safeError('Set a max spend limit before enabling Strike Mode.'))
       const vault = await loadVault(supabase, user.id)
       if (!vault) return res.status(400).json(safeError('Create or import an Alpha Vault wallet before Strike Mode.'))
+      if (!intentId) {
+        const created = await insertOptional(supabase, 'mint_intents', intentPayload(user, {
+          ...body,
+          mode: 'strike',
+          maxTotalSpend,
+        }, 'prepared'))
+        intentId = created.id
+      }
       const intent = await loadIntent(supabase, user.id, intentId)
       if (!intent) return res.status(404).json(safeError('Mint session not found.'))
       if (!intent.contract_address) return res.status(400).json(safeError('Strike Mode needs a contract address.'))
@@ -380,16 +423,23 @@ export async function handleMintAction(req, res, action) {
       } catch (error) {
         return res.status(400).json(safeError(safeMessage(error)))
       }
-      await supabase.from('mint_intents').update({
+      const strikeExecuteAt = body.strikeExecuteAt || body.strike_execute_at || body.mintDate || intent.mint_date || new Date().toISOString()
+      const armed = await updateStrikeIntent(supabase, intentId, user.id, {
         execution_mode: 'strike',
         max_total_spend: maxTotalSpend,
+        max_gas_fee: body.maxGasFee || body.max_gas_fee || intent.max_gas_fee || null,
+        quantity: Number(body.quantity || intent.quantity || 1),
+        vault_wallet_id: vault.id,
+        strike_execute_at: strikeExecuteAt,
         strike_enabled: true,
-        status: 'watching',
         last_state: EVENT_MESSAGES.watching,
-        updated_at: new Date().toISOString(),
-      }).eq('id', intentId).eq('user_id', user.id)
-      await logEvent(supabase, intentId, user.id, 'watching', 'Strike Mode armed with Alpha Vault limits.')
-      return res.status(200).json({ ok: true, message: 'Strike Mode armed. Alpha Vault limits are active.' })
+      })
+      console.log('Strike intent armed', intentId)
+      await logEvent(supabase, intentId, user.id, 'watching', 'Strike armed. Worker is watching.', {
+        vaultWalletId: vault.id,
+        strikeExecuteAt,
+      })
+      return res.status(200).json({ ok: true, intent: armed, message: 'Strike armed. Worker is watching.' })
     }
 
     if (action === 'stop') {

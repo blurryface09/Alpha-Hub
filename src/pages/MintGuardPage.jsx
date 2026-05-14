@@ -319,16 +319,46 @@ export default function MintGuardPage() {
     }
   }
 
-  const handleMintModeToggle = async (id, currentMode) => {
+  const handleMintModeToggle = async (project) => {
     if (!hasAccess('pro')) {
       setUpgradeRequired('Automint tools require Pro.')
       toast.error('Automint tools require Pro.')
       return
     }
+    const id = project.id
+    const currentMode = project.mint_mode
     const newMode = currentMode === 'confirm' ? 'auto' : 'confirm'
     if (newMode === 'auto') {
       const accepted = window.confirm('Strike Mode can execute real blockchain transactions through Alpha Vault. Use an isolated burner wallet and set max spend limits. Continue?')
       if (!accepted) return
+      try {
+        const token = await getAuthToken()
+        if (!token) throw new Error('Sign in again before enabling Strike Mode.')
+        const res = await fetch('/api/mint/enable-strike', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+          body: JSON.stringify({
+            wlProjectId: project.id,
+            name: project.name,
+            contractAddress: project.contract_address,
+            chain: project.chain,
+            chainId: project.chain_id,
+            quantity: project.max_mint || 1,
+            mintPrice: project.mint_price || '0',
+            maxTotalSpend: project.max_total_spend || '0.05',
+            maxGasFee: project.max_gas_fee || null,
+            mintDate: project.mint_date || new Date().toISOString(),
+            strikeExecuteAt: project.mint_date || new Date().toISOString(),
+            acknowledgeRisk: true,
+          }),
+        })
+        const data = await res.json().catch(() => ({}))
+        if (!res.ok || data?.ok === false) throw new Error(data.error || 'Could not arm Strike Mode.')
+        toast.success(data.message || 'Strike armed. Worker is watching.')
+      } catch (error) {
+        toast.error(friendlyError(error, 'Could not arm Strike Mode.'))
+        return
+      }
     }
     let { error } = await supabase
       .from('wl_projects')
@@ -343,7 +373,7 @@ export default function MintGuardPage() {
       return
     }
     setProjects(prev => prev.map(p => p.id === id ? { ...p, mint_mode: newMode, automint_enabled: newMode === 'auto' } : p))
-    toast.success(`Switched to ${newMode === 'auto' ? '⚡ Strike Mode' : '✓ Fast Mint'}`)
+    toast.success(newMode === 'auto' ? 'Strike armed. Worker is watching.' : 'Switched to Fast Mint')
   }
 
   const handleMint = async (project, isAuto = false) => {
@@ -540,7 +570,7 @@ export default function MintGuardPage() {
                 onMint={(isAuto) => handleMint(project, isAuto)}
                 onDelete={() => handleDelete(project.id)}
                 onStatusUpdate={(s) => handleStatusUpdate(project.id, s)}
-                onMintModeToggle={() => handleMintModeToggle(project.id, project.mint_mode)}
+                onMintModeToggle={() => handleMintModeToggle(project)}
                 onEdit={(updates) => handleEditProject(project.id, updates)}
               />
             ))}

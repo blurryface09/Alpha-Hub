@@ -109,6 +109,20 @@ async function loadVault(supabase, userId) {
   return data?.[0] || null
 }
 
+async function loadIntentVault(supabase, intent) {
+  if (intent.vault_wallet_id) {
+    const { data, error } = await supabase
+      .from('alpha_vault_wallets')
+      .select('id,address,wallet_address,encrypted_private_key,status')
+      .eq('id', intent.vault_wallet_id)
+      .eq('user_id', intent.user_id)
+      .eq('status', 'active')
+      .maybeSingle()
+    if (!error && data) return data
+  }
+  return loadVault(supabase, intent.user_id)
+}
+
 async function claimIntent(supabase, intent) {
   const { data, error } = await supabase
     .from('mint_intents')
@@ -119,7 +133,7 @@ async function claimIntent(supabase, intent) {
     })
     .eq('id', intent.id)
     .eq('strike_enabled', true)
-    .in('status', ['watching', 'prepared'])
+    .in('status', ['armed', 'watching', 'prepared'])
     .select()
     .single()
   if (error || !data) return null
@@ -132,7 +146,7 @@ async function processIntent(supabase, queuedIntent) {
 
   try {
     await insertEvent(supabase, intent, 'preparing', 'Strike worker is preparing the mint.')
-    const vault = await loadVault(supabase, intent.user_id)
+    const vault = await loadIntentVault(supabase, intent)
     if (!vault?.encrypted_private_key) throw new Error('Alpha Vault is not ready.')
 
     const privateKey = decryptPrivateKey(vault.encrypted_private_key, intent.user_id)
@@ -200,15 +214,22 @@ async function tick(supabase) {
     .from('mint_intents')
     .select('*')
     .eq('strike_enabled', true)
-    .in('status', ['watching', 'prepared'])
+    .in('status', ['armed', 'watching', 'prepared'])
     .order('updated_at', { ascending: true })
     .limit(BATCH_SIZE)
 
   if (error) throw error
-  for (const intent of data || []) {
+  const now = Date.now()
+  const ready = (data || []).filter(intent => {
+    if (!intent.strike_execute_at) return true
+    const executeAt = new Date(intent.strike_execute_at).getTime()
+    return Number.isNaN(executeAt) || executeAt <= now
+  })
+  for (const intent of ready) {
     await processIntent(supabase, intent)
   }
   if (!data?.length) log('idle')
+  else if (!ready.length) log('armed intents waiting for mint time', data.length)
 }
 
 async function main() {
