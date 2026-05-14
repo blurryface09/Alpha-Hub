@@ -1,6 +1,6 @@
 import { createConfig, http, injected } from 'wagmi'
 import { mainnet, base, baseSepolia, bsc } from 'wagmi/chains'
-import { walletConnect, metaMask } from 'wagmi/connectors'
+import { walletConnect } from 'wagmi/connectors'
 
 const projectId = import.meta.env.VITE_WALLETCONNECT_PROJECT_ID || '546875fa81ade5e1df39a1cd93e6c5e7'
 const chains = import.meta.env.DEV ? [mainnet, base, baseSepolia, bsc] : [mainnet, base, bsc]
@@ -18,7 +18,6 @@ export const wagmiConfig = createConfig({
   chains,
   connectors: [
     walletConnect({ projectId }),
-    metaMask(),
     injected(),
   ],
   transports,
