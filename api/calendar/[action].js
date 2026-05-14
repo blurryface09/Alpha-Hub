@@ -4,6 +4,9 @@ import { rateLimit, sendRateLimit } from '../_lib/redis.js'
 import { runCalendarSync, getCalendarStatus } from '../../src/server/calendar/sync.js'
 import { normalizeProject, shareCode as makeShareCode, shareSlug as makeShareSlug } from '../../src/server/calendar/normalize.js'
 import { calendarQualityScore, isRawCalendarDiscovery, mintGuardEligible } from '../../src/lib/calendarQuality.js'
+import { detectProject } from '../_lib/project-intelligence.js'
+import { handleMintAction } from '../_lib/mint-engine.js'
+import { handleVaultAction } from '../_lib/vault-engine.js'
 
 const OPTIONAL_MINTGUARD_FIELDS = [
   'calendar_project_id',
@@ -391,6 +394,29 @@ async function canRunSync(req, res) {
 
 export default async function handler(req, res) {
   const action = String(req.query.action || '').toLowerCase()
+
+  if (action === 'detect-project') {
+    if (req.method !== 'POST') return res.status(405).json({ ok: false, error: 'Method not allowed' })
+    const user = await requireUser(req, res)
+    if (!user) return
+    const limited = await rateLimit(`rl:intel-detect:${user.id}`, 30, 60)
+    if (!limited.allowed) return sendRateLimit(res, limited)
+    try {
+      const result = detectProject(req.body || {})
+      return res.status(200).json(result)
+    } catch (error) {
+      console.error('detect-project failed:', error)
+      return res.status(200).json({ ok: false, error: 'Could not detect this project yet.' })
+    }
+  }
+
+  if (action.startsWith('mint-')) {
+    return handleMintAction(req, res, action.replace(/^mint-/, ''))
+  }
+
+  if (action.startsWith('vault-')) {
+    return handleVaultAction(req, res, action.replace(/^vault-/, ''))
+  }
 
   if (action === 'mint-time') {
     req.query = { ...(req.query || {}), mintTime: 'detect' }

@@ -1,8 +1,8 @@
 import crypto from 'crypto'
 import { isAddress } from 'viem'
 import { privateKeyToAccount, generatePrivateKey } from 'viem/accounts'
-import { createServiceClient, requireUser } from '../_lib/auth.js'
-import { rateLimit, sendRateLimit } from '../_lib/redis.js'
+import { createServiceClient, requireUser } from './auth.js'
+import { rateLimit, sendRateLimit } from './redis.js'
 
 const ALPHA_VAULT_ENABLED = String(process.env.ALPHA_VAULT_ENABLED || '').toLowerCase() === 'true'
 
@@ -26,9 +26,11 @@ function encryptPrivateKey(privateKey, userId) {
 }
 
 function sanitizeVault(row) {
+  const address = row.address || row.wallet_address
   return {
     id: row.id,
-    address: row.address,
+    address,
+    wallet_address: address,
     label: row.label || 'Alpha Vault',
     chain_scope: row.chain_scope || 'evm',
     status: row.status || 'active',
@@ -42,23 +44,32 @@ async function createVault(supabase, user, privateKey, label = 'Alpha Vault') {
   const row = {
     user_id: user.id,
     address: account.address.toLowerCase(),
+    wallet_address: account.address.toLowerCase(),
     label,
     chain_scope: 'evm',
     encrypted_private_key: encryptPrivateKey(privateKey, user.id),
     status: 'active',
     updated_at: new Date().toISOString(),
   }
-  const { data, error } = await supabase
+  let { data, error } = await supabase
     .from('alpha_vault_wallets')
     .upsert(row, { onConflict: 'user_id,address' })
-    .select('id,address,label,chain_scope,status,created_at')
+    .select('id,address,wallet_address,label,chain_scope,status,created_at')
     .single()
+  if (error) {
+    const retry = await supabase
+      .from('alpha_vault_wallets')
+      .upsert(row, { onConflict: 'user_id,wallet_address' })
+      .select('id,address,wallet_address,label,chain_scope,status,created_at')
+      .single()
+    data = retry.data
+    error = retry.error
+  }
   if (error) throw error
   return sanitizeVault(data)
 }
 
-export default async function handler(req, res) {
-  const action = String(req.query.action || '').toLowerCase()
+export async function handleVaultAction(req, res, action) {
   if (!['create', 'import', 'list'].includes(action)) return res.status(404).json(safeError('Unknown vault action.'))
 
   const user = await requireUser(req, res)
@@ -77,7 +88,7 @@ export default async function handler(req, res) {
     if (action === 'list') {
       const { data, error } = await supabase
         .from('alpha_vault_wallets')
-        .select('id,address,label,chain_scope,status,created_at')
+        .select('id,address,wallet_address,label,chain_scope,status,created_at')
         .eq('user_id', user.id)
         .order('created_at', { ascending: false })
       if (error) throw error

@@ -1,7 +1,7 @@
 import { isAddress } from 'viem'
-import { createServiceClient, requireUser } from '../_lib/auth.js'
-import { rateLimit, sendRateLimit } from '../_lib/redis.js'
-import { chainIdFor, normalizeChain, normalizePhase, recommendMode } from '../_lib/project-intelligence.js'
+import { createServiceClient, requireUser } from './auth.js'
+import { rateLimit, sendRateLimit } from './redis.js'
+import { chainIdFor, normalizeChain, normalizePhase, recommendMode } from './project-intelligence.js'
 
 const SUPPORTED_EXECUTION_CHAINS = new Set(['eth', 'base', 'apechain'])
 const AUTO_STRIKE_ENABLED = String(process.env.AUTO_STRIKE_ENABLED || '').toLowerCase() === 'true'
@@ -15,11 +15,6 @@ const EVENT_MESSAGES = {
   simulating: 'Simulating mint',
   gas: 'Gas locked',
   watching: 'Watching mint window',
-  live: 'Mint live',
-  broadcasting: 'Broadcasting transaction',
-  confirming: 'Waiting confirmation',
-  minted: 'Minted',
-  failed: 'Failed',
   stopped: 'Stopped',
 }
 
@@ -58,9 +53,7 @@ async function insertOptional(supabase, table, row) {
   const { data, error } = await supabase.from(table).insert(row).select().single()
   if (!error) return data
   const msg = String(error.message || '').toLowerCase()
-  if (msg.includes('schema') || msg.includes('relation') || msg.includes('column')) {
-    return { ...row, localOnly: true }
-  }
+  if (msg.includes('schema') || msg.includes('relation') || msg.includes('column')) return { ...row, localOnly: true }
   throw error
 }
 
@@ -88,6 +81,31 @@ async function loadIntent(supabase, userId, intentId) {
   return data
 }
 
+async function loadAttempts(supabase, intentId) {
+  const { data, error } = await supabase
+    .from('mint_attempts')
+    .select('*')
+    .or(`intent_id.eq.${intentId},mint_intent_id.eq.${intentId}`)
+    .order('created_at', { ascending: true })
+  if (error) return []
+  return data || []
+}
+
+async function recordAttempt(supabase, intentId, userId, status, metadata = {}) {
+  if (!intentId || String(intentId).startsWith('local-')) return null
+  try {
+    const { data, error } = await supabase.from('mint_attempts').insert({
+      intent_id: intentId,
+      mint_intent_id: intentId,
+      user_id: userId,
+      status,
+      metadata,
+    }).select().single()
+    if (!error) return data
+  } catch {}
+  return null
+}
+
 async function hasVault(supabase, userId) {
   const { data, error } = await supabase
     .from('alpha_vault_wallets')
@@ -99,8 +117,7 @@ async function hasVault(supabase, userId) {
   return Boolean(data?.length)
 }
 
-export default async function handler(req, res) {
-  const action = String(req.query.action || '').toLowerCase()
+export async function handleMintAction(req, res, action) {
   const allowed = new Set(['prepare', 'enable-strike', 'stop', 'execute', 'status'])
   if (!allowed.has(action)) return res.status(404).json(safeError('Unknown mint action.'))
 
@@ -123,7 +140,8 @@ export default async function handler(req, res) {
         .select('*')
         .eq('intent_id', intentId)
         .order('created_at', { ascending: true })
-      return res.status(200).json({ ok: true, intent, events: events || [] })
+      const attempts = await loadAttempts(supabase, intentId)
+      return res.status(200).json({ ok: true, intent, events: events || [], attempts })
     }
 
     if (action === 'prepare') {
@@ -183,6 +201,7 @@ export default async function handler(req, res) {
         updated_at: new Date().toISOString(),
       }).eq('id', intentId).eq('user_id', user.id)
       await logEvent(supabase, intentId, user.id, 'stopped')
+      await recordAttempt(supabase, intentId, user.id, 'stopped')
       return res.status(200).json({ ok: true, message: 'Mint stopped.' })
     }
 
@@ -196,6 +215,7 @@ export default async function handler(req, res) {
       }
       await logEvent(supabase, intentId, user.id, 'simulating')
       await logEvent(supabase, intentId, user.id, 'gas')
+      await recordAttempt(supabase, intentId, user.id, 'wallet_confirmation_ready', { mode })
       return res.status(200).json({
         ok: true,
         requiresWalletConfirmation: true,

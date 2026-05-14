@@ -6,6 +6,15 @@
     { "source": "/api/admin/payments/approve", "destination": "/api/admin-subscriptions?action=approve-payment" },
     { "source": "/api/admin/payments/reject", "destination": "/api/admin-subscriptions?action=reject-payment" },
     { "source": "/api/ai-analysis", "destination": "/api/etherscan?tool=ai-analysis" },
+    { "source": "/api/intelligence/detect-project", "destination": "/api/calendar/detect-project" },
+    { "source": "/api/mint/prepare", "destination": "/api/calendar/mint-prepare" },
+    { "source": "/api/mint/enable-strike", "destination": "/api/calendar/mint-enable-strike" },
+    { "source": "/api/mint/stop", "destination": "/api/calendar/mint-stop" },
+    { "source": "/api/mint/execute", "destination": "/api/calendar/mint-execute" },
+    { "source": "/api/mint/status", "destination": "/api/calendar/mint-status" },
+    { "source": "/api/vault/create", "destination": "/api/calendar/vault-create" },
+    { "source": "/api/vault/import", "destination": "/api/calendar/vault-import" },
+    { "source": "/api/vault/list", "destination": "/api/calendar/vault-list" },
     { "source": "/((?!api/.*).*)", "destination": "/index.html" }
   ]
 }
