@@ -1,7 +1,8 @@
-import React, { useState, useEffect } from 'react'
+import React, { useState } from 'react'
 import { motion } from 'framer-motion'
 import { X, Shield, Loader } from 'lucide-react'
 import toast from 'react-hot-toast'
+import DateTimePicker from '../shared/DateTimePicker'
 
 const WL_TYPES = [
   { val: 'GTD',     label: 'GTD — Guaranteed spot' },
@@ -20,7 +21,7 @@ export default function EditProjectModal({ project, onSave, onClose }) {
     name: project.name || '',
     chain: project.chain || 'eth',
     contract_address: project.contract_address || '',
-    mint_date: project.mint_date ? new Date(project.mint_date).toISOString().slice(0, 16) : '',
+    mint_date: project.mint_date || '',
     mint_price: project.mint_price || '',
     wl_type: project.wl_type || 'UNKNOWN',
     mint_mode: project.mint_mode || 'confirm',
@@ -97,7 +98,7 @@ export default function EditProjectModal({ project, onSave, onClose }) {
           <div className="grid grid-cols-2 gap-3">
             <div>
               <label className="text-xs font-mono text-muted uppercase tracking-wider block mb-1.5">Mint Date</label>
-              <input className="input" type="datetime-local" value={form.mint_date} onChange={e => set('mint_date', e.target.value)} />
+              <DateTimePicker value={form.mint_date} onChange={utcStr => set('mint_date', utcStr)} />
             </div>
             <div>
               <label className="text-xs font-mono text-muted uppercase tracking-wider block mb-1.5">Mint Price</label>

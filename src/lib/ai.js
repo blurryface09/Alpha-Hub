@@ -190,23 +190,14 @@ Keep it sharp, 2 sentences max. Crypto slang welcome.`
 }
 
 // --- Project Metadata from URL -----------------------------------
+// Metadata extraction is now handled server-side at /api/metadata
+// (real OpenSea/Zora API calls + Groq fallback, no CORS issues)
 export async function extractProjectMetadata(url) {
-  const prompt = `A user pasted this URL for an NFT/crypto project: ${url}
-
-Based on the URL alone, extract and return ONLY a JSON object (no markdown, no explanation) with:
-{
-  "name": "project name if obvious from URL, else null",
-  "source_type": "twitter" or "opensea" or "website",
-  "chain": "eth" or "base" or "unknown",
-  "notes": "one sentence about what this likely is"
-}
-
-Return only valid JSON.`
-
   try {
-    const result = await callGroq(prompt)
-    const jsonMatch = result.match(/\{[\s\S]*\}/)
-    if (jsonMatch) return JSON.parse(jsonMatch[0])
-  } catch {}
-  return { name: null, source_type: 'website', chain: 'eth', notes: null }
+    const r = await fetch(`/api/metadata?url=${encodeURIComponent(url)}`)
+    if (!r.ok) throw new Error('API error')
+    return await r.json()
+  } catch {
+    return { name: null, source_type: 'website', chain: 'eth', notes: null, confidence: {}, missing_fields: [] }
+  }
 }
