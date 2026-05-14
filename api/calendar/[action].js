@@ -9,6 +9,7 @@ import { handleMintAction } from '../_lib/mint-engine.js'
 import { handleVaultAction } from '../_lib/vault-engine.js'
 
 const OPTIONAL_MINTGUARD_FIELDS = [
+  'wallet_address',
   'calendar_project_id',
   'automint_enabled',
   'max_mint_price',
@@ -80,6 +81,33 @@ function stripFields(row, fields) {
   const clean = { ...row }
   fields.forEach(field => delete clean[field])
   return clean
+}
+
+function primaryWalletForUser(user) {
+  const candidates = [
+    user?.user_metadata?.wallet_address,
+    user?.user_metadata?.walletAddress,
+    user?.user_metadata?.address,
+    user?.user_metadata?.custom_claims?.address,
+    user?.user_metadata?.sub,
+    user?.app_metadata?.wallet_address,
+    user?.app_metadata?.walletAddress,
+    user?.app_metadata?.address,
+    user?.app_metadata?.custom_claims?.address,
+    user?.app_metadata?.sub,
+    ...(user?.identities || []).flatMap(identity => [
+      identity?.identity_data?.wallet_address,
+      identity?.identity_data?.walletAddress,
+      identity?.identity_data?.address,
+      identity?.identity_data?.custom_claims?.address,
+      identity?.identity_data?.sub,
+    ]),
+  ].filter(Boolean)
+
+  return candidates
+    .map(value => String(value).toLowerCase())
+    .map(value => value.startsWith('web3:ethereum:') ? value.replace('web3:ethereum:', '') : value)
+    .find(value => /^0x[a-f0-9]{40}$/.test(value)) || null
 }
 
 function normalizeChain(chain) {
@@ -241,6 +269,20 @@ async function findExistingMintGuardProject(supabase, userId, project, payload) 
     data = retry.data
     error = retry.error
   }
+  if (error && payload?.wallet_address) {
+    const fallbackFilters = []
+    if (project?.contract_address) fallbackFilters.push(`contract_address.eq.${project.contract_address}`)
+    if (payload?.source_url) fallbackFilters.push(`source_url.eq.${payload.source_url}`)
+    if (!fallbackFilters.length) return null
+    const retry = await supabase
+      .from('wl_projects')
+      .select('*')
+      .eq('wallet_address', payload.wallet_address)
+      .or(fallbackFilters.join(','))
+      .limit(1)
+    data = retry.data
+    error = retry.error
+  }
   if (error) return null
   return data?.[0] || null
 }
@@ -263,6 +305,7 @@ async function insertMintGuardProject(supabase, payload) {
 
   attempts.push({
     user_id: payload.user_id,
+    wallet_address: payload.wallet_address,
     name: payload.name,
     source_url: payload.source_url,
     source_type: 'website',
@@ -276,6 +319,7 @@ async function insertMintGuardProject(supabase, payload) {
 
   attempts.push({
     user_id: payload.user_id,
+    wallet_address: payload.wallet_address,
     name: payload.name,
     source_url: payload.source_url,
     source_type: payload.source_type,
@@ -290,6 +334,7 @@ async function insertMintGuardProject(supabase, payload) {
 
   attempts.push({
     user_id: payload.user_id,
+    wallet_address: payload.wallet_address,
     name: payload.name,
     source_url: payload.source_url,
     source_type: payload.source_type,
@@ -299,6 +344,7 @@ async function insertMintGuardProject(supabase, payload) {
 
   attempts.push({
     user_id: payload.user_id,
+    wallet_address: payload.wallet_address,
     name: payload.name,
     source_url: payload.source_url,
     source_type: 'website',
@@ -311,6 +357,7 @@ async function insertMintGuardProject(supabase, payload) {
 
   attempts.push({
     user_id: payload.user_id,
+    wallet_address: payload.wallet_address,
     name: payload.name,
     source_url: payload.source_url,
     source_type: 'website',
@@ -320,6 +367,7 @@ async function insertMintGuardProject(supabase, payload) {
 
   attempts.push({
     user_id: payload.user_id,
+    wallet_address: payload.wallet_address,
     name: payload.name,
     source_url: payload.source_url,
     source_type: 'website',
@@ -328,6 +376,7 @@ async function insertMintGuardProject(supabase, payload) {
 
   attempts.push({
     user_id: payload.user_id,
+    wallet_address: payload.wallet_address,
     name: payload.name,
     source_url: payload.source_url,
     source_type: 'website',
@@ -337,6 +386,7 @@ async function insertMintGuardProject(supabase, payload) {
 
   attempts.push({
     user_id: payload.user_id,
+    wallet_address: payload.wallet_address,
     name: payload.name,
     source_url: payload.source_url,
     source_type: 'website',
@@ -344,8 +394,37 @@ async function insertMintGuardProject(supabase, payload) {
 
   attempts.push({
     user_id: payload.user_id,
+    wallet_address: payload.wallet_address,
     name: payload.name,
   })
+
+  if (payload.wallet_address) {
+    attempts.push({
+      wallet_address: payload.wallet_address,
+      name: payload.name,
+      source_url: payload.source_url,
+      source_type: 'website',
+      chain: payload.chain,
+      contract_address: payload.contract_address,
+      mint_date: payload.mint_date,
+      mint_price: payload.mint_price,
+      wl_type: 'UNKNOWN',
+      status: 'upcoming',
+    })
+    attempts.push({
+      wallet_address: payload.wallet_address,
+      name: payload.name,
+      source_url: payload.source_url,
+      source_type: 'website',
+      chain: payload.chain,
+    })
+    attempts.push({
+      wallet_address: payload.wallet_address,
+      name: payload.name,
+      source_url: payload.source_url,
+      source_type: 'website',
+    })
+  }
 
   let lastError = null
   for (const attempt of attempts) {
@@ -402,7 +481,7 @@ export default async function handler(req, res) {
     const limited = await rateLimit(`rl:intel-detect:${user.id}`, 30, 60)
     if (!limited.allowed) return sendRateLimit(res, limited)
     try {
-      const result = detectProject(req.body || {})
+      const result = await detectProject(req.body || {})
       return res.status(200).json(result)
     } catch (error) {
       console.error('detect-project failed:', error)
@@ -605,8 +684,10 @@ export default async function handler(req, res) {
     }
     const chain = normalizeChain(project.chain)
     const eligible = mintGuardEligible(project)
+    const walletAddress = primaryWalletForUser(user)
     const payload = {
       user_id: user.id,
+      wallet_address: walletAddress,
       name: mintGuardName(project),
       source_url: projectSourceUrl(project),
       source_type: calendarSourceType(project),

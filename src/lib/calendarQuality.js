@@ -30,7 +30,7 @@ export function calendarQualityScore(project) {
     Boolean(project.mint_url || project.website_url),
     ['opensea', 'alchemy', 'zora', 'community', 'admin'].includes(project.source),
     Boolean(project.contract_address),
-    Boolean(project.mint_date || Number(project.mint_count || 0) > 0 || project.status === 'live'),
+    Boolean(project.mint_date || project.mint_status === 'live_now' || project.mint_status === 'upcoming'),
     Boolean(project.slug && !isAddressLikeName(project.slug)),
     Boolean(project.x_url || project.discord_url),
     Boolean(project.source_url),
@@ -68,13 +68,13 @@ export function isLaunchReadyCalendarProject(project) {
 export function isActiveMintCalendarProject(project) {
   if (!isLaunchReadyCalendarProject(project)) return false
   const quality = calendarQualityScore(project)
-  const mintCount = Number(project.mint_count || 0)
-  if (mintCount > 0 && project.source === 'alchemy' && quality >= 50) return true
-  if (project.status === 'live') return true
+  const confirmed = ['high', 'medium', 'manual', 'confirmed'].includes(project.mint_date_confidence || project.source_confidence)
+  if (project.mint_status === 'live_now' && confirmed && quality >= 60) return true
+  if (project.status === 'live' && project.mint_date && confirmed && quality >= 60) return true
   if (!project.mint_date) return false
   const date = new Date(project.mint_date).getTime()
   const now = Date.now()
-  return date <= now && date > now - 12 * 60 * 60 * 1000
+  return confirmed && date <= now && date > now - 12 * 60 * 60 * 1000
 }
 
 export function mintGuardEligible(project) {

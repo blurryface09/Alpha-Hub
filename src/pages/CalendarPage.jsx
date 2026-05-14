@@ -57,11 +57,24 @@ function scoreFor(project, tab) {
 }
 
 function isLive(project) {
-  if (project.status === 'live') return true
   if (!project.mint_date) return false
+  const confirmed = ['high', 'medium', 'manual', 'confirmed'].includes(project.mint_date_confidence || project.source_confidence)
+  if (!confirmed && project.mint_status !== 'live_now') return false
   const date = new Date(project.mint_date).getTime()
   const now = Date.now()
   return date <= now && date > now - 12 * 60 * 60 * 1000
+}
+
+function friendlyMintStatus(project) {
+  if (project.mint_status === 'tba') return 'TBA'
+  if (project.mint_status === 'ended' || project.status === 'ended') return 'Ended'
+  if (isLive(project)) return 'Live now'
+  if (!project.contract_address) return 'Needs contract'
+  if (!project.mint_date) return 'Needs time'
+  if (!project.mint_url && !project.website_url) return 'Needs mint URL'
+  const start = new Date(project.mint_date).getTime()
+  if (Number.isFinite(start) && start > Date.now()) return 'Upcoming'
+  return 'Needs review'
 }
 
 function tabFilter(project, tab) {
@@ -77,7 +90,7 @@ function tabFilter(project, tab) {
 function countdown(project) {
   if (!project.mint_date) return 'Time needs review'
   const diff = new Date(project.mint_date).getTime() - Date.now()
-  if (diff <= 0) return 'LIVE NOW'
+  if (diff <= 0) return isLive(project) ? 'LIVE NOW' : 'Needs review'
   const mins = Math.floor(diff / 60000)
   if (mins < 60) return `${mins}m`
   const hours = Math.floor(mins / 60)
@@ -736,13 +749,19 @@ export default function CalendarPage() {
               <div>
                 <div className="flex flex-wrap items-center gap-2 mb-1">
                   <span className="badge badge-cyan">{normalizeChain(detectedProject.chain).toUpperCase()}</span>
-                  <span className="badge badge-yellow">Confidence {detectedProject.confidence || 'low'}</span>
+                  <span className="badge badge-yellow">Confidence {detectedProject.confidenceScore ?? detectedProject.confidence ?? 'low'}</span>
+                  <span className="badge badge-purple">{friendlyMintStatus({ ...detectedProject, contract_address: detectedProject.contractAddress, mint_date: detectedProject.mintDate, mint_status: detectedProject.mintStatus, source_confidence: detectedProject.confidence })}</span>
                   <span className="badge badge-purple">{MINT_PHASES.find(item => item.id === selectedPhase)?.label || 'Not sure'}</span>
                 </div>
                 <h3 className="font-bold">{detectedProject.name}</h3>
                 <p className="text-xs text-muted mt-1">
                   Recommended: {MINT_MODES[selectedMode]?.label || 'Safe Mint'} · Risk {detectedProject.riskScore ?? 'review'}
                 </p>
+                {detectedProject.missingFields?.length > 0 && (
+                  <p className="text-xs text-accent3 mt-1">
+                    Missing: {detectedProject.missingFields.map(item => item.replace(/_/g, ' ')).join(', ')}
+                  </p>
+                )}
               </div>
               <button onClick={() => setSubmitOpen(true)} className="btn-ghost">Review & submit</button>
             </div>
@@ -786,7 +805,13 @@ export default function CalendarPage() {
             </div>
             {selectedMode === 'strike' && (
               <p className="text-xs text-accent3 mt-3">
-                Strike Mode uses Alpha Vault only after you enable a burner wallet, max spend, simulation, and safety switches. Never use your main wallet.
+                {detectedProject.missingFields?.includes('contract_address')
+                  ? 'Add contract address before Strike.'
+                  : detectedProject.missingFields?.includes('mint_start_time')
+                  ? 'Add mint time before Strike.'
+                  : detectedProject.missingFields?.includes('mint_url')
+                  ? 'Add mint URL before Strike.'
+                  : 'Strike Mode uses Alpha Vault only after you enable a burner wallet, max spend, simulation, and safety switches. Never use your main wallet.'}
               </p>
             )}
           </div>
@@ -947,6 +972,7 @@ const ProjectCard = memo(function ProjectCard({ project, tab, isAdmin, onOpen, o
         <div className="flex-1 min-w-0">
           <div className="flex flex-wrap items-center gap-2 mb-1">
             {live && <span className="badge badge-green animate-pulse-slow">LIVE NOW</span>}
+            {!live && <span className="badge badge-yellow">{friendlyMintStatus(project)}</span>}
             <span className="badge badge-cyan">{normalizeChain(project.chain).toUpperCase()}</span>
             <span className={`badge ${confidenceClass(project.source_confidence || project.mint_date_confidence)}`}>{confidenceText(project)}</span>
             {(project.status === 'pending_review' || !launchReady) && <span className="badge badge-yellow">Needs Review</span>}

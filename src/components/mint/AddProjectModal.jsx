@@ -1,7 +1,6 @@
 import React, { useCallback, useState } from 'react'
 import { X, Link2, Shield, Loader, Sparkles } from 'lucide-react'
 import toast from 'react-hot-toast'
-import { extractProjectMetadata } from '../../lib/ai'
 import { friendlyError } from '../../lib/errors'
 import { getAuthToken } from '../../lib/supabase'
 import DateTimePicker from '../shared/DateTimePicker'
@@ -22,12 +21,39 @@ const MINT_MODES = [
 ]
 const CHAIN_IDS = { eth: 1, base: 8453, apechain: 33139, solana: 0 }
 
+function phaseToWlType(phase) {
+  const value = String(phase || '').toLowerCase()
+  if (value.includes('gtd')) return 'GTD'
+  if (value.includes('fcfs')) return 'FCFS'
+  if (value.includes('public') || value.includes('open') || value.includes('claim')) return 'PUBLIC'
+  if (value.includes('wl') || value.includes('allow')) return 'FCFS'
+  return 'UNKNOWN'
+}
+
+function readableStatus(project) {
+  const status = project?.mintStatus
+  if (status === 'live_now') return 'Live now'
+  if (status === 'upcoming') return 'Upcoming'
+  if (status === 'ended') return 'Ended'
+  if (status === 'tba') return 'TBA'
+  if (project?.missingFields?.includes('contract_address')) return 'Needs contract'
+  if (project?.missingFields?.includes('mint_start_time')) return 'Needs time'
+  if (project?.missingFields?.includes('mint_url')) return 'Needs mint URL'
+  return 'Needs review'
+}
+
+function displayValue(value, fallback = 'Needs review') {
+  return value ? String(value) : fallback
+}
+
 export default function AddProjectModal({ onAdd, onClose }) {
   const [step, setStep] = useState(1)
   const [url, setUrl] = useState('')
   const [loading, setLoading] = useState(false)
   const [detectingTime, setDetectingTime] = useState(false)
   const [detectedTime, setDetectedTime] = useState(null)
+  const [detectedProject, setDetectedProject] = useState(null)
+  const [showAdvanced, setShowAdvanced] = useState(false)
   const [form, setForm] = useState({
     name: '',
     source_url: '',
@@ -98,17 +124,40 @@ export default function AddProjectModal({ onAdd, onClose }) {
     if (!url.trim()) { toast.error('Paste a URL first'); return }
     setLoading(true)
     try {
-      // Try AI-powered extraction first
-      const meta = await extractProjectMetadata(url)
-      const autoFill = {
-        source_url: url,
-        source_type: meta.source_type || 'website',
-        chain: meta.chain !== 'unknown' ? (meta.chain || 'eth') : 'eth',
-        notes: meta.notes || '',
+      const token = await getAuthToken()
+      if (!token) throw new Error('Sign in again before scanning')
+      const res = await fetch('/api/intelligence/detect-project', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({ input: url.trim() }),
+      })
+      const data = await res.json()
+      if (!res.ok || data?.ok === false) {
+        throw new Error(data?.error || 'Could not scan this alpha yet')
       }
-      if (meta.name) autoFill.name = meta.name
+      const project = data.project || {}
+      const autoFill = {
+        source_url: project.mintUrl || project.sourceUrl || url.trim(),
+        source_type: project.source || 'website',
+        chain: project.chain || 'eth',
+        notes: [
+          ...(project.notes || []),
+          project.missingFields?.length ? `Missing: ${project.missingFields.join(', ')}` : null,
+        ].filter(Boolean).join('\n'),
+        mint_time_source: project.mintDateSource || (project.mintDate ? 'detected' : 'manual'),
+        mint_time_confidence: project.mintDateConfidence || 'low',
+        mint_time_confirmed: project.mintDateConfidence === 'high',
+        mint_time_confirmed_at: project.mintDateConfidence === 'high' ? new Date().toISOString() : null,
+      }
+      if (project.name) autoFill.name = project.name
+      if (project.contractAddress) autoFill.contract_address = project.contractAddress
+      if (project.mintDate) autoFill.mint_date = project.mintDate
+      if (project.mintPrice) autoFill.mint_price = project.mintPrice
+      if (project.mintPhase) autoFill.wl_type = phaseToWlType(project.mintPhase)
 
-      // Fallback string parsing if AI didn't get a name
       if (!autoFill.name) {
         if (url.includes('twitter.com') || url.includes('x.com')) {
           const handle = url.match(/(?:twitter|x)\.com\/([^/?#]+)/)
@@ -125,12 +174,20 @@ export default function AddProjectModal({ onAdd, onClose }) {
       }
 
       const nextForm = { ...form, ...autoFill }
+      setDetectedProject(project)
       setForm(nextForm)
       setStep(2)
-      scanMintTime(nextForm, { quiet: true })
+      if (!project.mintDate) scanMintTime(nextForm, { quiet: true })
     } catch (e) {
-      // Silent fallback
-      const nextForm = { ...form, source_url: url }
+      const nextForm = { ...form, source_url: url.trim() }
+      setDetectedProject({
+        name: '',
+        sourceUrl: url.trim(),
+        mintStatus: 'needs_review',
+        confidence: 'low',
+        confidenceScore: 0,
+        missingFields: ['contract_address', 'mint_start_time', 'mint_phase'],
+      })
       setForm(nextForm)
       setStep(2)
       scanMintTime(nextForm, { quiet: true })
@@ -142,7 +199,15 @@ export default function AddProjectModal({ onAdd, onClose }) {
   const handleSubmit = async () => {
     if (!form.name.trim()) { toast.error('Project name is required'); return }
     if (form.mint_mode === 'auto' && !form.contract_address?.trim()) {
-      toast.error('Strike Mode needs a contract address')
+      toast.error('Add contract address before Strike')
+      return
+    }
+    if (form.mint_mode === 'auto' && !form.mint_date) {
+      toast.error('Add mint time before Strike')
+      return
+    }
+    if (form.mint_mode === 'auto' && !form.source_url?.trim()) {
+      toast.error('Add mint URL before Strike')
       return
     }
     if (form.mint_mode === 'auto' && !form.auto_beta_ack) {
@@ -257,6 +322,61 @@ export default function AddProjectModal({ onAdd, onClose }) {
 
           {step === 2 && (
             <div className="space-y-4">
+              <div className="rounded-2xl border border-accent/20 bg-accent/8 p-3">
+                <div className="flex items-center justify-between gap-3">
+                  <div>
+                    <div className="text-sm font-bold text-text">Ready for MintGuard</div>
+                    <p className="text-xs text-muted mt-1">Review what Alpha Hub found. Anything missing can be edited below.</p>
+                  </div>
+                  <span className={
+                    "shrink-0 rounded-full border px-2 py-1 text-[10px] font-mono uppercase " +
+                    (readableStatus(detectedProject) === 'Upcoming' || readableStatus(detectedProject) === 'Live now'
+                      ? 'border-green/30 bg-green/10 text-green'
+                      : 'border-amber-400/30 bg-amber-400/10 text-amber-200')
+                  }>
+                    {readableStatus(detectedProject)}
+                  </span>
+                </div>
+                {detectedProject && (
+                  <div className="mt-3 grid grid-cols-2 gap-2 text-xs">
+                    <div className="rounded-xl border border-border2 bg-bg2/40 p-2">
+                      <div className="font-mono uppercase tracking-wider text-muted2">Project</div>
+                      <div className="mt-1 text-text font-semibold truncate">{displayValue(detectedProject.name || form.name)}</div>
+                    </div>
+                    <div className="rounded-xl border border-border2 bg-bg2/40 p-2">
+                      <div className="font-mono uppercase tracking-wider text-muted2">Chain</div>
+                      <div className="mt-1 text-text font-semibold uppercase">{displayValue(detectedProject.chain || form.chain)}</div>
+                    </div>
+                    <div className="rounded-xl border border-border2 bg-bg2/40 p-2">
+                      <div className="font-mono uppercase tracking-wider text-muted2">Contract</div>
+                      <div className="mt-1 text-text font-mono truncate">{displayValue(detectedProject.contractAddress || form.contract_address)}</div>
+                    </div>
+                    <div className="rounded-xl border border-border2 bg-bg2/40 p-2">
+                      <div className="font-mono uppercase tracking-wider text-muted2">Phase</div>
+                      <div className="mt-1 text-text font-semibold">{displayValue(detectedProject.mintPhase || form.wl_type, 'Unknown')}</div>
+                    </div>
+                    <div className="rounded-xl border border-border2 bg-bg2/40 p-2">
+                      <div className="font-mono uppercase tracking-wider text-muted2">Time</div>
+                      <div className="mt-1 text-text truncate">{form.mint_date ? new Date(form.mint_date).toLocaleString() : 'Needs review'}</div>
+                    </div>
+                    <div className="rounded-xl border border-border2 bg-bg2/40 p-2">
+                      <div className="font-mono uppercase tracking-wider text-muted2">Price</div>
+                      <div className="mt-1 text-text font-semibold">{displayValue(detectedProject.mintPrice || form.mint_price, 'Unknown')}</div>
+                    </div>
+                  </div>
+                )}
+                {detectedProject?.missingFields?.length > 0 && (
+                  <div className="mt-3 rounded-xl border border-amber-400/20 bg-amber-400/10 p-2 text-xs text-amber-100">
+                    Missing: {detectedProject.missingFields.map(field => field.replace(/_/g, ' ')).join(', ')}
+                  </div>
+                )}
+                {detectedProject && (
+                  <div className="mt-2 text-[11px] text-muted">
+                    Confidence: {detectedProject.confidence || 'low'}{Number.isFinite(Number(detectedProject.confidenceScore)) ? ` (${detectedProject.confidenceScore}/100)` : ''}
+                  </div>
+                )}
+              </div>
+
               <div>
                 <label className="text-xs font-mono text-muted uppercase tracking-wider block mb-1.5">Project name *</label>
                 <input className="input" placeholder="e.g. Slimez, BasePaint, Farcaster drop..." value={form.name} onChange={e => set('name', e.target.value)} autoFocus />
@@ -321,81 +441,102 @@ export default function AddProjectModal({ onAdd, onClose }) {
                 </div>
               )}
 
-              <div>
-                <label className="text-xs font-mono text-muted uppercase tracking-wider block mb-1.5">Price</label>
-                <input className="input" placeholder="e.g. 0.08" value={form.mint_price} onChange={e => set('mint_price', e.target.value)} />
-              </div>
+              <button
+                type="button"
+                onClick={() => setShowAdvanced(value => !value)}
+                className="btn-ghost w-full text-xs"
+              >
+                {showAdvanced ? 'Hide advanced edit' : 'Advanced edit'}
+              </button>
 
-              <div>
-                <label className="text-xs font-mono text-muted uppercase tracking-wider block mb-1.5">Contract address <span className="text-muted2">(optional, needed for mint assist)</span></label>
-                <input className="input font-mono text-xs" placeholder="0x..." value={form.contract_address} onChange={e => set('contract_address', e.target.value)} />
-              </div>
+              {showAdvanced && (
+                <div className="space-y-4 rounded-2xl border border-border2 bg-bg2/25 p-3">
+                  <div>
+                    <label className="text-xs font-mono text-muted uppercase tracking-wider block mb-1.5">Mint URL / source</label>
+                    <input className="input" placeholder="Official mint link" value={form.source_url} onChange={e => set('source_url', e.target.value)} />
+                  </div>
 
-              <div>
-                <label className="text-xs font-mono text-muted uppercase tracking-wider block mb-1.5">How should Alpha Hub help?</label>
-                <div className="grid grid-cols-2 gap-2">
-                  {MINT_MODES.map(m => (
-                    <button
-                      key={m.val}
-                      onClick={() => set('mint_mode', m.val)}
-                      className={"p-3 rounded-lg border text-left transition-all " + (
-                        form.mint_mode === m.val
-                          ? (m.val === 'auto' ? 'border-green bg-green/8 text-green' : 'border-accent bg-accent/8 text-accent')
-                          : 'border-border2 text-muted hover:border-border'
-                      )}
-                    >
-                      <div className="text-sm font-bold">{m.icon} {m.label}</div>
-                      <div className="text-xs opacity-70 mt-0.5">{m.desc}</div>
-                    </button>
-                  ))}
-                </div>
-                {form.mint_mode === 'auto' && (
-                  <div className="mt-2 rounded-lg border border-amber-500/25 bg-amber-500/10 p-3 text-xs text-amber-200 space-y-3">
-                    <p>Strike Mode can execute real blockchain transactions through Alpha Vault. Use an isolated burner wallet and set max spend limits.</p>
-                    <label className="flex items-start gap-2">
-                      <input
-                        type="checkbox"
-                        checked={form.auto_beta_ack}
-                        onChange={e => set('auto_beta_ack', e.target.checked)}
-                        className="mt-0.5"
-                      />
-                      <span>I understand Strike Mode may execute real blockchain transactions.</span>
-                    </label>
+                  <div>
+                    <label className="text-xs font-mono text-muted uppercase tracking-wider block mb-1.5">Price</label>
+                    <input className="input" placeholder="e.g. 0.08" value={form.mint_price} onChange={e => set('mint_price', e.target.value)} />
                   </div>
-                )}
-              </div>
 
-              <div className="grid grid-cols-3 gap-3">
-                <div>
-                  <label className="text-xs font-mono text-muted uppercase tracking-wider block mb-1.5">Quantity</label>
-                  <input className="input" type="number" min="1" max="20" value={form.max_mint} onChange={e => set('max_mint', parseInt(e.target.value) || 1)} />
-                </div>
-                <div className="col-span-2">
-                  <label className="text-xs font-mono text-muted uppercase tracking-wider block mb-1.5">Gas safety limit</label>
-                  <input className="input" type="number" value={form.gas_limit} onChange={e => set('gas_limit', parseInt(e.target.value) || 200000)} />
-                </div>
-              </div>
-              {form.mint_mode === 'auto' && (
-                <div className="grid grid-cols-3 gap-3">
                   <div>
-                    <label className="text-xs font-mono text-muted uppercase tracking-wider block mb-1.5">Max Mint ETH</label>
-                    <input className="input" placeholder="0.05" value={form.max_mint_price} onChange={e => set('max_mint_price', e.target.value)} />
+                    <label className="text-xs font-mono text-muted uppercase tracking-wider block mb-1.5">Contract address <span className="text-muted2">needed for Fast/Strike Mint</span></label>
+                    <input className="input font-mono text-xs" placeholder="0x..." value={form.contract_address} onChange={e => set('contract_address', e.target.value)} />
                   </div>
+
                   <div>
-                    <label className="text-xs font-mono text-muted uppercase tracking-wider block mb-1.5">Max Gas ETH</label>
-                    <input className="input" placeholder="0.01" value={form.max_gas_fee} onChange={e => set('max_gas_fee', e.target.value)} />
+                    <label className="text-xs font-mono text-muted uppercase tracking-wider block mb-1.5">How should Alpha Hub help?</label>
+                    <div className="grid grid-cols-2 gap-2">
+                      {MINT_MODES.map(m => {
+                        const strikeBlocked = m.val === 'auto' && (!form.contract_address || !form.mint_date || !form.source_url)
+                        return (
+                          <button
+                            key={m.val}
+                            onClick={() => !strikeBlocked && set('mint_mode', m.val)}
+                            disabled={strikeBlocked}
+                            className={"p-3 rounded-lg border text-left transition-all disabled:opacity-50 disabled:cursor-not-allowed " + (
+                              form.mint_mode === m.val
+                                ? (m.val === 'auto' ? 'border-green bg-green/8 text-green' : 'border-accent bg-accent/8 text-accent')
+                                : 'border-border2 text-muted hover:border-border'
+                            )}
+                          >
+                            <div className="text-sm font-bold">{m.icon} {m.label}</div>
+                            <div className="text-xs opacity-70 mt-0.5">{strikeBlocked ? 'Needs contract, time, and mint URL' : m.desc}</div>
+                          </button>
+                        )
+                      })}
+                    </div>
+                    {form.mint_mode === 'auto' && (
+                      <div className="mt-2 rounded-lg border border-amber-500/25 bg-amber-500/10 p-3 text-xs text-amber-200 space-y-3">
+                        <p>Strike Mode can execute real blockchain transactions through Alpha Vault. Use an isolated burner wallet and set max spend limits.</p>
+                        <label className="flex items-start gap-2">
+                          <input
+                            type="checkbox"
+                            checked={form.auto_beta_ack}
+                            onChange={e => set('auto_beta_ack', e.target.checked)}
+                            className="mt-0.5"
+                          />
+                          <span>I understand Strike Mode may execute real blockchain transactions.</span>
+                        </label>
+                      </div>
+                    )}
                   </div>
+
+                  <div className="grid grid-cols-3 gap-3">
+                    <div>
+                      <label className="text-xs font-mono text-muted uppercase tracking-wider block mb-1.5">Quantity</label>
+                      <input className="input" type="number" min="1" max="20" value={form.max_mint} onChange={e => set('max_mint', parseInt(e.target.value) || 1)} />
+                    </div>
+                    <div className="col-span-2">
+                      <label className="text-xs font-mono text-muted uppercase tracking-wider block mb-1.5">Gas safety limit</label>
+                      <input className="input" type="number" value={form.gas_limit} onChange={e => set('gas_limit', parseInt(e.target.value) || 200000)} />
+                    </div>
+                  </div>
+                  {form.mint_mode === 'auto' && (
+                    <div className="grid grid-cols-3 gap-3">
+                      <div>
+                        <label className="text-xs font-mono text-muted uppercase tracking-wider block mb-1.5">Max Mint ETH</label>
+                        <input className="input" placeholder="0.05" value={form.max_mint_price} onChange={e => set('max_mint_price', e.target.value)} />
+                      </div>
+                      <div>
+                        <label className="text-xs font-mono text-muted uppercase tracking-wider block mb-1.5">Max Gas ETH</label>
+                        <input className="input" placeholder="0.01" value={form.max_gas_fee} onChange={e => set('max_gas_fee', e.target.value)} />
+                      </div>
+                      <div>
+                        <label className="text-xs font-mono text-muted uppercase tracking-wider block mb-1.5">Max Total ETH</label>
+                        <input className="input" placeholder="0.06" value={form.max_total_spend} onChange={e => set('max_total_spend', e.target.value)} />
+                      </div>
+                    </div>
+                  )}
+
                   <div>
-                    <label className="text-xs font-mono text-muted uppercase tracking-wider block mb-1.5">Max Total ETH</label>
-                    <input className="input" placeholder="0.06" value={form.max_total_spend} onChange={e => set('max_total_spend', e.target.value)} />
+                    <label className="text-xs font-mono text-muted uppercase tracking-wider block mb-1.5">Notes</label>
+                    <textarea className="input resize-none" rows={2} placeholder="Role needed, mint rules, official source, or anything you want to remember..." value={form.notes} onChange={e => set('notes', e.target.value)} />
                   </div>
                 </div>
               )}
-
-              <div>
-                <label className="text-xs font-mono text-muted uppercase tracking-wider block mb-1.5">Notes</label>
-                <textarea className="input resize-none" rows={2} placeholder="Role needed, mint rules, official source, or anything you want to remember..." value={form.notes} onChange={e => set('notes', e.target.value)} />
-              </div>
 
               <div className="flex gap-2 pt-1">
                 <button onClick={() => setStep(1)} className="btn-ghost flex-1">Back</button>
