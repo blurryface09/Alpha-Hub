@@ -356,7 +356,7 @@ export default function MintGuardPage() {
         if (!res.ok || data?.ok === false) throw new Error(data.error || 'Could not arm Strike Mode.')
         toast.success(data.message || 'Strike armed. Worker is watching.')
       } catch (error) {
-        toast.error(friendlyError(error, 'Could not arm Strike Mode.'))
+        toast.error(error?.message || friendlyError(error, 'Could not arm Strike Mode.'))
         return
       }
     }

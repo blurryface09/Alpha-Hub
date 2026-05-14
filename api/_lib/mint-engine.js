@@ -29,8 +29,33 @@ const EVENT_MESSAGES = {
   stopped: 'Stopped',
 }
 
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
+
 function safeError(message = 'Mint action is temporarily unavailable.') {
   return { ok: false, error: message }
+}
+
+function normalizeOptionalUuid(value) {
+  if (value === undefined || value === null) return null
+  const raw = String(value).trim()
+  if (!raw || raw.toLowerCase() === 'undefined' || raw.toLowerCase() === 'null') return null
+  return UUID_RE.test(raw) ? raw : null
+}
+
+function hasRealValue(value) {
+  if (value === undefined || value === null) return false
+  const raw = String(value).trim().toLowerCase()
+  return Boolean(raw && raw !== 'undefined' && raw !== 'null')
+}
+
+function validateRequiredUuid(value, label) {
+  const normalized = normalizeOptionalUuid(value)
+  if (!normalized) throw new Error(`${label} is invalid.`)
+  return normalized
+}
+
+function compactPayload(row) {
+  return Object.fromEntries(Object.entries(row).filter(([, value]) => value !== undefined))
 }
 
 function safeMessage(error) {
@@ -216,11 +241,11 @@ function intentPayload(user, body, status = 'draft') {
   const phase = normalizePhase(body.phase || body.mintPhase)
   const risk = Number(body.riskScore || 50)
   const mode = body.mode || recommendMode(phase, risk)
-  return {
+  return compactPayload({
     user_id: user.id,
-    project_id: body.projectId || null,
-    calendar_project_id: body.calendarProjectId || null,
-    wl_project_id: body.wlProjectId || null,
+    project_id: normalizeOptionalUuid(body.projectId || body.project_id),
+    calendar_project_id: normalizeOptionalUuid(body.calendarProjectId || body.calendar_project_id),
+    wl_project_id: normalizeOptionalUuid(body.wlProjectId || body.wl_project_id),
     project_name: body.name || body.projectName || 'Mint project',
     contract_address: body.contractAddress || body.contract_address || null,
     chain,
@@ -235,10 +260,19 @@ function intentPayload(user, body, status = 'draft') {
     status,
     last_state: status === 'prepared' ? EVENT_MESSAGES.prepared : EVENT_MESSAGES.preparing,
     updated_at: new Date().toISOString(),
-  }
+  })
 }
 
 async function insertOptional(supabase, table, row) {
+  console.log('Strike sanitized payload before insert', {
+    table,
+    project_id: row.project_id,
+    calendar_project_id: row.calendar_project_id,
+    wl_project_id: row.wl_project_id,
+    contract_address: row.contract_address,
+    chain: row.chain,
+    status: row.status,
+  })
   const { data, error } = await supabase.from(table).insert(row).select().single()
   if (!error) return data
   const msg = String(error.message || '').toLowerCase()
@@ -297,7 +331,10 @@ async function recordAttempt(supabase, intentId, userId, status, metadata = {}) 
 
 async function updateStrikeIntent(supabase, intentId, userId, payload) {
   const fullPayload = {
-    ...payload,
+    ...compactPayload({
+      ...payload,
+      vault_wallet_id: normalizeOptionalUuid(payload.vault_wallet_id),
+    }),
     strike_status: 'armed',
     status: 'armed',
     updated_at: new Date().toISOString(),
@@ -334,6 +371,7 @@ async function loadVault(supabase, userId) {
     .select('id,address,wallet_address,status')
     .eq('user_id', userId)
     .eq('status', 'active')
+    .order('created_at', { ascending: false })
     .limit(1)
   if (error) return false
   return data?.[0] || null
@@ -398,14 +436,17 @@ export async function handleMintAction(req, res, action) {
       if (req.method !== 'POST') return res.status(405).json(safeError('Method not allowed.'))
       const body = req.body || {}
       const { acknowledgeRisk, maxTotalSpend } = body
-      let { intentId } = body
+      let intentId = normalizeOptionalUuid(body.intentId || body.intent_id)
+      const rawIntentId = body.intentId || body.intent_id
+      if (hasRealValue(rawIntentId) && !intentId) return res.status(400).json(safeError('Mint session id is invalid.'))
       if (!AUTO_STRIKE_ENABLED || !ALPHA_VAULT_ENABLED) {
         return res.status(200).json({ ok: true, dryRun: true, error: 'Strike Mode is disabled by the global safety switch.' })
       }
       if (!acknowledgeRisk) return res.status(400).json(safeError('Confirm Strike Mode warnings before enabling.'))
       if (!maxTotalSpend) return res.status(400).json(safeError('Set a max spend limit before enabling Strike Mode.'))
       const vault = await loadVault(supabase, user.id)
-      if (!vault) return res.status(400).json(safeError('Create or import an Alpha Vault wallet before Strike Mode.'))
+      if (!vault) return res.status(400).json(safeError('Create Alpha Vault before enabling Strike Mode.'))
+      const vaultWalletId = validateRequiredUuid(vault.id, 'Alpha Vault wallet id')
       if (!intentId) {
         const created = await insertOptional(supabase, 'mint_intents', intentPayload(user, {
           ...body,
@@ -413,6 +454,7 @@ export async function handleMintAction(req, res, action) {
           maxTotalSpend,
         }, 'prepared'))
         intentId = created.id
+        if (!intentId || created.localOnly) return res.status(500).json(safeError('Could not create Strike mint session.'))
       }
       const intent = await loadIntent(supabase, user.id, intentId)
       if (!intent) return res.status(404).json(safeError('Mint session not found.'))
@@ -429,14 +471,14 @@ export async function handleMintAction(req, res, action) {
         max_total_spend: maxTotalSpend,
         max_gas_fee: body.maxGasFee || body.max_gas_fee || intent.max_gas_fee || null,
         quantity: Number(body.quantity || intent.quantity || 1),
-        vault_wallet_id: vault.id,
+        vault_wallet_id: vaultWalletId,
         strike_execute_at: strikeExecuteAt,
         strike_enabled: true,
         last_state: EVENT_MESSAGES.watching,
       })
       console.log('Strike intent armed', intentId)
       await logEvent(supabase, intentId, user.id, 'watching', 'Strike armed. Worker is watching.', {
-        vaultWalletId: vault.id,
+        vaultWalletId,
         strikeExecuteAt,
       })
       return res.status(200).json({ ok: true, intent: armed, message: 'Strike armed. Worker is watching.' })
