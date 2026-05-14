@@ -26,6 +26,8 @@ export default function SettingsPage() {
   const [mintPrivateKey, setMintPrivateKey] = useState('')
   const [mintWalletLoading, setMintWalletLoading] = useState(false)
   const [showMintKey, setShowMintKey] = useState(false)
+  const [vaultWallets, setVaultWallets] = useState([])
+  const [vaultLoading, setVaultLoading] = useState(false)
 
   // Sync form when profile loads/updates from Supabase
   useEffect(() => {
@@ -44,8 +46,34 @@ export default function SettingsPage() {
         const d = await r.json()
         if (d.wallet?.wallet_address) setMintWalletAddress(d.wallet.wallet_address)
       } catch {}
+      try {
+        const r = await fetch('/api/vault/list', { headers: { Authorization: 'Bearer ' + token } })
+        const d = await r.json()
+        if (d.wallets) setVaultWallets(d.wallets)
+      } catch {}
     })
   }, [user])
+
+  const createAlphaVault = async () => {
+    setVaultLoading(true)
+    try {
+      const token = await getAuthToken()
+      if (!token) throw new Error('Sign in again before creating Alpha Vault')
+      const r = await fetch('/api/vault/create', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + token },
+        body: JSON.stringify({ label: 'Alpha Vault' }),
+      })
+      const d = await r.json()
+      if (!r.ok || d.ok === false) throw new Error(d.error || 'Could not create Alpha Vault')
+      setVaultWallets(prev => [d.wallet, ...prev.filter(item => item.id !== d.wallet.id)])
+      toast.success('Alpha Vault created. Fund it lightly before Strike Mode.')
+    } catch (err) {
+      toast.error(err.message || 'Could not create Alpha Vault')
+    } finally {
+      setVaultLoading(false)
+    }
+  }
 
   const saveMintWallet = async () => {
     if (!mintPrivateKey.trim()) { toast.error('Paste a private key first'); return }
@@ -71,7 +99,7 @@ export default function SettingsPage() {
   }
 
   const removeMintWallet = async () => {
-    if (!confirm('Remove the stored minting wallet? Auto-mint will stop working.')) return
+    if (!confirm('Remove the stored Alpha Vault wallet? Strike Mode will stop working.')) return
     const token = await getAuthToken()
     await fetch('/api/wallet', {
       method: 'DELETE',
@@ -121,12 +149,20 @@ export default function SettingsPage() {
   const saveProfile = async () => {
     setSaving(true)
     try {
-      const { error } = await supabase.from('profiles').upsert({
+      const payload = {
         id: user.id,
         username,
         wallet_address: walletAddress,
         updated_at: new Date().toISOString(),
-      })
+      }
+      let { error } = await supabase.from('profiles').update(payload).eq('id', user.id)
+      if (error?.code === '42703') {
+        error = (await supabase.from('profiles').update({
+          id: user.id,
+          username,
+          updated_at: new Date().toISOString(),
+        }).eq('id', user.id)).error
+      }
       if (error) throw error
       await fetchProfile(user.id)
       toast.success('Profile updated')
@@ -270,12 +306,12 @@ export default function SettingsPage() {
         </button>
       </div>
 
-      {/* Server-side Minting Wallet */}
+      {/* Alpha Vault */}
       <div className="card mb-4">
         <div className="flex items-center gap-2 mb-3">
           <Zap size={14} className="text-green" />
-          <div className="section-label mb-0">Auto-Mint Wallet</div>
-          {mintWalletAddress && (
+          <div className="section-label mb-0">Alpha Vault</div>
+          {(mintWalletAddress || vaultWallets.length > 0) && (
             <span className="badge badge-green text-[10px] ml-auto flex items-center gap-1">
               <CheckCircle size={9} /> Active
             </span>
@@ -285,8 +321,30 @@ export default function SettingsPage() {
         <div className="flex items-start gap-2 bg-accent3/8 border border-accent3/20 rounded-lg p-3 mb-3">
           <AlertTriangle size={12} className="text-accent3 flex-shrink-0 mt-0.5" />
           <p className="text-xs text-accent3 leading-relaxed">
-            <b>Use a dedicated burner wallet only.</b> Never paste your main wallet's key. Fund it with just enough ETH for planned mints. Keys are encrypted server-side — never stored in plaintext.
+            <b>Use a dedicated burner wallet only.</b> Alpha Vault powers Strike Mode. Never use your main wallet. Fund it with only what you are willing to mint with.
           </p>
+        </div>
+
+        <div className="mb-4 rounded-lg border border-border bg-surface2 p-3">
+          <div className="flex items-center justify-between gap-3">
+            <div>
+              <p className="text-sm font-semibold">Generate a personal burner wallet</p>
+              <p className="text-xs text-muted mt-1">Private key is encrypted server-side and never returned to the browser.</p>
+            </div>
+            <button onClick={createAlphaVault} disabled={vaultLoading} className="btn-primary text-xs whitespace-nowrap">
+              {vaultLoading ? 'Creating...' : 'Create Vault'}
+            </button>
+          </div>
+          {vaultWallets.length > 0 && (
+            <div className="mt-3 space-y-2">
+              {vaultWallets.map(wallet => (
+                <div key={wallet.id} className="rounded-lg border border-border bg-surface px-3 py-2">
+                  <div className="text-xs text-muted">{wallet.label || 'Alpha Vault'}</div>
+                  <div className="font-mono text-sm text-green break-all">{wallet.address}</div>
+                </div>
+              ))}
+            </div>
+          )}
         </div>
 
         {mintWalletAddress ? (
@@ -294,7 +352,7 @@ export default function SettingsPage() {
             <div className="bg-surface2 rounded-lg p-3 border border-border">
               <p className="text-xs text-muted mb-1">Active minting wallet</p>
               <p className="font-mono text-sm text-green">{mintWalletAddress}</p>
-              <p className="text-xs text-muted mt-1">Auto-mint cron fires every minute for live projects.</p>
+              <p className="text-xs text-muted mt-1">Legacy minting wallet. Alpha Vault is recommended for Strike Mode.</p>
             </div>
             <button onClick={removeMintWallet} className="btn-ghost text-xs text-accent2 border-accent2/30 hover:border-accent2 flex items-center gap-1.5">
               <Trash2 size={11} /> Remove Wallet
@@ -303,7 +361,7 @@ export default function SettingsPage() {
         ) : (
           <div className="space-y-3">
             <p className="text-sm text-muted">
-              Store a burner wallet's private key so Alpha-Hub can auto-mint on your behalf — even when you're offline or asleep.
+              Prefer Create Vault above. Import only a burner wallet if you already made one outside Alpha Hub.
             </p>
             <div>
               <label className="text-xs font-mono text-muted uppercase tracking-wider block mb-1.5">

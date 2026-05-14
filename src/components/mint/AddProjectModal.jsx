@@ -17,10 +17,10 @@ const WL_TYPES = [
 ]
 
 const MINT_MODES = [
-  { val: 'confirm', label: 'Confirm Mode', icon: '✓', desc: '1-click mint assist' },
-  { val: 'auto',    label: 'Auto Beta',    icon: '⚡', desc: 'Opt-in bot fires when live' },
+  { val: 'confirm', label: 'Fast Mint', icon: '✓', desc: 'Prepared wallet confirmation' },
+  { val: 'auto',    label: 'Strike Mode',    icon: '⚡', desc: 'Alpha Vault auto execution' },
 ]
-const CHAIN_IDS = { eth: 1, base: 8453, bnb: 56 }
+const CHAIN_IDS = { eth: 1, base: 8453, apechain: 33139, solana: 0 }
 
 export default function AddProjectModal({ onAdd, onClose }) {
   const [step, setStep] = useState(1)
@@ -142,15 +142,15 @@ export default function AddProjectModal({ onAdd, onClose }) {
   const handleSubmit = async () => {
     if (!form.name.trim()) { toast.error('Project name is required'); return }
     if (form.mint_mode === 'auto' && !form.contract_address?.trim()) {
-      toast.error('Auto-mint needs a contract address')
+      toast.error('Strike Mode needs a contract address')
       return
     }
     if (form.mint_mode === 'auto' && !form.auto_beta_ack) {
-      toast.error('Confirm that you understand Auto Beta can execute real blockchain transactions')
+      toast.error('Confirm that you understand Strike Mode can execute real blockchain transactions')
       return
     }
     if (form.mint_mode === 'auto' && form.mint_date && !form.mint_time_confirmed) {
-      toast.error('Confirm the mint time before enabling Auto Beta')
+      toast.error('Confirm the mint time before enabling Strike Mode')
       return
     }
     const rawContract = form.contract_address?.trim() || ''
@@ -351,7 +351,7 @@ export default function AddProjectModal({ onAdd, onClose }) {
                 </div>
                 {form.mint_mode === 'auto' && (
                   <div className="mt-2 rounded-lg border border-amber-500/25 bg-amber-500/10 p-3 text-xs text-amber-200 space-y-3">
-                    <p>Auto Beta can execute real blockchain transactions from your configured wallet. Use an isolated wallet and set max spend limits.</p>
+                    <p>Strike Mode can execute real blockchain transactions through Alpha Vault. Use an isolated burner wallet and set max spend limits.</p>
                     <label className="flex items-start gap-2">
                       <input
                         type="checkbox"
@@ -359,7 +359,7 @@ export default function AddProjectModal({ onAdd, onClose }) {
                         onChange={e => set('auto_beta_ack', e.target.checked)}
                         className="mt-0.5"
                       />
-                      <span>I understand Auto Beta may execute real blockchain transactions.</span>
+                      <span>I understand Strike Mode may execute real blockchain transactions.</span>
                     </label>
                   </div>
                 )}

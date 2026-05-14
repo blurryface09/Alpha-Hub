@@ -421,7 +421,7 @@ export default async function handler(req, res) {
           const message =
             `${chain} · ${price} · ${p.wl_type}\n` +
             (isAuto
-              ? '⚡ Server auto-mint will fire shortly'
+              ? '⚡ Strike Mode will fire shortly'
               : 'Tap below to confirm or skip')
 
           const text =

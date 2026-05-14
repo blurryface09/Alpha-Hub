@@ -1,7 +1,7 @@
 import React, { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
-  CalendarDays, Clock, ExternalLink, Gem, Loader, Plus, Radar, Share2,
-  Search, Shield, Sparkles, TrendingUp, Zap
+  Clock, ExternalLink, Gem, Loader, Plus, Radar, Share2,
+  Search, Shield, Sparkles, TrendingUp, Zap, Wand2
 } from 'lucide-react'
 import toast from 'react-hot-toast'
 import { useAccount } from 'wagmi'
@@ -17,6 +17,7 @@ import {
   isRawCalendarDiscovery,
   mintGuardEligible,
 } from '../lib/calendarQuality'
+import { MINT_MODES, MINT_PHASES, recommendMintMode } from '../lib/mintModes'
 
 const ADMIN_WALLET = import.meta.env.VITE_ADMIN_WALLET?.toLowerCase()
 
@@ -24,19 +25,21 @@ const TABS = [
   { id: 'trending', label: 'Trending', icon: TrendingUp, copy: 'Highest visible activity and strongest tracked-wallet signals.' },
   { id: 'hidden-gems', label: 'Hidden Gems', icon: Gem, copy: 'Low-noise mints with early contract, whale, or deployer signals.' },
   { id: 'minting-now', label: 'Minting Now', icon: Zap, copy: 'Live launches, warm countdowns, and mints that need fast review.' },
-  { id: 'new-contracts', label: 'New Contracts', icon: Shield, copy: 'Fresh ERC721/ERC1155-style contracts that need intelligence review.' },
+  { id: 'new-contracts', label: 'New Contracts', icon: Shield, copy: 'Fresh NFT-style contracts that need intelligence review.' },
 ]
 
 const CHAINS = [
   { value: 'eth', label: 'Ethereum', chainId: 1 },
   { value: 'base', label: 'Base', chainId: 8453 },
-  { value: 'bnb', label: 'BNB Chain', chainId: 56 },
+  { value: 'apechain', label: 'ApeChain', chainId: 33139 },
+  { value: 'solana', label: 'Solana', chainId: 0 },
 ]
 
 function normalizeChain(chain) {
   const value = String(chain || 'eth').toLowerCase()
   if (value.includes('base')) return 'base'
-  if (value.includes('bnb') || value.includes('bsc')) return 'bnb'
+  if (value.includes('ape')) return 'apechain'
+  if (value.includes('sol')) return 'solana'
   return 'eth'
 }
 
@@ -116,7 +119,7 @@ function projectSummary(project) {
   if (project.source === 'onchain') {
     return 'Live mint activity was detected onchain. Add official links or inspect details before tracking.'
   }
-  return 'Sourced mint opportunity. Confirm official details before arming Auto Beta.'
+  return 'Sourced mint opportunity. Confirm official details before arming Strike Mode.'
 }
 
 function confidenceText(project) {
@@ -199,6 +202,12 @@ export default function CalendarPage() {
   const [ratingBusy, setRatingBusy] = useState(null)
   const [query, setQuery] = useState('')
   const [chain, setChain] = useState('all')
+  const [intelInput, setIntelInput] = useState('')
+  const [detecting, setDetecting] = useState(false)
+  const [detectedProject, setDetectedProject] = useState(null)
+  const [selectedPhase, setSelectedPhase] = useState('unknown')
+  const [selectedMode, setSelectedMode] = useState('safe')
+  const [consoleSteps, setConsoleSteps] = useState([])
   const [form, setForm] = useState({
     name: '',
     chain: 'base',
@@ -206,6 +215,7 @@ export default function CalendarPage() {
     timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC',
     mint_price: '',
     mint_type: 'unknown',
+    mint_phase: 'unknown',
     website_url: '',
     x_url: '',
     discord_url: '',
@@ -294,7 +304,7 @@ export default function CalendarPage() {
 
   const runSync = async () => {
     if (calendarNotReady) {
-      toast.error('Install the Calendar SQL migration in Supabase before running sync.')
+      toast.error('Install the Alpha Radar SQL migration in Supabase before running sync.')
       return
     }
     setSyncing(true)
@@ -309,19 +319,104 @@ export default function CalendarPage() {
         body: JSON.stringify({ limit: 12 }),
       })
       const data = await res.json()
-      if (!res.ok) throw new Error(data.error || 'Calendar sync failed')
+      if (!res.ok) throw new Error(data.error || 'Alpha Radar sync failed')
       if (data?.schemaMissing) {
         setSchemaMissing(true)
-        throw new Error(data.message || data.error || 'Calendar database table is not installed yet.')
+        throw new Error(data.message || data.error || 'Alpha Radar database table is not installed yet.')
       }
-      if (data?.ok === false) throw new Error(data.error || 'Calendar sync failed')
-      toast.success(`Calendar sync complete: ${data.totalImported || 0} imported, ${data.totalUpdated || 0} updated.`)
+      if (data?.ok === false) throw new Error(data.error || 'Alpha Radar sync failed')
+      toast.success(`Alpha Radar sync complete: ${data.totalImported || 0} imported, ${data.totalUpdated || 0} updated.`)
       fetchProjects()
       fetchStatus()
     } catch (error) {
-      toast.error(friendlyError(error, 'Calendar sync could not run.'))
+      toast.error(friendlyError(error, 'Alpha Radar sync could not run.'))
     } finally {
       setSyncing(false)
+    }
+  }
+
+  const detectAlpha = async () => {
+    if (!intelInput.trim()) {
+      toast.error('Paste an OpenSea, Zora, mint site, X post, or contract first.')
+      return
+    }
+    setDetecting(true)
+    setConsoleSteps(['Preparing project', 'Detecting phase'])
+    try {
+      const token = await getAuthToken()
+      const res = await fetch('/api/intelligence/detect-project', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
+        body: JSON.stringify({ input: intelInput }),
+      })
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok || data?.ok === false) throw new Error(data.error || 'Could not detect project')
+      const project = data.project || {}
+      setDetectedProject(project)
+      const phase = project.mintPhase || 'unknown'
+      setSelectedPhase(phase)
+      setSelectedMode(project.recommendedMode || recommendMintMode(phase, project.riskScore))
+      setConsoleSteps(['Preparing project', 'Detecting phase', 'Checking contract'])
+      setForm(prev => ({
+        ...prev,
+        name: project.name || prev.name,
+        chain: normalizeChain(project.chain || prev.chain),
+        contract_address: project.contractAddress || prev.contract_address,
+        mint_url: project.mintUrl || prev.mint_url,
+        website_url: project.websiteUrl || prev.website_url,
+        x_url: project.xUrl || prev.x_url,
+        image_url: project.imageUrl || prev.image_url,
+        mint_date: project.mintDate ? project.mintDate.slice(0, 16) : prev.mint_date,
+        mint_type: project.mintPhase || prev.mint_type,
+        mint_phase: project.mintPhase || prev.mint_phase,
+        mint_price: project.mintPrice || prev.mint_price,
+        notes: project.notes?.join(' ') || prev.notes,
+      }))
+      toast.success('Alpha detected. Confirm phase and mint mode.')
+    } catch (error) {
+      toast.error(friendlyError(error, 'Could not detect this alpha.'))
+      setConsoleSteps(['Preparing project', 'Failed'])
+    } finally {
+      setDetecting(false)
+    }
+  }
+
+  const prepareDetectedMint = async () => {
+    const project = detectedProject
+    if (!project) {
+      toast.error('Detect or select a project first.')
+      return
+    }
+    setConsoleSteps(['Preparing project', 'Detecting phase', 'Checking contract', 'Preparing transaction'])
+    try {
+      const token = await getAuthToken()
+      const res = await fetch('/api/mint/prepare', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
+        body: JSON.stringify({
+          name: project.name,
+          contractAddress: project.contractAddress,
+          chain: project.chain,
+          mintUrl: project.mintUrl || project.sourceUrl,
+          phase: selectedPhase,
+          mode: selectedMode,
+          riskScore: project.riskScore,
+          maxTotalSpend: '0.05',
+        }),
+      })
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok || data?.ok === false) throw new Error(data.error || 'Could not prepare mint')
+      setConsoleSteps(['Preparing project', 'Detecting phase', 'Checking contract', 'Preparing transaction', 'Simulating mint', selectedMode === 'strike' ? 'Watching mint window' : 'Gas locked'])
+      toast.success(data.message || `${MINT_MODES[selectedMode]?.label || 'Mint'} prepared.`)
+    } catch (error) {
+      setConsoleSteps(prev => [...prev, 'Failed'])
+      toast.error(friendlyError(error, 'Mint preparation failed. Nothing was sent.'))
     }
   }
 
@@ -342,6 +437,7 @@ export default function CalendarPage() {
     community_name: '',
     community_x_handle: '',
     submitter_role: 'user',
+    mint_phase: 'unknown',
   })
 
   const submitProject = async () => {
@@ -369,7 +465,9 @@ export default function CalendarPage() {
         discord_url: form.discord_url.trim() || null,
         mint_date: form.mint_date ? new Date(form.mint_date).toISOString() : null,
         mint_price: form.mint_price.trim() || null,
-        mint_type: form.mint_type || 'unknown',
+        mint_type: form.mint_type || form.mint_phase || 'unknown',
+        mint_phase: form.mint_phase || form.mint_type || 'unknown',
+        recommended_mode: recommendMintMode(form.mint_phase || form.mint_type, 50),
         source_url: form.mint_url.trim() || form.website_url.trim() || form.x_url.trim() || null,
         created_by_wallet: address?.toLowerCase() || null,
         community_name: form.community_name.trim() || null,
@@ -387,13 +485,13 @@ export default function CalendarPage() {
         body: JSON.stringify(row),
       })
       const data = await res.json()
-      if (!res.ok) throw new Error(data.error || 'Could not submit calendar project')
-      toast.success(isAdmin ? 'Calendar project added.' : 'Project submitted for review.')
+      if (!res.ok) throw new Error(data.error || 'Could not submit alpha')
+      toast.success(isAdmin ? 'Alpha added.' : 'Alpha submitted for review.')
       resetForm()
       setSubmitOpen(false)
       fetchProjects()
     } catch (error) {
-      toast.error(friendlyError(error, 'Could not submit this calendar project.'))
+      toast.error(friendlyError(error, 'Could not submit this alpha.'))
     } finally {
       setSubmitting(false)
     }
@@ -442,8 +540,8 @@ export default function CalendarPage() {
       toast.success(data.duplicate
         ? 'Already in MintGuard.'
         : reviewMode
-        ? 'Added to MintGuard. Confirm details before Auto Beta.'
-        : 'Added to MintGuard in Confirm Mode.', { id: 'calendar-add' })
+        ? 'Added to MintGuard. Confirm details before Strike Mode.'
+        : 'Added to MintGuard in Fast Mint mode.', { id: 'calendar-add' })
     } catch (error) {
       toast.error(friendlyError(error, 'Could not add this project to MintGuard.'), { id: 'calendar-add' })
     }
@@ -544,12 +642,12 @@ export default function CalendarPage() {
         },
       })
       const data = await res.json().catch(() => ({}))
-      if (!res.ok || data?.ok === false) throw new Error(data.error || 'Could not clean Calendar')
+      if (!res.ok || data?.ok === false) throw new Error(data.error || 'Could not clean Alpha Radar')
       toast.success(`Cleanup complete: ${data.downgraded || 0} moved to review.`)
       fetchProjects()
       fetchStatus()
     } catch (error) {
-      toast.error(friendlyError(error, 'Could not clean Calendar.'))
+      toast.error(friendlyError(error, 'Could not clean Alpha Radar.'))
     }
   }
 
@@ -559,17 +657,17 @@ export default function CalendarPage() {
         <div className="hero-content flex flex-col gap-5 lg:flex-row lg:items-center lg:justify-between">
           <div className="max-w-3xl">
             <div className="flex flex-wrap items-center gap-2 mb-3">
-              <span className="mascot-orb"><CalendarDays size={17} /></span>
-              <span className="badge badge-cyan">Discover</span>
-              <span className="badge badge-purple">Community alpha</span>
+              <span className="mascot-orb"><Radar size={17} /></span>
+              <span className="badge badge-cyan">Alpha Radar</span>
+              <span className="badge badge-purple">Mint intelligence</span>
             </div>
-            <h1 className="text-3xl font-black tracking-tight">Find launches worth tracking.</h1>
+            <h1 className="text-3xl font-black tracking-tight">Find, understand, and mint faster.</h1>
             <p className="mt-2 text-sm text-muted leading-relaxed">
-              Browse sourced mints, community submissions, live opportunities, and new contracts. Low-confidence entries stay marked for review until official details are clear.
+              Paste a link or browse live signals. Alpha Radar detects project basics, mint phase, timing, risk, and the safest execution mode.
             </p>
             {schemaMissing && (
               <p className="text-xs text-accent3 mt-3">
-                Calendar storage needs the SQL migration before live sync can save projects.
+                Alpha Radar storage needs the SQL migration before live sync can save projects.
               </p>
             )}
           </div>
@@ -577,7 +675,7 @@ export default function CalendarPage() {
             {isAdmin && (
               <button onClick={runSync} disabled={syncing || calendarNotReady} className="btn-ghost flex items-center justify-center gap-2">
                 {syncing ? <Loader size={15} className="animate-spin" /> : <Radar size={15} />}
-                {calendarNotReady ? 'Install Calendar SQL First' : syncing ? 'Syncing...' : 'Run Sync'}
+                {calendarNotReady ? 'Install Alpha Radar SQL First' : syncing ? 'Syncing...' : 'Run Sync'}
               </button>
             )}
             {isAdmin && (
@@ -593,6 +691,105 @@ export default function CalendarPage() {
             )}
           </div>
         </div>
+      </div>
+
+      <div className="card mb-5 overflow-hidden">
+        <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+          <div className="flex-1">
+            <div className="flex items-center gap-2 mb-2">
+              <Wand2 size={16} className="text-accent" />
+              <h2 className="font-bold">Paste alpha, get a mint plan</h2>
+            </div>
+            <p className="text-sm text-muted">
+              OpenSea, Zora, mint sites, X posts, and contract addresses are supported. Technical details stay tucked away until you need them.
+            </p>
+            <div className="mt-4 flex flex-col sm:flex-row gap-2">
+              <input
+                className="input flex-1"
+                value={intelInput}
+                onChange={event => setIntelInput(event.target.value)}
+                placeholder="Paste project link, X post, or contract..."
+              />
+              <button onClick={detectAlpha} disabled={detecting} className="btn-primary flex items-center justify-center gap-2">
+                {detecting ? <Loader size={15} className="animate-spin" /> : <Radar size={15} />}
+                Detect
+              </button>
+            </div>
+          </div>
+          <div className="w-full lg:w-[420px] rounded-2xl border border-border bg-surface2/70 p-3">
+            <div className="section-label mb-2">Live Mint Console</div>
+            <div className="space-y-2">
+              {(consoleSteps.length ? consoleSteps : ['Waiting for alpha']).slice(-7).map((step, index) => (
+                <div key={`${step}-${index}`} className="flex items-center gap-2 text-xs">
+                  <span className={`h-2 w-2 rounded-full ${step === 'Failed' ? 'bg-red-400' : step === 'Stopped' ? 'bg-muted' : 'bg-accent'}`} />
+                  <span className={step === 'Failed' ? 'text-red-300' : 'text-muted'}>{step}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+
+        {detectedProject && (
+          <div className="mt-4 rounded-2xl border border-accent/20 bg-accent/8 p-4">
+            <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+              <div>
+                <div className="flex flex-wrap items-center gap-2 mb-1">
+                  <span className="badge badge-cyan">{normalizeChain(detectedProject.chain).toUpperCase()}</span>
+                  <span className="badge badge-yellow">Confidence {detectedProject.confidence || 'low'}</span>
+                  <span className="badge badge-purple">{MINT_PHASES.find(item => item.id === selectedPhase)?.label || 'Not sure'}</span>
+                </div>
+                <h3 className="font-bold">{detectedProject.name}</h3>
+                <p className="text-xs text-muted mt-1">
+                  Recommended: {MINT_MODES[selectedMode]?.label || 'Safe Mint'} · Risk {detectedProject.riskScore ?? 'review'}
+                </p>
+              </div>
+              <button onClick={() => setSubmitOpen(true)} className="btn-ghost">Review & submit</button>
+            </div>
+            <div className="mt-4 grid grid-cols-1 lg:grid-cols-2 gap-3">
+              <label>
+                <span className="section-label block mb-2">What phase are you minting?</span>
+                <select
+                  className="select"
+                  value={selectedPhase}
+                  onChange={event => {
+                    const phase = event.target.value
+                    setSelectedPhase(phase)
+                    setSelectedMode(recommendMintMode(phase, detectedProject.riskScore))
+                    setForm(prev => ({ ...prev, mint_phase: phase, mint_type: phase }))
+                  }}
+                >
+                  {MINT_PHASES.map(item => <option key={item.id} value={item.id}>{item.label} - {item.copy}</option>)}
+                </select>
+              </label>
+              <div>
+                <span className="section-label block mb-2">Mint mode</span>
+                <div className="grid grid-cols-3 gap-2">
+                  {Object.values(MINT_MODES).map(mode => (
+                    <button
+                      key={mode.id}
+                      onClick={() => setSelectedMode(mode.id)}
+                      className={`rounded-xl border px-3 py-2 text-left transition-colors ${selectedMode === mode.id ? 'border-accent bg-accent/10 text-text' : 'border-border bg-surface text-muted'}`}
+                    >
+                      <div className="text-xs font-bold">{mode.shortLabel}</div>
+                      <div className="text-[10px] leading-tight mt-1">{mode.id === 'strike' ? 'Vault required' : mode.id === 'fast' ? 'Prepared tx' : 'Wallet confirm'}</div>
+                    </button>
+                  ))}
+                </div>
+              </div>
+            </div>
+            <div className="mt-3 flex flex-col sm:flex-row gap-2">
+              <button onClick={prepareDetectedMint} className="btn-primary flex-1">
+                Prepare {MINT_MODES[selectedMode]?.label || 'Mint'}
+              </button>
+              <button onClick={() => setDetectedProject(null)} className="btn-ghost">Clear</button>
+            </div>
+            {selectedMode === 'strike' && (
+              <p className="text-xs text-accent3 mt-3">
+                Strike Mode uses Alpha Vault only after you enable a burner wallet, max spend, simulation, and safety switches. Never use your main wallet.
+              </p>
+            )}
+          </div>
+        )}
       </div>
 
       <div className="grid grid-cols-2 lg:grid-cols-5 gap-3 mb-5">
@@ -660,12 +857,12 @@ export default function CalendarPage() {
           <h2 className="text-base font-bold">No verified project listings yet</h2>
           <p className="text-sm text-muted mt-2 max-w-md">
             {calendarNotReady
-              ? 'Calendar storage is not ready yet. Apply the Calendar SQL migration in Supabase before syncing real projects.'
+              ? 'Alpha Radar storage is not ready yet. Apply the Alpha Radar SQL migration in Supabase before syncing real projects.'
               : 'OpenSea, Alchemy, or Zora source data is needed for curated project listings. Raw onchain contracts only appear under New Contracts for review.'}
           </p>
           <div className="flex flex-col sm:flex-row gap-2 mt-4">
             {isAdmin && !calendarNotReady && <button onClick={runSync} disabled={syncing} className="btn-primary text-xs">{syncing ? 'Syncing...' : 'Run Sync Now'}</button>}
-            {isAdmin && calendarNotReady && <button disabled className="btn-ghost text-xs">Install Calendar SQL First</button>}
+            {isAdmin && calendarNotReady && <button disabled className="btn-ghost text-xs">Install Alpha Radar SQL First</button>}
             {isAdmin && <button onClick={() => setSubmitOpen(true)} className="btn-ghost text-xs">Add Alpha</button>}
           </div>
         </div>
@@ -897,9 +1094,12 @@ function SubmitModal({ form, setForm, submitting, onClose, onSubmit, isAdmin }) 
           </div>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
             <label>
-              <span className="section-label block mb-2">Mint type</span>
-              <select className="select" value={form.mint_type} onChange={event => update('mint_type', event.target.value)}>
-                {['unknown', 'public', 'allowlist', 'fcfs', 'free', 'paid'].map(item => <option key={item} value={item}>{item}</option>)}
+              <span className="section-label block mb-2">Mint phase</span>
+              <select className="select" value={form.mint_phase || form.mint_type} onChange={event => {
+                update('mint_phase', event.target.value)
+                update('mint_type', event.target.value)
+              }}>
+                {MINT_PHASES.map(item => <option key={item.id} value={item.id}>{item.label} - {item.copy}</option>)}
               </select>
             </label>
             <Field label="Image URL" value={form.image_url} onChange={value => update('image_url', value)} />
@@ -919,7 +1119,7 @@ function SubmitModal({ form, setForm, submitting, onClose, onSubmit, isAdmin }) 
             <textarea className="input min-h-24" value={form.notes} onChange={event => update('notes', event.target.value)} placeholder="Why this should be tracked, official source, community notes..." />
           </label>
           <div className="rounded-lg border border-accent/20 bg-accent/8 p-3 text-xs text-muted">
-            User submissions enter review. Admin submissions can go live immediately. Low-confidence projects must be confirmed before Auto Beta.
+            User submissions enter review. Admin submissions can go live immediately. Low-confidence projects must be confirmed before Strike Mode.
           </div>
         </div>
         <div className="p-5 border-t border-border flex flex-col sm:flex-row gap-2">
@@ -989,7 +1189,7 @@ function DetailDrawer({ project, isAdmin, onClose, onAdd, onSave, onStatus, onRa
         <div className="space-y-3 text-sm">
           {needsReview && (
             <div className="rounded-lg border border-accent3/30 bg-accent3/10 p-3 text-sm text-accent3">
-              This project needs review. Alpha Hub found activity, but official project metadata is limited. You can save it to My Mints, but confirm official links before Auto Beta.
+              This project needs review. Alpha Hub found activity, but official project metadata is limited. You can save it to My Mints, but confirm official links before Strike Mode.
             </div>
           )}
           <Info label="Mint time" value={formatTime(project)} />
@@ -1006,7 +1206,7 @@ function DetailDrawer({ project, isAdmin, onClose, onAdd, onSave, onStatus, onRa
             !project.mint_price ? 'mint price' : null,
             !project.mint_time_confirmed ? 'confirmed mint time' : null,
           ].filter(Boolean).join(', ') || 'Core details available'} />
-          <Info label="Auto Beta readiness" value={project.mint_time_confirmed ? 'Mint time confirmed. Still requires user opt-in and spend limits.' : 'Needs mint-time confirmation before Auto Beta.'} />
+          <Info label="Strike Mode readiness" value={project.mint_time_confirmed ? 'Mint time confirmed. Still requires user opt-in and spend limits.' : 'Needs mint-time confirmation before Strike Mode.'} />
         </div>
 
         <div className="flex flex-col sm:flex-row gap-2 mt-6">

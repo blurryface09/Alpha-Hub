@@ -16,7 +16,7 @@ const ADMIN_WALLET = import.meta.env.VITE_ADMIN_WALLET?.toLowerCase()
 
 const NAV_ITEMS = [
   { path: '/',           label: 'Home',        icon: Home, exact: true },
-  { path: '/calendar',   label: 'Discover',    icon: Compass, badge: 'LIVE' },
+  { path: '/calendar',   label: 'Alpha Radar', icon: Compass, badge: 'LIVE' },
   { path: '/mintguard',  label: 'My Mints',    icon: Shield },
   { path: '/whaleradar', label: 'Watchlist',   icon: Radar },
   { path: '/alpha',      label: 'Tools',       icon: Search },
@@ -92,7 +92,7 @@ export default function DashboardLayout() {
         {/* Status indicator */}
         <div className="mx-4 mt-3 mb-1 px-3 py-2 bg-surface2/70 rounded-2xl border border-border flex items-center gap-2">
           <div className="dot-live" />
-          <span className="text-xs text-muted font-mono">LIVE ALPHA SCAN</span>
+          <span className="text-xs text-muted font-mono">ALPHA RADAR LIVE</span>
         </div>
 
         {/* Nav */}
@@ -156,6 +156,10 @@ export default function DashboardLayout() {
             <LogOut size={13} />
             Sign Out
           </button>
+          <div className="mt-3 px-3 pt-3 border-t border-border text-[10px] text-muted leading-relaxed">
+            <div>Built by Poseidon Labs</div>
+            <a href="https://x.com/Poseidros" target="_blank" rel="noreferrer" className="text-accent hover:underline">@Poseidros</a>
+          </div>
         </div>
       </motion.aside>
 

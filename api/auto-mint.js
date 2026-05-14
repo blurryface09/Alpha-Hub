@@ -391,7 +391,7 @@ export default async function handler(req, res) {
         execution_status: EXECUTION_STATUS.SKIPPED,
         execution_reason: 'mint_time_not_confirmed',
       })
-      await tgNotify(chatId, `⚠️ <b>Auto-mint skipped: ${project.name}</b>\n\nMint time not confirmed.`)
+      await tgNotify(chatId, `⚠️ <b>Strike Mode skipped: ${project.name}</b>\n\nMint time not confirmed.`)
       continue
     }
 
@@ -400,7 +400,7 @@ export default async function handler(req, res) {
         execution_status: EXECUTION_STATUS.SKIPPED,
         execution_reason: 'missing_contract',
       })
-      await tgNotify(chatId, `⚠️ <b>Auto-mint skipped: ${project.name}</b>\n\nMissing contract address.`)
+      await tgNotify(chatId, `⚠️ <b>Strike Mode skipped: ${project.name}</b>\n\nMissing contract address.`)
       continue
     }
 
@@ -411,7 +411,7 @@ export default async function handler(req, res) {
         execution_reason: 'missing_minting_wallet',
       })
       await tgNotify(chatId,
-        `⚡ <b>Auto-mint skipped: ${project.name}</b>\n\nNo minting wallet set up. Go to <b>Settings → Minting Wallet</b> in Alpha-Hub to enable server-side auto-mint.`
+        `⚡ <b>Strike Mode skipped: ${project.name}</b>\n\nNo Alpha Vault wallet is set up. Go to <b>Settings → Alpha Vault</b> in Alpha Hub before enabling Strike Mode.`
       )
       continue
     }
@@ -428,7 +428,7 @@ export default async function handler(req, res) {
 
       await markProject(project.id, { execution_status: EXECUTION_STATUS.PREPARING, prepare_started_at: nowIso() })
       await tgNotify(chatId,
-        `⚡ <b>Auto-minting: ${project.name}</b>\n${chain} · ${price}\nFiring transaction from ${walletRow.wallet_address.slice(0, 10)}...`
+        `⚡ <b>Strike Mode executing: ${project.name}</b>\n${chain} · ${price}\nBroadcasting from Alpha Vault ${walletRow.wallet_address.slice(0, 10)}...`
       )
 
       const { txHash, publicClient: pc } = await executeMintServerSide(project, privateKey, chatId)

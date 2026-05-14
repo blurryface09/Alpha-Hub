@@ -202,7 +202,7 @@ export default function OverviewPage() {
     { label: 'Live alerts', value: stats.activeAlerts, icon: Bell, tone: stats.activeAlerts ? 'text-accent2' : 'text-muted', hint: 'Unread signals waiting for you' },
     { label: 'Tracked mints', value: stats.totalProjects, icon: Clock, tone: 'text-accent3', hint: 'Projects saved to MintGuard' },
     { label: 'Wallets watched', value: stats.walletsTracked, icon: Wallet, tone: 'text-accent', hint: 'Smart wallets on your radar' },
-    { label: 'Auto Beta', value: stats.activeAutomints ? 'Armed' : 'Off', icon: Zap, tone: stats.activeAutomints ? 'text-green' : 'text-muted', hint: 'Opt-in only' },
+    { label: 'Strike Mode', value: stats.activeAutomints ? 'Armed' : 'Off', icon: Zap, tone: stats.activeAutomints ? 'text-green' : 'text-muted', hint: 'Opt-in only' },
   ]
 
   const upcomingMints = projects.filter((p) => p.status === 'upcoming').length
@@ -247,7 +247,7 @@ export default function OverviewPage() {
             </p>
           </div>
           <div className="flex flex-col sm:flex-row gap-2">
-            <Link to="/calendar" className="btn-primary text-center">Discover Alpha</Link>
+            <Link to="/calendar" className="btn-primary text-center">Open Alpha Radar</Link>
             <Link to="/mintguard" className="btn-ghost text-center">Add Alpha</Link>
           </div>
         </div>
@@ -280,7 +280,7 @@ export default function OverviewPage() {
               <h2 className="text-base font-semibold">Fresh things worth checking</h2>
             </div>
             <Link to="/calendar" className="btn-ghost text-xs py-2 px-3">
-              Browse Discover
+              Browse Alpha Radar
             </Link>
           </div>
 
@@ -290,7 +290,7 @@ export default function OverviewPage() {
               <p className="text-base text-text font-semibold">No alpha stream yet</p>
               <p className="text-sm text-muted mt-2 max-w-md">Start by discovering a project, watching a wallet, or adding a mint you already care about.</p>
               <div className="flex gap-2 mt-4">
-                <Link to="/calendar" className="btn-primary text-xs">Discover</Link>
+                <Link to="/calendar" className="btn-primary text-xs">Alpha Radar</Link>
                 <Link to="/whaleradar" className="btn-ghost text-xs">Watch Wallet</Link>
               </div>
             </div>

@@ -13,8 +13,8 @@ const WL_TYPES = [
   { val: 'UNKNOWN', label: 'Unknown — Not confirmed yet' },
 ]
 const MINT_MODES = [
-  { val: 'confirm', label: 'Confirm', icon: '✓', desc: 'App asks you before minting' },
-  { val: 'auto', label: 'Auto Beta', icon: '⚡', desc: 'Opt-in bot fires when live' },
+  { val: 'confirm', label: 'Fast Mint', icon: '✓', desc: 'Prepared wallet confirmation' },
+  { val: 'auto', label: 'Strike Mode', icon: '⚡', desc: 'Alpha Vault auto execution' },
 ]
 
 const STATUS_OPTIONS = ['upcoming', 'live', 'minted', 'missed', 'cancelled']
@@ -41,7 +41,7 @@ export default function EditProjectModal({ project, onSave, onClose }) {
   const handleSave = async () => {
     if (!form.name.trim()) { toast.error('Project name is required'); return }
     if (form.mint_mode === 'auto' && !form.contract_address?.trim()) {
-      toast.error('Auto-mint needs a contract address')
+      toast.error('Strike Mode needs a contract address')
       return
     }
     setLoading(true)
@@ -113,7 +113,7 @@ export default function EditProjectModal({ project, onSave, onClose }) {
             </div>
             {form.mint_mode === 'auto' && (
               <div className="mt-2 rounded-lg border border-amber-500/25 bg-amber-500/10 p-3 text-xs text-amber-200">
-                Auto-mint is beta and opt-in. It can submit a real transaction from your saved minting wallet when the mint goes live.
+                Strike Mode is opt-in. It can submit a real transaction through Alpha Vault when your rules pass.
               </div>
             )}
           </div>

@@ -1,4 +1,4 @@
-import React, { useEffect } from 'react'
+import React, { Suspense, useEffect } from 'react'
 import ReactDOM from 'react-dom/client'
 import * as Sentry from '@sentry/react'
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
@@ -10,16 +10,26 @@ import { useAuthStore } from './store'
 import AuthPage from './pages/AuthPage'
 import DashboardLayout from './pages/DashboardLayout'
 import OverviewPage from './pages/OverviewPage'
-import CalendarPage from './pages/CalendarPage'
-import MintGuardPage from './pages/MintGuardPage'
-import WhaleRadarPage from './pages/WhaleRadarPage'
-import AlphaPage from './pages/AlphaPage'
-import SettingsPage from './pages/SettingsPage'
-import AdminPage from './pages/AdminPage'
 import Paywall from './components/Paywall'
 import { useSubscription } from './hooks/useSubscription'
 import { useAccount } from 'wagmi'
 import { planLabel } from './lib/access'
+
+const CalendarPage = React.lazy(() => import('./pages/CalendarPage'))
+const MintGuardPage = React.lazy(() => import('./pages/MintGuardPage'))
+const WhaleRadarPage = React.lazy(() => import('./pages/WhaleRadarPage'))
+const AlphaPage = React.lazy(() => import('./pages/AlphaPage'))
+const SettingsPage = React.lazy(() => import('./pages/SettingsPage'))
+const AdminPage = React.lazy(() => import('./pages/AdminPage'))
+
+function PageLoader() {
+  return (
+    <div className="min-h-[40vh] flex flex-col items-center justify-center gap-3">
+      <div className="alpha-loader" />
+      <span className="text-muted text-sm">Loading Alpha Hub...</span>
+    </div>
+  )
+}
 
 const ADMIN_WALLET = import.meta.env.VITE_ADMIN_WALLET?.toLowerCase()
 
@@ -41,7 +51,7 @@ function ProtectedRoute({ children }) {
   if (loading || subLoading) return (
     <div className="min-h-screen bg-bg flex items-center justify-center">
       <div className="flex flex-col items-center gap-3">
-        <div className="w-8 h-8 border-2 border-accent border-t-transparent rounded-full animate-spin" />
+        <div className="alpha-loader" />
         <span className="text-muted text-sm font-mono">Loading Alpha Hub...</span>
       </div>
     </div>
@@ -60,7 +70,7 @@ function PremiumRoute({ children, requiredPlan = 'pro', featureName = 'this feat
 
   if (loading) return (
     <div className="min-h-[40vh] flex items-center justify-center">
-      <div className="w-6 h-6 border-2 border-accent border-t-transparent rounded-full animate-spin" />
+      <div className="alpha-loader" />
     </div>
   )
 
@@ -103,13 +113,13 @@ function App() {
           <Route path="/upgrade" element={<Paywall showBack />} />
           <Route path="/" element={<ProtectedRoute><DashboardLayout /></ProtectedRoute>}>
             <Route index element={<OverviewPage />} />
-            <Route path="calendar" element={<PremiumRoute requiredPlan="free" featureName="Alpha Hub Calendar"><CalendarPage /></PremiumRoute>} />
-            <Route path="calendar/:shareCode" element={<PremiumRoute requiredPlan="free" featureName="Alpha Hub Calendar"><CalendarPage /></PremiumRoute>} />
-            <Route path="mintguard" element={<PremiumRoute requiredPlan="free" featureName="MintGuard"><MintGuardPage /></PremiumRoute>} />
-            <Route path="whaleradar" element={<PremiumRoute requiredPlan="free" featureName="WhaleRadar"><WhaleRadarPage /></PremiumRoute>} />
-            <Route path="alpha" element={<PremiumRoute requiredPlan="pro" featureName="Wallet forensics"><AlphaPage /></PremiumRoute>} />
-            <Route path="settings" element={<SettingsPage />} />
-            <Route path="admin" element={<AdminRoute><AdminPage /></AdminRoute>} />
+            <Route path="calendar" element={<PremiumRoute requiredPlan="free" featureName="Alpha Radar"><Suspense fallback={<PageLoader />}><CalendarPage /></Suspense></PremiumRoute>} />
+            <Route path="calendar/:shareCode" element={<PremiumRoute requiredPlan="free" featureName="Alpha Radar"><Suspense fallback={<PageLoader />}><CalendarPage /></Suspense></PremiumRoute>} />
+            <Route path="mintguard" element={<PremiumRoute requiredPlan="free" featureName="My Mints"><Suspense fallback={<PageLoader />}><MintGuardPage /></Suspense></PremiumRoute>} />
+            <Route path="whaleradar" element={<PremiumRoute requiredPlan="free" featureName="WhaleRadar"><Suspense fallback={<PageLoader />}><WhaleRadarPage /></Suspense></PremiumRoute>} />
+            <Route path="alpha" element={<PremiumRoute requiredPlan="pro" featureName="Wallet forensics"><Suspense fallback={<PageLoader />}><AlphaPage /></Suspense></PremiumRoute>} />
+            <Route path="settings" element={<Suspense fallback={<PageLoader />}><SettingsPage /></Suspense>} />
+            <Route path="admin" element={<AdminRoute><Suspense fallback={<PageLoader />}><AdminPage /></Suspense></AdminRoute>} />
           </Route>
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>

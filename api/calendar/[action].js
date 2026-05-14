@@ -82,8 +82,31 @@ function stripFields(row, fields) {
 function normalizeChain(chain) {
   const value = String(chain || 'eth').toLowerCase()
   if (value.includes('base')) return 'base'
+  if (value.includes('ape')) return 'apechain'
+  if (value.includes('sol')) return 'solana'
   if (value.includes('bnb') || value.includes('bsc')) return 'bnb'
   return 'eth'
+}
+
+function explorerAddressUrl(chain, address) {
+  if (!address) return null
+  const normalized = normalizeChain(chain)
+  if (normalized === 'base') return `https://basescan.org/address/${address}`
+  if (normalized === 'apechain') return `https://apescan.io/address/${address}`
+  if (normalized === 'bnb') return `https://bscscan.com/address/${address}`
+  if (normalized === 'solana') return `https://solscan.io/account/${address}`
+  return `https://etherscan.io/address/${address}`
+}
+
+function projectSourceUrl(project) {
+  return (
+    project.mint_url ||
+    project.source_url ||
+    project.website_url ||
+    project.x_url ||
+    explorerAddressUrl(project.chain, project.contract_address) ||
+    'https://poseidonph.com/calendar'
+  )
 }
 
 function shortAddress(address) {
@@ -362,7 +385,7 @@ async function canRunSync(req, res) {
   const user = await getOptionalUser(req)
   if (user && isAdminUser(user)) return true
 
-  res.status(403).json({ ok: false, error: 'Calendar sync requires admin or cron authorization' })
+  res.status(403).json({ ok: false, error: 'Alpha Radar sync requires admin or cron authorization' })
   return false
 }
 
@@ -382,7 +405,7 @@ export default async function handler(req, res) {
       return res.status(200).json(status)
     } catch (error) {
       if (isCalendarSchemaError(error)) return res.status(200).json(calendarSchemaMissingResponse())
-      return res.status(200).json({ ok: false, error: 'Calendar status is temporarily unavailable' })
+      return res.status(200).json({ ok: false, error: 'Alpha Radar status is temporarily unavailable' })
     }
   }
 
@@ -435,7 +458,7 @@ export default async function handler(req, res) {
       data = retry.data
       error = retry.error
     }
-    if (error) return res.status(500).json({ ok: false, error: 'Could not submit calendar project' })
+    if (error) return res.status(500).json({ ok: false, error: 'Could not submit alpha' })
     data = await ensureShareFields(supabase, data)
     return res.status(200).json({ ok: true, project: data })
   }
@@ -550,7 +573,7 @@ export default async function handler(req, res) {
       .eq('id', targetProjectId)
       .single()
 
-    if (projectError || !project) return res.status(404).json({ ok: false, error: 'Calendar project not found' })
+    if (projectError || !project) return res.status(404).json({ ok: false, error: 'Alpha Radar project not found' })
     if (!['approved', 'live', 'ended', 'pending_review'].includes(project.status)) {
       return res.status(400).json({ ok: false, error: 'This project is not available for MintGuard' })
     }
@@ -559,7 +582,7 @@ export default async function handler(req, res) {
     const payload = {
       user_id: user.id,
       name: mintGuardName(project),
-      source_url: project.mint_url || project.source_url || project.website_url || null,
+      source_url: projectSourceUrl(project),
       source_type: calendarSourceType(project),
       calendar_project_id: project.id,
       share_code: project.share_code || null,
@@ -579,8 +602,8 @@ export default async function handler(req, res) {
       mint_time_confirmed_at: project.mint_time_confirmed ? new Date().toISOString() : null,
       execution_status: 'queued',
       notes: eligible
-        ? 'Added from Alpha Hub Calendar in Confirm Mode.'
-        : 'Added from Alpha Hub Calendar as a needs-review project. Verify official links before Auto Beta.',
+        ? 'Added from Alpha Radar in Fast Mint mode.'
+        : 'Added from Alpha Radar as a needs-review project. Verify official links before Strike Mode.',
       status: project.status === 'live' ? 'live' : 'upcoming',
     }
 
@@ -635,7 +658,7 @@ export default async function handler(req, res) {
       .eq('id', projectId)
       .select()
       .single()
-    if (error) return res.status(500).json({ ok: false, error: 'Could not update calendar project' })
+    if (error) return res.status(500).json({ ok: false, error: 'Could not update Alpha Radar project' })
     return res.status(200).json({ ok: true, project: data })
   }
 
@@ -659,7 +682,7 @@ export default async function handler(req, res) {
       return res.status(200).json(summary)
     } catch (error) {
       if (isCalendarSchemaError(error)) return res.status(200).json(calendarSchemaMissingResponse())
-      return res.status(200).json({ ok: false, error: 'Calendar sync is temporarily unavailable' })
+      return res.status(200).json({ ok: false, error: 'Alpha Radar sync is temporarily unavailable' })
     }
   }
 

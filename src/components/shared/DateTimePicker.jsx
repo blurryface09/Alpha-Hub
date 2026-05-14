@@ -125,7 +125,7 @@ export default function DateTimePicker({ value, onChange, label = 'Mint Date & T
         <div className="mt-2 rounded-lg border border-border bg-surface2/70 p-2 text-[10px] text-muted leading-relaxed">
           <div><span className="text-text">Local:</span> {localPreview}</div>
           <div><span className="text-text">Saved as UTC:</span> {utcPreview}</div>
-          <div className="text-muted2 mt-1">Confirm this against the official mint page before enabling Auto Beta.</div>
+          <div className="text-muted2 mt-1">Confirm this against the official mint page before enabling Strike Mode.</div>
         </div>
       )}
     </div>

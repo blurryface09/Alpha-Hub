@@ -146,10 +146,10 @@ Verified status, likely type, chain, owner/deployer clues if visible, supply/max
 List concrete risks: unverified source, owner pause/price control, suspicious mint function, no supply cap, no launch time, low holder diversity, high fail rate.
 
 **LAUNCH READINESS**
-Choose one: Ready to track / Needs manual review / Unsafe for Auto Beta. Explain why.
+Choose one: Ready to track / Needs manual review / Unsafe for Strike Mode. Explain why.
 
 **AUTOMINT RECOMMENDATION**
-Choose one: Confirm Mode recommended / Auto Beta not recommended / Auto Beta allowed after user confirmation / Missing required data.
+Choose one: Safe Mint recommended / Strike Mode not recommended / Strike Mode allowed after user confirmation / Missing required data.
 
 **TRANSACTION PATTERN**
 What recent calls reveal: minting, transfers, approvals, failed interactions, or quiet contract.
@@ -214,7 +214,7 @@ Mint Date: ${project.mint_date || 'not set'}
 Notes: ${project.notes || 'none'}
 
 Respond with ONLY valid JSON, no markdown:
-{"summary":"2 sentence execution-focused description","wl_giveaway_likely":false,"giveaway_note":"","red_flags":[],"green_flags":[],"hype_score":5,"hype_reason":"one sentence","mint_interest_label":"Low/Medium/High","launch_readiness":"Ready to track/Needs manual review/Unsafe for Auto Beta","automint_recommendation":"Confirm Mode recommended/Auto Beta not recommended/Auto Beta allowed after user confirmation/Missing required data","confidence":"Low/Medium/High","confidence_reason":"one sentence","advice":"one sharp action","discord_tip":"what to verify","twitter_tip":"search terms for X"}`
+{"summary":"2 sentence execution-focused description","wl_giveaway_likely":false,"giveaway_note":"","red_flags":[],"green_flags":[],"hype_score":5,"hype_reason":"one sentence","mint_interest_label":"Low/Medium/High","launch_readiness":"Ready to track/Needs manual review/Unsafe for Strike Mode","automint_recommendation":"Safe Mint recommended/Strike Mode not recommended/Strike Mode allowed after user confirmation/Missing required data","confidence":"Low/Medium/High","confidence_reason":"one sentence","advice":"one sharp action","discord_tip":"what to verify","twitter_tip":"search terms for X"}`
 
   try {
     const text = await callAI('project', prompt)

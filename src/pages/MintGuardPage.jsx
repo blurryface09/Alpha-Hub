@@ -184,7 +184,7 @@ export default function MintGuardPage() {
     autoProjects.forEach(p => {
       if (!autoFired.current.has(p.id)) {
         autoFired.current.add(p.id)
-        toast.success(`${p.name} is queued for Auto Beta. Server safety checks will run before any transaction.`)
+        toast.success(`${p.name} is queued for Strike Mode. Alpha Vault safety checks will run before any transaction.`)
       }
     })
   }, [projects])
@@ -327,7 +327,7 @@ export default function MintGuardPage() {
     }
     const newMode = currentMode === 'confirm' ? 'auto' : 'confirm'
     if (newMode === 'auto') {
-      const accepted = window.confirm('Auto Beta can execute real blockchain transactions from your configured wallet. Use an isolated wallet and set max spend limits. Continue?')
+      const accepted = window.confirm('Strike Mode can execute real blockchain transactions through Alpha Vault. Use an isolated burner wallet and set max spend limits. Continue?')
       if (!accepted) return
     }
     let { error } = await supabase
@@ -343,12 +343,12 @@ export default function MintGuardPage() {
       return
     }
     setProjects(prev => prev.map(p => p.id === id ? { ...p, mint_mode: newMode, automint_enabled: newMode === 'auto' } : p))
-    toast.success(`Switched to ${newMode === 'auto' ? '⚡ Auto Beta' : '✓ Confirm Mode'}`)
+    toast.success(`Switched to ${newMode === 'auto' ? '⚡ Strike Mode' : '✓ Fast Mint'}`)
   }
 
   const handleMint = async (project, isAuto = false) => {
     if (isAuto) {
-      toast.success(`${project.name} is queued for Auto Beta server execution.`)
+      toast.success(`${project.name} is queued for Strike Mode server execution.`)
       return
     }
     if (!hasAccess('pro')) {
@@ -456,11 +456,11 @@ export default function MintGuardPage() {
             </div>
             <h1 className="text-3xl font-black tracking-tight">Track launches without the chaos.</h1>
             <p className="mt-2 text-sm text-muted leading-relaxed">
-              Save mints, confirm launch times, get alerts, and let Alpha Hub prepare the transaction. You stay in control with Confirm Mode by default.
+              Save mints, confirm launch times, get alerts, and let Alpha Hub prepare the transaction. Safe Mint and Fast Mint keep you in control by default.
             </p>
             <div className="mt-4 flex flex-wrap gap-2">
-              <span className="filter-chip active"><Wand2 size={13} /> Confirm Mode</span>
-              <span className="filter-chip">Auto Beta opt-in</span>
+              <span className="filter-chip active"><Wand2 size={13} /> Fast Mint</span>
+              <span className="filter-chip">Strike opt-in</span>
               <span className="filter-chip">Spend limits</span>
               <span className="filter-chip">
                 {plan === 'admin'
@@ -524,7 +524,7 @@ export default function MintGuardPage() {
         <div className="empty-state">
           <Sparkles size={32} className="text-accent mb-3" />
           <h2 className="text-lg font-bold">No mints saved yet</h2>
-          <p className="text-muted text-sm mt-2 max-w-md">Add a mint link, contract, or project name. Alpha Hub will help detect timing and keep it in Confirm Mode until you decide otherwise.</p>
+          <p className="text-muted text-sm mt-2 max-w-md">Add a mint link, contract, or project name. Alpha Hub will help detect timing and keep it in Safe Mint until you decide otherwise.</p>
           <button onClick={() => setShowAddModal(true)} className="btn-ghost mt-4 text-xs">
             Add your first alpha
           </button>

@@ -147,11 +147,11 @@ export default function ProjectCard({ project, isMinting, onMint, onDelete, onSt
                 className={"flex items-center gap-1.5 text-xs px-2 py-1 rounded-md border transition-all " + (project.mint_mode === "auto" ? "border-green/40 text-green bg-green/8" : "border-border2 text-muted hover:border-accent hover:text-accent")}
               >
                 {project.mint_mode === "auto" ? React.createElement(ToggleRight, { size: 12 }) : React.createElement(ToggleLeft, { size: 12 })}
-                {project.mint_mode === "auto" ? "Auto Beta" : "Confirm"}
+                {project.mint_mode === "auto" ? "Strike" : "Fast"}
               </button>
               {project.contract_address && project.mint_mode === 'auto' && project.status !== 'minted' && (
                 <span
-                  title="Server Auto Beta runs safety checks before sending any transaction"
+                  title="Strike Mode runs Alpha Vault safety checks before sending any transaction"
                   className="text-xs px-2 py-1.5 rounded-md border border-amber-500/25 text-amber-300 bg-amber-500/10 flex items-center gap-1"
                 >
                   {React.createElement(Zap, { size: 11 })}
@@ -208,12 +208,12 @@ export default function ProjectCard({ project, isMinting, onMint, onDelete, onSt
               </div>
               <button onClick={handleFetchIntel} disabled={intelLoading} className="btn-ghost text-xs px-2 py-1 flex items-center gap-1.5">
                 {intelLoading ? React.createElement("div", { className: "spinner w-3 h-3" }) : React.createElement(RefreshCw, { size: 11 })}
-                {intelLoading ? "Fetching..." : intel ? "Refresh" : "Fetch Intel"}
+                    {intelLoading ? "Checking..." : intel ? "Refresh" : "Project Intelligence"}
               </button>
             </div>
 
             {!intel && !intelLoading && (
-              <p className="text-xs text-muted2 italic">Click Fetch Intel for AI analysis - WL giveaway detection, hype score, red flags and tips.</p>
+              <p className="text-xs text-muted2 italic">Run Project Intelligence for phase clues, hype, red flags, and mint guidance.</p>
             )}
 
             {intel && !intel.error && (

@@ -154,7 +154,7 @@ export default function WhaleRadarPage() {
           mint_mode: 'confirm',
           max_mint: 1,
           gas_limit: 200000,
-          notes: `Copied from whale ${activityItem.wallet_label || activityItem.wallet_address || 'activity'}. Confirm mode is enabled by default.`,
+          notes: `Copied from whale ${activityItem.wallet_label || activityItem.wallet_address || 'activity'}. Fast Mint is enabled by default.`,
           status: 'live',
         })
 

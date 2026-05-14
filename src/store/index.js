@@ -104,14 +104,20 @@ export const useAuthStore = create((set, get) => ({
           username: 'user_' + data.user.id.slice(0, 6),
           wallet_address: address.toLowerCase(),
         }
-        const { error: profileError } = await supabase.from('profiles').upsert(profilePayload)
+        const { error: profileError } = await supabase
+          .from('profiles')
+          .update(profilePayload)
+          .eq('id', data.user.id)
         if (profileError) {
-          // Older production schemas may not have wallet_address yet. Sign-in must not fail because
-          // optional profile metadata could not be written.
-          await supabase.from('profiles').upsert({
-            id: data.user.id,
-            username: profilePayload.username,
-          })
+          // Optional profile metadata must never block wallet sign-in.
+          await supabase.from('profiles').insert(profilePayload).then(async ({ error }) => {
+            if (error?.code === '42703') {
+              await supabase.from('profiles').insert({
+                id: data.user.id,
+                username: profilePayload.username,
+              }).catch(() => null)
+            }
+          }).catch(() => null)
         }
         await get().fetchProfile(data.user.id)
         return { success: true }
@@ -135,7 +141,7 @@ export const useAuthStore = create((set, get) => ({
       if (error && error.code === 'PGRST116') {
         const { data: newProfile } = await supabase
           .from('profiles')
-          .upsert({ id: userId, username: 'user_' + userId.slice(0, 6) })
+          .insert({ id: userId, username: 'user_' + userId.slice(0, 6) })
           .select()
           .single()
         if (newProfile) set({ profile: newProfile })

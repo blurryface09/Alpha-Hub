@@ -73,20 +73,25 @@ async function handleAppNotification(req, res) {
       text =
         `🚨 <b>LIVE NOW: ${project.name}</b>\n\n` +
         `${chain} · ${price} · ${project.wl_type}\n` +
-        (isAuto ? `⚡ Auto-mint will fire shortly.` : `Tap below to confirm or skip.`)
+        (isAuto ? `⚡ Strike Mode will fire shortly.` : `Tap below to confirm or skip.`)
       if (!isAuto && project.contract_address) {
         keyboard = {
-          inline_keyboard: [[
-            { text: '✅ Confirm Mint', callback_data: `confirm:${project.id}` },
-            { text: '❌ Skip', callback_data: `skip:${project.id}` },
-          ]],
+          inline_keyboard: [
+            [
+              { text: '✅ Confirm Mint', callback_data: `confirm:${project.id}` },
+              { text: '❌ Skip', callback_data: `skip:${project.id}` },
+            ],
+            [
+              { text: '⚡ Open Alpha Hub', url: 'https://poseidonph.com/mintguard' },
+            ],
+          ],
         }
       }
       break
     }
     case 'auto':
       text =
-        `⚡ <b>Auto-minting: ${project.name}</b>\n\n` +
+        `⚡ <b>Strike Mode executing: ${project.name}</b>\n\n` +
         `${chain} · ${price}\nTransaction firing now...`
       break
     case 'success':
@@ -156,6 +161,7 @@ async function handleStart(chatId, linkCode) {
     `You'll receive real-time notifications here.\n\n` +
     `Commands:\n` +
     `/dashboard — all projects\n` +
+    `/radar — open Alpha Radar\n` +
     `/live — live mints right now\n` +
     `/upcoming — next mints\n` +
     `/help — show this menu`
@@ -169,7 +175,7 @@ function normalizeCommand(text) {
 }
 
 function commandMenu() {
-  return `Commands:\n/dashboard — all projects\n/live — live mints right now\n/upcoming — next mints\n/help — show this menu`
+  return `Commands:\n/dashboard — your mints\n/radar — Alpha Radar link\n/live — live mints right now\n/upcoming — next mints\n/help — show this menu`
 }
 
 function cleanPriceText(value) {
@@ -241,13 +247,18 @@ async function handleLive(chatId, userId) {
     const text =
       `🚨 <b>LIVE: ${p.name}</b>\n` +
       `${(p.chain || 'ETH').toUpperCase()} · ${price} · ${p.wl_type}\n` +
-      (isAuto ? `⚡ Auto-mint will fire when the app is open` : ``)
+      (isAuto ? `⚡ Strike Mode will run only if Alpha Vault rules pass.` : ``)
 
     const keyboard = (!isAuto && hasContract) ? {
-      inline_keyboard: [[
-        { text: '✅ Confirm Mint', callback_data: `confirm:${p.id}` },
-        { text: '❌ Skip', callback_data: `skip:${p.id}` },
-      ]],
+      inline_keyboard: [
+        [
+          { text: '✅ Confirm Mint', callback_data: `confirm:${p.id}` },
+          { text: '❌ Skip', callback_data: `skip:${p.id}` },
+        ],
+        [
+          { text: '⚡ Open Alpha Hub', url: 'https://poseidonph.com/mintguard' },
+        ],
+      ],
     } : null
 
     await sendMessage(chatId, text, keyboard ? { reply_markup: keyboard } : {})
@@ -305,8 +316,8 @@ async function handleCallback(queryId, data, chatId) {
 
     return sendMessage(chatId,
       `✅ <b>Mint confirmed!</b>\n\n` +
-      `Open Alpha-Hub to complete the transaction with your wallet.\n` +
-      `The app will auto-execute it as soon as you connect.`
+      `Open Alpha Hub to complete the transaction with your wallet.\n` +
+      `Safe/Fast Mint still requires wallet confirmation.`
     )
   }
 
@@ -369,6 +380,11 @@ export default async function handler(req, res) {
       }
 
       if (cmd === '/dashboard' || cmd === '/status') await handleDashboard(chatId, profile.id)
+      else if (cmd === '/radar') {
+        await sendMessage(chatId, '📡 <b>Alpha Radar</b>\nDiscover and track fresh mint signals.', {
+          reply_markup: { inline_keyboard: [[{ text: 'Open Alpha Radar', url: 'https://poseidonph.com/calendar' }]] },
+        })
+      }
       else if (cmd === '/live') await handleLive(chatId, profile.id)
       else if (cmd === '/upcoming') await handleUpcoming(chatId, profile.id)
       else if (cmd === '/help' || cmd === '/commands') {
