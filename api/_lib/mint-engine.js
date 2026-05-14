@@ -152,7 +152,7 @@ function fallbackCandidates(quantity, walletAddress) {
   }))
 }
 
-async function prepareMintTransaction(body) {
+export async function prepareMintTransaction(body) {
   const chain = normalizeChain(body.chain)
   const chainId = chainIdFor(chain)
   const contract = body.contractAddress || body.contract_address
