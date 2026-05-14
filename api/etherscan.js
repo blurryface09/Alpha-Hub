@@ -271,7 +271,37 @@ async function handleAiAnalysis(req, res, user) {
   }
 }
 
+// ── In-memory ETH price cache (module-level, lives as long as the warm instance) ──
+let _ethPriceCached = null
+let _ethPriceCachedAt = 0
+
+async function handleEthPrice(req, res) {
+  if (req.method !== 'GET') return res.status(405).json({ error: 'Method not allowed' })
+  const now = Date.now()
+  if (_ethPriceCached && now - _ethPriceCachedAt < 60_000) {
+    return res.status(200).json({ ethUsd: _ethPriceCached, source: 'coingecko', updatedAt: new Date(_ethPriceCachedAt).toISOString() })
+  }
+  try {
+    const r = await fetch('https://api.coingecko.com/api/v3/simple/price?ids=ethereum&vs_currencies=usd', {
+      headers: { accept: 'application/json' },
+      signal: AbortSignal.timeout(8000),
+    })
+    const d = await r.json()
+    const ethUsd = Number(d?.ethereum?.usd)
+    if (!r.ok || !Number.isFinite(ethUsd) || ethUsd <= 0) throw new Error('Invalid price response')
+    _ethPriceCached = ethUsd
+    _ethPriceCachedAt = now
+    res.setHeader('Cache-Control', 's-maxage=60, stale-while-revalidate=300')
+    return res.status(200).json({ ethUsd, source: 'coingecko', updatedAt: new Date(now).toISOString() })
+  } catch {
+    return res.status(503).json({ error: 'ETH price temporarily unavailable', source: 'coingecko' })
+  }
+}
+
 export default async function handler(req, res) {
+  // ── Public no-auth tools ───────────────────────────────────────────────────
+  if (req.query.tool === 'eth-price') return handleEthPrice(req, res)
+
   if (req.query.tool === 'ai-analysis') {
     if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' })
     const user = await requireUser(req, res)
