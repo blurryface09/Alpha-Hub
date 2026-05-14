@@ -123,11 +123,6 @@ export default function WhaleRadarPage() {
       return
     }
 
-    const chain = activityItem.chain || 'eth'
-    const contract = activityItem.contract_address
-    const projectName = activityItem.contract_name ||
-      `Whale Mint ${contract.slice(0, 6)}...${contract.slice(-4)}`
-
     try {
       const { count } = await supabase
         .from('wl_projects')
@@ -140,26 +135,16 @@ export default function WhaleRadarPage() {
         return
       }
 
-      const { error } = await supabase
-        .from('wl_projects')
-        .insert({
-          user_id: user.id,
-          name: projectName,
-          source_url: activityItem.tx_hash ? `https://${EXPLORER_HOSTS[chain] || EXPLORER_HOSTS.eth}/tx/${activityItem.tx_hash}` : null,
-          source_type: 'whale_copy',
-          chain,
-          contract_address: contract,
-          mint_price: activityItem.value_eth ? String(activityItem.value_eth) : null,
-          wl_type: 'PUBLIC',
-          mint_mode: 'confirm',
-          max_mint: 1,
-          gas_limit: 200000,
-          notes: `Copied from whale ${activityItem.wallet_label || activityItem.wallet_address || 'activity'}. Fast Mint is enabled by default.`,
-          status: 'live',
-        })
-
-      if (error) throw error
-      toast.success('Copied to MintGuard. Review it before minting.')
+      const token = await getAuthToken()
+      if (!token) throw new Error('Sign in again before copying this mint.')
+      const res = await fetch('/api/calendar/copy-mint', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ activity: activityItem }),
+      })
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok || data?.ok === false) throw new Error(data.error || 'Could not copy this mint.')
+      toast.success(data.duplicate ? 'Already in MintGuard.' : 'Copied to MintGuard. Review it before minting.')
       navigate('/mintguard')
     } catch (err) {
       console.error('copy mint error:', err)

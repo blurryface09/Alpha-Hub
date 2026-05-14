@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react'
 import { motion } from 'framer-motion'
-import { Settings, Key, Wallet, Save, Eye, EyeOff, Check, ExternalLink, Send, Link2, RefreshCw, CheckCircle, Zap, AlertTriangle, Trash2 } from 'lucide-react'
+import { Settings, Key, Wallet, Save, Eye, EyeOff, Check, ExternalLink, Send, Link2, RefreshCw, CheckCircle, Zap, AlertTriangle, Trash2, Copy, QrCode } from 'lucide-react'
 import toast from 'react-hot-toast'
 import { useAuthStore, useSettingsStore } from '../store'
 import { supabase, getAuthToken } from '../lib/supabase'
@@ -28,6 +28,7 @@ export default function SettingsPage() {
   const [showMintKey, setShowMintKey] = useState(false)
   const [vaultWallets, setVaultWallets] = useState([])
   const [vaultLoading, setVaultLoading] = useState(false)
+  const [depositVault, setDepositVault] = useState(null)
 
   // Sync form when profile loads/updates from Supabase
   useEffect(() => {
@@ -46,13 +47,33 @@ export default function SettingsPage() {
         const d = await r.json()
         if (d.wallet?.wallet_address) setMintWalletAddress(d.wallet.wallet_address)
       } catch {}
-      try {
-        const r = await fetch('/api/vault/list', { headers: { Authorization: 'Bearer ' + token } })
-        const d = await r.json()
-        if (d.wallets) setVaultWallets(d.wallets)
-      } catch {}
+      await refreshVaults(token)
     })
   }, [user])
+
+  const refreshVaults = async (existingToken) => {
+    setVaultLoading(true)
+    try {
+      const token = existingToken || await getAuthToken()
+      if (!token) return
+      const r = await fetch('/api/vault/list', { headers: { Authorization: 'Bearer ' + token } })
+      const d = await r.json()
+      if (d.wallets) setVaultWallets(d.wallets)
+    } catch {
+      toast.error('Could not refresh Alpha Vault.')
+    } finally {
+      setVaultLoading(false)
+    }
+  }
+
+  const copyVaultAddress = async (address) => {
+    try {
+      await navigator.clipboard.writeText(address)
+      toast.success('Vault address copied.')
+    } catch {
+      toast.error('Could not copy address.')
+    }
+  }
 
   const createAlphaVault = async () => {
     setVaultLoading(true)
@@ -321,7 +342,7 @@ export default function SettingsPage() {
         <div className="flex items-start gap-2 bg-accent3/8 border border-accent3/20 rounded-lg p-3 mb-3">
           <AlertTriangle size={12} className="text-accent3 flex-shrink-0 mt-0.5" />
           <p className="text-xs text-accent3 leading-relaxed">
-            <b>Use a dedicated burner wallet only.</b> Alpha Vault powers Strike Mode. Never use your main wallet. Fund it with only what you are willing to mint with.
+            <b>Use a dedicated burner wallet only.</b> Alpha Vault is custodial burner infrastructure for Strike Mode. Private keys are encrypted server-side using your vault encryption key and are never returned to the browser. Fund it with small amounts only.
           </p>
         </div>
 
@@ -331,18 +352,62 @@ export default function SettingsPage() {
               <p className="text-sm font-semibold">Generate a personal burner wallet</p>
               <p className="text-xs text-muted mt-1">Private key is encrypted server-side and never returned to the browser.</p>
             </div>
-            <button onClick={createAlphaVault} disabled={vaultLoading} className="btn-primary text-xs whitespace-nowrap">
+            <div className="flex gap-2">
+              <button onClick={() => refreshVaults()} disabled={vaultLoading} className="btn-ghost text-xs whitespace-nowrap">
+                <RefreshCw size={12} className={vaultLoading ? 'animate-spin' : ''} />
+              </button>
+              <button onClick={createAlphaVault} disabled={vaultLoading} className="btn-primary text-xs whitespace-nowrap">
               {vaultLoading ? 'Creating...' : 'Create Vault'}
-            </button>
+              </button>
+            </div>
           </div>
           {vaultWallets.length > 0 && (
             <div className="mt-3 space-y-2">
               {vaultWallets.map(wallet => (
-                <div key={wallet.id} className="rounded-lg border border-border bg-surface px-3 py-2">
-                  <div className="text-xs text-muted">{wallet.label || 'Alpha Vault'}</div>
-                  <div className="font-mono text-sm text-green break-all">{wallet.address}</div>
+                <div key={wallet.id} className="rounded-lg border border-border bg-surface px-3 py-3 space-y-3">
+                  <div className="flex items-start justify-between gap-3">
+                    <div>
+                      <div className="text-xs text-muted">{wallet.label || 'Alpha Vault'} · {wallet.status || 'active'}</div>
+                      <div className="font-mono text-sm text-green break-all">{wallet.address}</div>
+                    </div>
+                    <button onClick={() => copyVaultAddress(wallet.address)} className="btn-ghost text-xs">
+                      <Copy size={12} />
+                    </button>
+                  </div>
+                  <div className="grid grid-cols-2 gap-2 text-xs">
+                    <div className="rounded-md bg-surface2 border border-border p-2">
+                      <span className="text-muted block">Ethereum</span>
+                      <b>{wallet.balances?.eth == null ? 'N/A' : `${Number(wallet.balances.eth).toFixed(5)} ETH`}</b>
+                    </div>
+                    <div className="rounded-md bg-surface2 border border-border p-2">
+                      <span className="text-muted block">Base</span>
+                      <b>{wallet.balances?.base == null ? 'N/A' : `${Number(wallet.balances.base).toFixed(5)} ETH`}</b>
+                    </div>
+                  </div>
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                    <button onClick={() => setDepositVault(wallet)} className="btn-ghost text-xs"><QrCode size={12} /> Deposit</button>
+                    <button onClick={() => refreshVaults()} className="btn-ghost text-xs"><RefreshCw size={12} /> Balance</button>
+                    <button disabled className="btn-ghost text-xs opacity-50"><Send size={12} /> Withdraw</button>
+                    <button disabled className="btn-ghost text-xs opacity-50">History</button>
+                  </div>
+                  <p className="text-[11px] text-muted">Withdrawals stay disabled until Strike Mode exits private beta. This prevents accidental fund movement while launch testing.</p>
                 </div>
               ))}
+            </div>
+          )}
+          {depositVault && (
+            <div className="mt-3 rounded-lg border border-cyan/30 bg-cyan/5 p-3">
+              <div className="flex items-center justify-between gap-2 mb-2">
+                <p className="text-sm font-semibold">Deposit to Alpha Vault</p>
+                <button className="text-xs text-muted hover:text-text" onClick={() => setDepositVault(null)}>Close</button>
+              </div>
+              <img
+                alt="Vault deposit QR"
+                className="w-36 h-36 rounded-lg bg-white p-2 mb-2"
+                src={`https://api.qrserver.com/v1/create-qr-code/?size=180x180&data=${encodeURIComponent(`ethereum:${depositVault.address}@8453`)}`}
+              />
+              <p className="font-mono text-xs break-all text-green">{depositVault.address}</p>
+              <p className="text-xs text-muted mt-1">Send ETH on Base or Ethereum. Use small amounts only.</p>
             </div>
           )}
         </div>

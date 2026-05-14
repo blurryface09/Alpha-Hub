@@ -662,6 +662,64 @@ export default async function handler(req, res) {
     }
   }
 
+  if (action === 'copy-mint') {
+    if (req.method !== 'POST') return res.status(405).json({ ok: false, error: 'Method not allowed' })
+    const user = await requireUser(req, res)
+    if (!user) return
+
+    const supabase = createServiceClient()
+    const body = req.body || {}
+    const activity = body.activity || body
+    const contract = activity.contract_address || activity.contractAddress || activity.to || activity.token_address || null
+    const txHash = activity.tx_hash || activity.txHash || null
+    const chain = normalizeChain(activity.chain || body.chain || 'eth')
+    const sourceUrl = txHash
+      ? `https://${chain === 'base' ? 'basescan.org' : chain === 'apechain' ? 'apescan.io' : 'etherscan.io'}/tx/${txHash}`
+      : explorerAddressUrl(chain, contract) || 'https://poseidonph.com/whaleradar'
+    const name = activity.contract_name ||
+      activity.project_name ||
+      activity.name ||
+      (contract ? `Needs Review Mint ${shortAddress(contract)}` : 'Needs Review Whale Mint')
+
+    const pseudoProject = {
+      id: null,
+      contract_address: contract,
+      source_url: sourceUrl,
+    }
+
+    const payload = {
+      user_id: user.id,
+      name,
+      source_url: sourceUrl,
+      source_type: 'website',
+      chain,
+      contract_address: contract,
+      mint_date: activity.timestamp || activity.block_timestamp || new Date().toISOString(),
+      mint_price: activity.value_eth ? String(activity.value_eth) : null,
+      wl_type: 'PUBLIC',
+      mint_mode: 'confirm',
+      automint_enabled: false,
+      max_mint: 1,
+      gas_limit: 200000,
+      mint_time_source: 'whale_copy',
+      mint_time_confidence: 'low',
+      mint_time_confirmed: false,
+      execution_status: 'queued',
+      notes: `Copied from whale activity${txHash ? ` (${txHash})` : ''}. Review metadata before Fast or Strike Mint.`,
+      status: 'live',
+    }
+
+    try {
+      const existing = await findExistingMintGuardProject(supabase, user.id, pseudoProject, payload)
+      if (existing) return res.status(200).json({ ok: true, duplicate: true, project: existing })
+      const row = await insertMintGuardProject(supabase, payload)
+      return res.status(200).json({ ok: true, project: row })
+    } catch (error) {
+      console.error('calendar copy-mint failed:', error)
+      return res.status(500).json({ ok: false, error: 'Could not copy this mint. Please try again.' })
+    }
+  }
+
   if (action === 'moderate') {
     if (req.method !== 'POST') return res.status(405).json({ ok: false, error: 'Method not allowed' })
     const user = await getOptionalUser(req)

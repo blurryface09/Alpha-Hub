@@ -1,5 +1,4 @@
-import { useAccount, useWriteContract, useSwitchChain, useSendTransaction } from 'wagmi'
-import { parseEther, parseAbi } from 'viem'
+import { useAccount, useSwitchChain, useSendTransaction } from 'wagmi'
 import { mainnet, base, bsc } from 'wagmi/chains'
 import toast from 'react-hot-toast'
 import { supabase, getAuthToken } from '../lib/supabase'
@@ -11,58 +10,8 @@ const CHAIN_MAP = {
   bnb: bsc.id,
 }
 
-const CHAIN_IDS = { eth: 1, base: 8453, bnb: 56 }
-
-// Try to fetch verified ABI from Etherscan
-async function fetchContractAbi(contractAddress, chainKey) {
-  try {
-    const token = await getAuthToken()
-    if (!token) return null
-    const chainId = CHAIN_IDS[chainKey] || 1
-    const url = new URL('/api/etherscan', window.location.origin)
-    url.searchParams.set('chainid', chainId)
-    url.searchParams.set('module', 'contract')
-    url.searchParams.set('action', 'getabi')
-    url.searchParams.set('address', contractAddress)
-    const r = await fetch(url, {
-      headers: { Authorization: `Bearer ${token}` },
-      signal: AbortSignal.timeout(8000),
-    })
-    const d = await r.json()
-    if (d.status === '1' && d.result && d.result !== 'Contract source code not verified') {
-      return JSON.parse(d.result)
-    }
-  } catch {}
-  return null
-}
-
-// Pull out the best mint function from a verified ABI
-function findMintFn(abi) {
-  const priority = ['mint', 'publicMint', 'mintPublic', 'allowlistMint', 'presaleMint', 'purchase', 'safeMint']
-  const fns = abi.filter(f => f.type === 'function' &&
-    (f.stateMutability === 'payable' || f.stateMutability === 'nonpayable'))
-  for (const name of priority) {
-    const fn = fns.find(f => f.name === name)
-    if (fn) return fn
-  }
-  return null
-}
-
-// Is this error a hard stop (user said no, or real on-chain revert)?
-function isHardStop(e) {
-  const msg = (e.shortMessage || e.message || '').toLowerCase()
-  return (
-    e.code === 4001 ||
-    msg.includes('user rejected') ||
-    msg.includes('user denied') ||
-    msg.includes('rejected') ||
-    msg.includes('execution reverted')
-  )
-}
-
 export function useMint() {
   const { address, isConnected, chain } = useAccount()
-  const { writeContractAsync } = useWriteContract()
   const { sendTransactionAsync } = useSendTransaction()
   const { switchChainAsync } = useSwitchChain()
 
@@ -77,6 +26,10 @@ export function useMint() {
     }
 
     const targetChainId = CHAIN_MAP[project.chain || 'eth']
+    if (!targetChainId) {
+      toast.error('This chain is not supported for wallet minting yet.')
+      return { success: false, error: 'Unsupported chain' }
+    }
 
     // Switch chain if needed
     if (chain?.id !== targetChainId) {
@@ -90,91 +43,42 @@ export function useMint() {
     }
 
     try {
-      const priceStr = (project.mint_price || '0').replace(/[^0-9.]/g, '') || '0'
-      const mintPrice = parseEther(priceStr)
-      const quantity = BigInt(project.max_mint || 1)
-      const gasLimit = BigInt(project.gas_limit || 200000)
-
-      let txHash
-      if (project.prepared_to && project.prepared_data && project.prepared_chain_id === targetChainId) {
-        toast.loading('Using prepared mint transaction...', { id: 'mint-tx' })
-        txHash = await sendTransactionAsync({
-          to: project.prepared_to,
-          data: project.prepared_data,
-          value: BigInt(project.prepared_value || '0'),
-          chainId: targetChainId,
-          gas: project.gas_estimate ? BigInt(project.gas_estimate) : undefined,
-        })
+      toast.loading('Preparing mint before wallet opens...', { id: 'mint-tx' })
+      const token = await getAuthToken()
+      if (!token) throw new Error('Sign in again before minting.')
+      const response = await fetch('/api/mint/prepare', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({
+          projectId: project.id,
+          wlProjectId: project.id,
+          name: project.name,
+          contractAddress: project.contract_address,
+          chain: project.chain || 'eth',
+          mintUrl: project.source_url || project.mint_url,
+          mintPrice: project.mint_price || '0',
+          quantity: project.max_mint || 1,
+          walletAddress: address,
+          mode: project.mint_mode === 'auto' ? 'strike' : 'fast',
+          maxTotalSpend: project.max_total_spend,
+          maxGasFee: project.max_gas_fee,
+        }),
+        signal: AbortSignal.timeout(15000),
+      })
+      const prepared = await response.json().catch(() => ({}))
+      if (!response.ok || prepared?.ok === false || !prepared?.preparedTransaction) {
+        throw new Error(prepared?.error || 'Needs contract or mint function before wallet can open.')
       }
 
-      // --- Step 1: Try verified ABI from Etherscan ---
-      if (!txHash) toast.loading('Checking contract...', { id: 'mint-tx' })
-      const verifiedAbi = txHash ? null : await fetchContractAbi(project.contract_address, project.chain || 'eth')
-
-      if (verifiedAbi) {
-        const mintFn = findMintFn(verifiedAbi)
-        if (mintFn) {
-          toast.loading('Check your wallet to confirm...', { id: 'mint-tx' })
-          // Build args: if the function takes inputs, pass quantity; otherwise no args
-          const args = mintFn.inputs?.length > 0 ? [quantity] : []
-          try {
-            txHash = await writeContractAsync({
-              address: project.contract_address,
-              abi: verifiedAbi,
-              functionName: mintFn.name,
-              args,
-              value: mintPrice * quantity,
-              gas: gasLimit,
-            })
-          } catch (e) {
-            if (isHardStop(e)) throw e
-            // Verified ABI call failed for some reason — fall through to guessing
-          }
-        }
-      }
-
-      // --- Step 2: Fallback — try common signatures ---
-      if (!txHash) {
-        toast.loading('Check your wallet to confirm...', { id: 'mint-tx' })
-
-        // Ordered by how common they are in the wild
-        const attempts = [
-          { sig: 'function mint(uint256 quantity) payable',          name: 'mint',           args: [quantity] },
-          { sig: 'function mint(uint256 amount) payable',            name: 'mint',           args: [quantity] },
-          { sig: 'function publicMint(uint256 quantity) payable',    name: 'publicMint',     args: [quantity] },
-          { sig: 'function mintPublic(uint256 quantity) payable',    name: 'mintPublic',     args: [quantity] },
-          { sig: 'function mint() payable',                          name: 'mint',           args: []         },
-          { sig: 'function purchase(uint256 numberOfTokens) payable',name: 'purchase',       args: [quantity] },
-          { sig: 'function presaleMint(uint256 quantity) payable',   name: 'presaleMint',    args: [quantity] },
-          { sig: 'function allowlistMint(uint256 quantity) payable', name: 'allowlistMint',  args: [quantity] },
-          { sig: 'function safeMint(address to) payable',            name: 'safeMint',       args: [address]  },
-        ]
-
-        for (const attempt of attempts) {
-          try {
-            txHash = await writeContractAsync({
-              address: project.contract_address,
-              abi: parseAbi([attempt.sig]),
-              functionName: attempt.name,
-              args: attempt.args,
-              value: mintPrice * quantity,
-              gas: gasLimit,
-            })
-            break // success
-          } catch (e) {
-            if (isHardStop(e)) throw e
-            // Encoding / not-found / any other error — try next signature
-            continue
-          }
-        }
-      }
-
-      if (!txHash) {
-        throw new Error(
-          'Could not find a supported mint function on this contract. ' +
-          'Make sure the sale is live, or check the contract address.'
-        )
-      }
+      const tx = prepared.preparedTransaction
+      toast.loading('Ready. Check your wallet to confirm.', { id: 'mint-tx' })
+      const txHash = await sendTransactionAsync({
+        to: tx.to,
+        data: tx.data,
+        value: BigInt(tx.value || '0'),
+        chainId: tx.chainId || targetChainId,
+        gas: tx.gas ? BigInt(tx.gas) : undefined,
+      })
 
       // Log to mint_log; non-critical, don't fail a submitted mint.
       try {

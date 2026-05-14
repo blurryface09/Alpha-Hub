@@ -1,17 +1,21 @@
 import crypto from 'crypto'
-import { isAddress } from 'viem'
+import { createPublicClient, formatEther, http, isAddress } from 'viem'
 import { privateKeyToAccount, generatePrivateKey } from 'viem/accounts'
 import { createServiceClient, requireUser } from './auth.js'
 import { rateLimit, sendRateLimit } from './redis.js'
 
 const ALPHA_VAULT_ENABLED = String(process.env.ALPHA_VAULT_ENABLED || '').toLowerCase() === 'true'
+const RPCS = {
+  eth: process.env.ETH_RPC_URL || 'https://eth.llamarpc.com',
+  base: process.env.BASE_RPC_URL || 'https://mainnet.base.org',
+}
 
 function safeError(error = 'Alpha Vault is temporarily unavailable.') {
   return { ok: false, error }
 }
 
 function encryptionKey(userId) {
-  const secret = process.env.WALLET_ENCRYPTION_KEY
+  const secret = process.env.ALPHA_VAULT_ENCRYPTION_KEY || process.env.WALLET_ENCRYPTION_KEY
   if (!secret) throw new Error('Vault encryption is not configured')
   return crypto.pbkdf2Sync(secret, userId, 100_000, 32, 'sha256')
 }
@@ -25,9 +29,35 @@ function encryptPrivateKey(privateKey, userId) {
   return Buffer.concat([iv, tag, encrypted]).toString('base64')
 }
 
-function sanitizeVault(row) {
+function clientFor(chain) {
+  const url = RPCS[chain]
+  if (!url) return null
+  const id = chain === 'base' ? 8453 : 1
+  return createPublicClient({
+    chain: {
+      id,
+      name: chain === 'base' ? 'Base' : 'Ethereum',
+      nativeCurrency: { name: 'Ether', symbol: 'ETH', decimals: 18 },
+      rpcUrls: { default: { http: [url] } },
+    },
+    transport: http(url, { timeout: 7000 }),
+  })
+}
+
+async function balanceFor(address, chain) {
+  try {
+    const client = clientFor(chain)
+    if (!client || !address) return null
+    const balance = await client.getBalance({ address })
+    return formatEther(balance)
+  } catch {
+    return null
+  }
+}
+
+async function sanitizeVault(row, includeBalances = false) {
   const address = row.address || row.wallet_address
-  return {
+  const vault = {
     id: row.id,
     address,
     wallet_address: address,
@@ -35,7 +65,13 @@ function sanitizeVault(row) {
     chain_scope: row.chain_scope || 'evm',
     status: row.status || 'active',
     created_at: row.created_at,
+    recent_txs: [],
   }
+  if (includeBalances) {
+    const [eth, base] = await Promise.all([balanceFor(address, 'eth'), balanceFor(address, 'base')])
+    vault.balances = { eth, base }
+  }
+  return vault
 }
 
 async function createVault(supabase, user, privateKey, label = 'Alpha Vault') {
@@ -92,7 +128,8 @@ export async function handleVaultAction(req, res, action) {
         .eq('user_id', user.id)
         .order('created_at', { ascending: false })
       if (error) throw error
-      return res.status(200).json({ ok: true, wallets: (data || []).map(sanitizeVault), enabled: ALPHA_VAULT_ENABLED })
+      const wallets = await Promise.all((data || []).map(row => sanitizeVault(row, true)))
+      return res.status(200).json({ ok: true, wallets, enabled: ALPHA_VAULT_ENABLED })
     }
 
     if (req.method !== 'POST') return res.status(405).json(safeError('Method not allowed.'))

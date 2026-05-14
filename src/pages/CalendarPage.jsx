@@ -404,6 +404,7 @@ export default function CalendarPage() {
           contractAddress: project.contractAddress,
           chain: project.chain,
           mintUrl: project.mintUrl || project.sourceUrl,
+          walletAddress: address,
           phase: selectedPhase,
           mode: selectedMode,
           riskScore: project.riskScore,

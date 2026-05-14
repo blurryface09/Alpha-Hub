@@ -80,14 +80,14 @@ export default function AddProjectModal({ onAdd, onClose }) {
       if (!res.ok) throw new Error(data.error || 'Mint time scan failed')
       if (!data.detected) {
         setDetectedTime(null)
-        if (!quiet) toast('No reliable mint time found. Please enter manually.')
+        if (!quiet) toast('Could not detect launch time. Paste official mint link or enter manually.')
         return null
       }
       setDetectedTime(data)
       if (!quiet) toast.success('Mint time detected. Confirm or edit it before saving.')
       return data
     } catch (error) {
-      if (!quiet) toast.error(friendlyError(error, 'Mint time scan failed. Please enter manually.'))
+      if (!quiet) toast.error(friendlyError(error, 'Could not detect launch time. Paste official mint link or enter manually.'))
       return null
     } finally {
       setDetectingTime(false)
@@ -315,7 +315,7 @@ export default function AddProjectModal({ onAdd, onClose }) {
               )}
               {form.mint_date && (
                 <div className="rounded-lg border border-accent/20 bg-accent/8 p-3 text-xs text-muted">
-                  <div className="font-mono text-accent mb-1">Launch time confirmed</div>
+                  <div className="font-mono text-accent mb-1">{form.mint_time_source === 'manual' ? 'Launch time entered by you' : 'Launch time confirmed'}</div>
                   <div>Local: {new Date(form.mint_date).toLocaleString()}</div>
                   <div>UTC: {new Date(form.mint_date).toISOString()}</div>
                 </div>

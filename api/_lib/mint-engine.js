@@ -1,4 +1,4 @@
-import { isAddress } from 'viem'
+import { createPublicClient, encodeFunctionData, http, isAddress, parseAbi, parseEther } from 'viem'
 import { createServiceClient, requireUser } from './auth.js'
 import { rateLimit, sendRateLimit } from './redis.js'
 import { chainIdFor, normalizeChain, normalizePhase, recommendMode } from './project-intelligence.js'
@@ -6,6 +6,17 @@ import { chainIdFor, normalizeChain, normalizePhase, recommendMode } from './pro
 const SUPPORTED_EXECUTION_CHAINS = new Set(['eth', 'base', 'apechain'])
 const AUTO_STRIKE_ENABLED = String(process.env.AUTO_STRIKE_ENABLED || '').toLowerCase() === 'true'
 const ALPHA_VAULT_ENABLED = String(process.env.ALPHA_VAULT_ENABLED || '').toLowerCase() === 'true'
+const MINT_NAMES = ['mint', 'publicMint', 'mintPublic', 'allowlistMint', 'presaleMint', 'purchase', 'claim', 'buy', 'safeMint']
+const RPC_URLS = {
+  eth: process.env.ETH_RPC_URL || 'https://eth.llamarpc.com',
+  base: process.env.BASE_RPC_URL || 'https://mainnet.base.org',
+  apechain: process.env.APECHAIN_RPC_URL || '',
+}
+const EXPLORER_CHAIN_NAMES = {
+  eth: 'Ethereum',
+  base: 'Base',
+  apechain: 'ApeChain',
+}
 
 const EVENT_MESSAGES = {
   preparing: 'Preparing project',
@@ -20,6 +31,184 @@ const EVENT_MESSAGES = {
 
 function safeError(message = 'Mint action is temporarily unavailable.') {
   return { ok: false, error: message }
+}
+
+function safeMessage(error) {
+  const msg = String(error?.shortMessage || error?.message || error || '').toLowerCase()
+  if (msg.includes('contract address')) return 'Contract address is needed for Fast or Strike Mint.'
+  if (msg.includes('connect wallet')) return 'Connect wallet before preparing this mint.'
+  if (msg.includes('no contract exists')) return 'No contract exists at this address on the selected chain.'
+  if (msg.includes('rpc')) return 'Mint preparation needs a working RPC for this chain.'
+  if (msg.includes('max_spend_exceeded')) return 'Mint skipped because max spend was exceeded.'
+  if (msg.includes('insufficient funds')) return 'The mint wallet does not have enough funds.'
+  if (msg.includes('execution reverted') || msg.includes('revert')) return 'Mint simulation failed. The transaction was not sent.'
+  if (msg.includes('function') || msg.includes('selector')) return 'Unknown mint function. Use the official mint site or add contract details.'
+  if (msg.includes('chain')) return 'Wrong chain for this mint.'
+  return 'Mint preparation failed. Nothing was sent.'
+}
+
+function chainObject(chain) {
+  const id = chainIdFor(chain)
+  return {
+    id,
+    name: EXPLORER_CHAIN_NAMES[chain] || chain,
+    nativeCurrency: { name: 'Ether', symbol: 'ETH', decimals: 18 },
+    rpcUrls: { default: { http: [RPC_URLS[chain]].filter(Boolean) } },
+  }
+}
+
+function publicClient(chain) {
+  const url = RPC_URLS[chain]
+  if (!url) return null
+  return createPublicClient({ chain: chainObject(chain), transport: http(url, { timeout: 9000 }) })
+}
+
+function cleanPrice(value) {
+  const raw = String(value || '0').replace(/[^0-9.]/g, '')
+  return raw && Number.isFinite(Number(raw)) ? raw : '0'
+}
+
+function spendLimitWei(body) {
+  const raw = cleanPrice(body.maxTotalSpend || body.max_total_spend)
+  if (!raw || Number(raw) <= 0) return null
+  return parseEther(raw)
+}
+
+async function fetchVerifiedAbi(contractAddress, chain) {
+  const apiKey = process.env.ETHERSCAN_API_KEY || process.env.VITE_ETHERSCAN_API_KEY || ''
+  if (!apiKey) return null
+  const chainId = chainIdFor(chain)
+  const url = new URL('https://api.etherscan.io/v2/api')
+  url.searchParams.set('chainid', String(chainId))
+  url.searchParams.set('module', 'contract')
+  url.searchParams.set('action', 'getabi')
+  url.searchParams.set('address', contractAddress)
+  url.searchParams.set('apikey', apiKey)
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), 8000)
+  try {
+    const response = await fetch(url, { signal: controller.signal })
+    const data = await response.json()
+    if (data?.status === '1' && data?.result && !String(data.result).includes('not verified')) {
+      return JSON.parse(data.result)
+    }
+  } finally {
+    clearTimeout(timer)
+  }
+  return null
+}
+
+function isUint(input) {
+  return /^uint/.test(String(input?.type || ''))
+}
+
+function isAddressInput(input) {
+  return String(input?.type || '') === 'address'
+}
+
+function argsForInputs(inputs = [], quantity, walletAddress) {
+  if (!inputs.length) return []
+  if (inputs.length === 1) {
+    if (isUint(inputs[0])) return [quantity]
+    if (isAddressInput(inputs[0])) return [walletAddress]
+  }
+  if (inputs.length === 2) {
+    if (isAddressInput(inputs[0]) && isUint(inputs[1])) return [walletAddress, quantity]
+    if (isUint(inputs[0]) && isAddressInput(inputs[1])) return [quantity, walletAddress]
+    if (isUint(inputs[0]) && isUint(inputs[1])) return [quantity, 0n]
+  }
+  return null
+}
+
+function candidatesFromAbi(abi, quantity, walletAddress) {
+  if (!Array.isArray(abi)) return []
+  return abi
+    .filter(fn => fn?.type === 'function' && MINT_NAMES.some(name => String(fn.name || '').toLowerCase() === name.toLowerCase()))
+    .map(fn => {
+      const args = argsForInputs(fn.inputs || [], quantity, walletAddress)
+      if (!args) return null
+      return { abi, functionName: fn.name, args, source: 'verified_abi' }
+    })
+    .filter(Boolean)
+}
+
+function fallbackCandidates(quantity, walletAddress) {
+  return [
+    { sig: 'function mint(uint256 quantity) payable', name: 'mint', args: [quantity] },
+    { sig: 'function publicMint(uint256 quantity) payable', name: 'publicMint', args: [quantity] },
+    { sig: 'function mintPublic(uint256 quantity) payable', name: 'mintPublic', args: [quantity] },
+    { sig: 'function allowlistMint(uint256 quantity) payable', name: 'allowlistMint', args: [quantity] },
+    { sig: 'function presaleMint(uint256 quantity) payable', name: 'presaleMint', args: [quantity] },
+    { sig: 'function purchase(uint256 numberOfTokens) payable', name: 'purchase', args: [quantity] },
+    { sig: 'function claim(uint256 quantity) payable', name: 'claim', args: [quantity] },
+    { sig: 'function mint() payable', name: 'mint', args: [] },
+    { sig: 'function claim() payable', name: 'claim', args: [] },
+    { sig: 'function safeMint(address to) payable', name: 'safeMint', args: [walletAddress] },
+  ].map(item => ({
+    abi: parseAbi([item.sig]),
+    functionName: item.name,
+    args: item.args,
+    source: 'common_signature',
+  }))
+}
+
+async function prepareMintTransaction(body) {
+  const chain = normalizeChain(body.chain)
+  const chainId = chainIdFor(chain)
+  const contract = body.contractAddress || body.contract_address
+  const walletAddress = body.walletAddress || body.wallet_address || body.account
+  if (!contract || !isAddress(contract)) throw new Error('Contract address is required for Fast Mint.')
+  if (!walletAddress || !isAddress(walletAddress)) throw new Error('Connect wallet before preparing this mint.')
+  const client = publicClient(chain)
+  if (!client) throw new Error('Mint preparation needs RPC configured for this chain.')
+
+  const code = await client.getBytecode({ address: contract })
+  if (!code || code === '0x') throw new Error('No contract exists at this address on the selected chain.')
+
+  const quantity = BigInt(Math.max(1, Number(body.quantity || body.max_mint || 1)))
+  const value = parseEther(cleanPrice(body.mintPrice || body.mint_price || body.price)) * quantity
+  const maxSpend = spendLimitWei(body)
+  const verifiedAbi = await fetchVerifiedAbi(contract, chain).catch(() => null)
+  const candidates = [
+    ...candidatesFromAbi(verifiedAbi, quantity, walletAddress),
+    ...fallbackCandidates(quantity, walletAddress),
+  ]
+
+  let lastError = null
+  for (const candidate of candidates) {
+    try {
+      const data = encodeFunctionData({
+        abi: candidate.abi,
+        functionName: candidate.functionName,
+        args: candidate.args,
+      })
+      const gas = await client.estimateGas({
+        account: walletAddress,
+        to: contract,
+        data,
+        value,
+      })
+      if (maxSpend) {
+        const gasPrice = await client.getGasPrice().catch(() => 0n)
+        const estimatedTotal = value + (gas * gasPrice)
+        if (estimatedTotal > maxSpend) throw new Error('max_spend_exceeded')
+      }
+      return {
+        to: contract,
+        data,
+        value: value.toString(),
+        chainId,
+        gas: gas.toString(),
+        functionName: candidate.functionName,
+        argsSummary: candidate.args.map(arg => typeof arg === 'bigint' ? arg.toString() : String(arg)),
+        source: candidate.source,
+      }
+    } catch (error) {
+      lastError = error
+    }
+  }
+
+  throw new Error(safeMessage(lastError))
 }
 
 function intentPayload(user, body, status = 'draft') {
@@ -106,19 +295,19 @@ async function recordAttempt(supabase, intentId, userId, status, metadata = {}) 
   return null
 }
 
-async function hasVault(supabase, userId) {
+async function loadVault(supabase, userId) {
   const { data, error } = await supabase
     .from('alpha_vault_wallets')
-    .select('id')
+    .select('id,address,wallet_address,status')
     .eq('user_id', userId)
     .eq('status', 'active')
     .limit(1)
   if (error) return false
-  return Boolean(data?.length)
+  return data?.[0] || null
 }
 
 export async function handleMintAction(req, res, action) {
-  const allowed = new Set(['prepare', 'enable-strike', 'stop', 'execute', 'status'])
+  const allowed = new Set(['prepare', 'enable-strike', 'stop', 'execute', 'confirm', 'status'])
   if (!allowed.has(action)) return res.status(404).json(safeError('Unknown mint action.'))
 
   const user = await requireUser(req, res)
@@ -151,6 +340,12 @@ export async function handleMintAction(req, res, action) {
       if (!SUPPORTED_EXECUTION_CHAINS.has(chain)) return res.status(400).json(safeError('This chain is discovery-only for now.'))
       const contract = body.contractAddress || body.contract_address
       if (contract && !isAddress(contract)) return res.status(400).json(safeError('This contract address does not look right.'))
+      let preparedTransaction
+      try {
+        preparedTransaction = await prepareMintTransaction(body)
+      } catch (error) {
+        return res.status(400).json(safeError(safeMessage(error)))
+      }
       const row = await insertOptional(supabase, 'mint_intents', intentPayload(user, body, 'prepared'))
       const intentId = row.id || `local-${Date.now()}`
       await logEvent(supabase, intentId, user.id, 'preparing')
@@ -161,7 +356,8 @@ export async function handleMintAction(req, res, action) {
         ok: true,
         intent: { ...row, id: intentId },
         mode: body.mode || row.execution_mode || 'safe',
-        message: 'Mint prepared. Use Safe Mint or Fast Mint to confirm with your wallet.',
+        preparedTransaction,
+        message: 'Mint prepared and simulated. Confirm in your wallet when ready.',
       })
     }
 
@@ -173,11 +369,17 @@ export async function handleMintAction(req, res, action) {
       }
       if (!acknowledgeRisk) return res.status(400).json(safeError('Confirm Strike Mode warnings before enabling.'))
       if (!maxTotalSpend) return res.status(400).json(safeError('Set a max spend limit before enabling Strike Mode.'))
-      if (!(await hasVault(supabase, user.id))) return res.status(400).json(safeError('Create or import an Alpha Vault wallet before Strike Mode.'))
+      const vault = await loadVault(supabase, user.id)
+      if (!vault) return res.status(400).json(safeError('Create or import an Alpha Vault wallet before Strike Mode.'))
       const intent = await loadIntent(supabase, user.id, intentId)
       if (!intent) return res.status(404).json(safeError('Mint session not found.'))
       if (!intent.contract_address) return res.status(400).json(safeError('Strike Mode needs a contract address.'))
       if (!SUPPORTED_EXECUTION_CHAINS.has(intent.chain)) return res.status(400).json(safeError('This chain is not supported for Strike Mode yet.'))
+      try {
+        await prepareMintTransaction({ ...intent, walletAddress: vault.address || vault.wallet_address })
+      } catch (error) {
+        return res.status(400).json(safeError(safeMessage(error)))
+      }
       await supabase.from('mint_intents').update({
         execution_mode: 'strike',
         max_total_spend: maxTotalSpend,
@@ -205,7 +407,7 @@ export async function handleMintAction(req, res, action) {
       return res.status(200).json({ ok: true, message: 'Mint stopped.' })
     }
 
-    if (action === 'execute') {
+    if (action === 'execute' || action === 'confirm') {
       if (req.method !== 'POST') return res.status(405).json(safeError('Method not allowed.'))
       const { intentId, mode = 'safe' } = req.body || {}
       const intent = intentId ? await loadIntent(supabase, user.id, intentId) : null
@@ -216,16 +418,17 @@ export async function handleMintAction(req, res, action) {
       await logEvent(supabase, intentId, user.id, 'simulating')
       await logEvent(supabase, intentId, user.id, 'gas')
       await recordAttempt(supabase, intentId, user.id, 'wallet_confirmation_ready', { mode })
+      let preparedTransaction
+      try {
+        preparedTransaction = await prepareMintTransaction({ ...intent, walletAddress: req.body?.walletAddress, mode })
+      } catch (error) {
+        return res.status(400).json(safeError(safeMessage(error)))
+      }
       return res.status(200).json({
         ok: true,
         requiresWalletConfirmation: true,
         message: mode === 'fast' ? 'Fast Mint is ready. Confirm in your wallet.' : 'Safe Mint is ready. Confirm in your wallet.',
-        transaction: {
-          to: intent.contract_address,
-          chainId: intent.chain_id,
-          value: '0',
-          data: '0x',
-        },
+        transaction: preparedTransaction,
       })
     }
   } catch (error) {

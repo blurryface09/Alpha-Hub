@@ -11,6 +11,7 @@
     { "source": "/api/mint/enable-strike", "destination": "/api/calendar/mint-enable-strike" },
     { "source": "/api/mint/stop", "destination": "/api/calendar/mint-stop" },
     { "source": "/api/mint/execute", "destination": "/api/calendar/mint-execute" },
+    { "source": "/api/mint/confirm", "destination": "/api/calendar/mint-confirm" },
     { "source": "/api/mint/status", "destination": "/api/calendar/mint-status" },
     { "source": "/api/vault/create", "destination": "/api/calendar/vault-create" },
     { "source": "/api/vault/import", "destination": "/api/calendar/vault-import" },
