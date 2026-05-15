@@ -69,12 +69,18 @@ export function isActiveMintCalendarProject(project) {
   if (!isLaunchReadyCalendarProject(project)) return false
   const quality = calendarQualityScore(project)
   const confidence = project.mint_date_confidence || project.source_confidence || 'low'
-  // Only trusted sources may use 'medium' confidence as confirmed
   const trustedSource = ['opensea', 'alchemy', 'admin', 'community'].includes(project.source)
   const highConf   = ['high', 'manual', 'confirmed'].includes(confidence)
   const medTrusted = confidence === 'medium' && trustedSource
   const confirmed  = highConf || medTrusted
-  if (project.mint_status === 'live_now' && confirmed && quality >= 60) return true
+
+  // Explicit live_now flag from trusted source — show without quality gate
+  if (project.mint_status === 'live_now' && trustedSource) return true
+  // Admin/community live_now always trusted
+  if (project.mint_status === 'live_now' && ['admin', 'community'].includes(project.source)) return true
+  // live_now with confirmed confidence and quality
+  if (project.mint_status === 'live_now' && confirmed && quality >= 50) return true
+
   if (project.status === 'live' && project.mint_date && confirmed && quality >= 60) return true
   if (!project.mint_date) return false
   const date = new Date(project.mint_date).getTime()

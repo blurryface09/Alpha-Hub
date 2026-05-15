@@ -1,19 +1,17 @@
-import React, { useState, useRef } from 'react'
+import React, { useState, useRef, useCallback, useMemo } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
-import { X, Shield, Loader, Sparkles, AlertTriangle, CheckCircle, Info, ChevronRight, ChevronDown, ChevronUp, ExternalLink, Zap } from 'lucide-react'
+import {
+  X, Shield, Loader, Sparkles, AlertTriangle, CheckCircle,
+  Info, ChevronRight, ChevronDown, ChevronUp, ExternalLink, Zap
+} from 'lucide-react'
 import toast from 'react-hot-toast'
 import DateTimePicker from '../shared/DateTimePicker'
 
 // ── Confidence badge ──────────────────────────────────────────────────────────
 function ConfBadge({ level }) {
-  if (level === 'api_verified') return (
+  if (level === 'api_verified' || level === 'url_extracted') return (
     <span className="inline-flex items-center gap-1 text-[10px] font-mono text-green px-1.5 py-0.5 bg-green/10 rounded">
-      <CheckCircle size={9} /> Verified
-    </span>
-  )
-  if (level === 'url_extracted') return (
-    <span className="inline-flex items-center gap-1 text-[10px] font-mono text-blue-400 px-1.5 py-0.5 bg-blue-400/10 rounded">
-      <Info size={9} /> Extracted
+      <CheckCircle size={9} /> {level === 'api_verified' ? 'Verified' : 'Extracted'}
     </span>
   )
   if (level === 'ai_inferred') return (
@@ -21,32 +19,39 @@ function ConfBadge({ level }) {
       <Sparkles size={9} /> AI guess
     </span>
   )
+  if (level === 'page_detected') return (
+    <span className="inline-flex items-center gap-1 text-[10px] font-mono text-blue-400 px-1.5 py-0.5 bg-blue-400/10 rounded">
+      <Info size={9} /> Page
+    </span>
+  )
   return null
 }
 
-// ── Missing field chips ───────────────────────────────────────────────────────
+// ── Missing field chips (calm, contextual — no harsh red) ──────────────────────
 function MissingChip({ type }) {
-  if (type === 'mint_date') return (
-    <span className="inline-flex items-center gap-1 text-[10px] font-mono px-2 py-0.5 rounded-full bg-amber-400/10 text-amber-300 border border-amber-400/20">
-      ⏱ Needs time
+  const chips = {
+    mint_date:        { color: 'text-amber-300  bg-amber-400/10  border-amber-400/20',  icon: '⏱', label: 'Needs time'     },
+    mint_price:       { color: 'text-muted      bg-muted/10      border-border2',        icon: '$',  label: 'Optional price' },
+    contract_address: { color: 'text-orange-300 bg-orange-400/10 border-orange-400/20', icon: '📄', label: 'Needs contract' },
+    chain:            { color: 'text-orange-300 bg-orange-400/10 border-orange-400/20', icon: '⛓', label: 'Needs chain'    },
+  }
+  const c = chips[type]
+  if (!c) return null
+  return (
+    <span className={`inline-flex items-center gap-1 text-[10px] font-mono px-2 py-0.5 rounded-full border ${c.color}`}>
+      {c.icon} {c.label}
     </span>
   )
-  if (type === 'mint_price') return (
-    <span className="inline-flex items-center gap-1 text-[10px] font-mono px-2 py-0.5 rounded-full bg-muted/10 text-muted border border-border2">
-      $ Optional price
+}
+
+// ── "Minting Now" live status badge ───────────────────────────────────────────
+function LiveBadge() {
+  return (
+    <span className="inline-flex items-center gap-1 text-[10px] font-mono px-2.5 py-1 rounded-full bg-green/15 text-green border border-green/30 animate-pulse-slow font-semibold">
+      <span className="w-1.5 h-1.5 rounded-full bg-green animate-pulse inline-block" />
+      Minting Now
     </span>
   )
-  if (type === 'contract_address') return (
-    <span className="inline-flex items-center gap-1 text-[10px] font-mono px-2 py-0.5 rounded-full bg-orange-400/10 text-orange-300 border border-orange-400/20">
-      📄 Needs contract
-    </span>
-  )
-  if (type === 'chain') return (
-    <span className="inline-flex items-center gap-1 text-[10px] font-mono px-2 py-0.5 rounded-full bg-orange-400/10 text-orange-300 border border-orange-400/20">
-      ⛓ Needs chain
-    </span>
-  )
-  return null
 }
 
 // ── Phase label map ───────────────────────────────────────────────────────────
@@ -61,7 +66,7 @@ const PHASE_LABELS = {
   unknown:      'Unknown',
 }
 
-// ── WL Types ──────────────────────────────────────────────────────────────────
+// ── Constants ─────────────────────────────────────────────────────────────────
 const WL_TYPES = [
   { val: 'GTD',     label: 'GTD / Allowlist',               desc: 'Guaranteed spot' },
   { val: 'FCFS',    label: 'FCFS',                          desc: 'First come first served' },
@@ -83,14 +88,11 @@ const CHAINS = [
 
 // ── Strike Mode blockers ──────────────────────────────────────────────────────
 function getStrikeBlockers(form) {
-  const blockers = []
-  if (!form.contract_address?.trim())
-    blockers.push('Contract address required for Strike Mode')
-  if (!form.mint_date)
-    blockers.push('Mint date/time required for Strike Mode')
-  if (!form.mint_price && form.mint_price !== '0')
-    blockers.push('Mint price unconfirmed — Strike Mode may overbid')
-  return blockers
+  const b = []
+  if (!form.contract_address?.trim()) b.push('Contract address required for Strike Mode')
+  if (!form.mint_date)                b.push('Mint date/time required for Strike Mode')
+  if (!form.mint_price && form.mint_price !== '0') b.push('Mint price unconfirmed — Strike Mode may overbid')
+  return b
 }
 
 // ── Review row ────────────────────────────────────────────────────────────────
@@ -108,37 +110,43 @@ function ReviewRow({ label, value, conf, placeholder = '—' }) {
   )
 }
 
-// ── Default form state ────────────────────────────────────────────────────────
-const defaultForm = () => ({
-  name:             '',
-  source_url:       '',
-  source_type:      'website',
-  chain:            'eth',
-  contract_address: '',
-  mint_date:        '',
-  mint_price:       '',
-  mint_phase:       '',
-  wl_type:          'UNKNOWN',
-  mint_mode:        'confirm',
-  max_mint:         1,
-  gas_limit:        200000,
-  notes:            '',
-})
+// ── Skeleton row for loading state ────────────────────────────────────────────
+function SkeletonRow() {
+  return (
+    <div className="flex items-center justify-between py-1.5 border-b border-border/40 last:border-0">
+      <div className="w-20 h-3 bg-border/50 rounded animate-pulse" />
+      <div className="w-28 h-3 bg-border/30 rounded animate-pulse" />
+    </div>
+  )
+}
 
+// ── Default form state ────────────────────────────────────────────────────────
+const EMPTY_FORM = {
+  name: '', source_url: '', source_type: 'website', chain: 'eth',
+  contract_address: '', mint_date: '', mint_price: '', mint_phase: '',
+  wl_type: 'UNKNOWN', mint_mode: 'confirm', max_mint: 1, gas_limit: 200000, notes: '',
+}
+
+function makeForm(overrides = {}) {
+  return { ...EMPTY_FORM, ...overrides }
+}
+
+// ── Modal (exported) ──────────────────────────────────────────────────────────
 export default function AddProjectModal({ onAdd, onClose }) {
   const [step,     setStep]     = useState(1)
   const [url,      setUrl]      = useState('')
   const [loading,  setLoading]  = useState(false)
   const [meta,     setMeta]     = useState(null)
-  const [form,     setForm]     = useState(defaultForm)
+  const [form,     setForm]     = useState(() => makeForm())
   const [saving,   setSaving]   = useState(false)
   const [advanced, setAdvanced] = useState(false)
   const urlRef = useRef(null)
 
-  const set = (key, val) => setForm(f => ({ ...f, [key]: val }))
+  const set = useCallback((key, val) => setForm(f => ({ ...f, [key]: val })), [])
+  const toggleAdvanced = useCallback(() => setAdvanced(a => !a), [])
 
-  // ── Step 1: analyse URL / address / text ─────────────────────────────────
-  const handleAnalyse = async () => {
+  // ── Step 1: analyse ──────────────────────────────────────────────────────
+  const handleAnalyse = useCallback(async () => {
     const trimmed = url.trim()
     if (!trimmed) { toast.error('Paste a URL, contract address, or alpha text first'); return }
     setLoading(true)
@@ -146,8 +154,7 @@ export default function AddProjectModal({ onAdd, onClose }) {
       const resp = await fetch(`/api/metadata?url=${encodeURIComponent(trimmed)}`)
       const data = await resp.json()
       setMeta(data)
-      setForm({
-        ...defaultForm(),
+      setForm(makeForm({
         source_url:       trimmed,
         name:             data.name             || '',
         source_type:      data.source_type      || 'website',
@@ -158,38 +165,39 @@ export default function AddProjectModal({ onAdd, onClose }) {
         mint_phase:       data.mint_phase       || '',
         wl_type:          data.wl_type          || 'UNKNOWN',
         notes:            data.notes            || '',
-      })
+      }))
       setStep(2)
     } catch {
-      const m  = trimmed.match(/(?:twitter|x)\.com\/([^/?#]+)/)
-      const os = trimmed.match(/opensea\.io\/collection\/([^/?#]+)/)
-      const name = m ? m[1] : os ? os[1].replace(/-/g, ' ').replace(/\b\w/g, c => c.toUpperCase()) : ''
-      setForm({ ...defaultForm(), source_url: trimmed, name })
+      // URL-only fallback (no API response)
+      const mT = trimmed.match(/(?:twitter|x)\.com\/([^/?#]+)/)
+      const mO = trimmed.match(/opensea\.io\/collection\/([^/?#]+)/)
+      const name = mT ? mT[1]
+        : mO ? mO[1].replace(/-/g, ' ').replace(/\b\w/g, c => c.toUpperCase())
+        : ''
+      setForm(makeForm({ source_url: trimmed, name }))
       setMeta(null)
       setStep(2)
     } finally {
       setLoading(false)
     }
-  }
+  }, [url])
 
   // ── Step 2: save ─────────────────────────────────────────────────────────
-  const handleSubmit = async (asNeedsReview = false) => {
+  const handleSubmit = useCallback(async (asNeedsReview = false) => {
     if (!form.name.trim()) { toast.error('Project name is required'); return }
     const notesValue = asNeedsReview
       ? [form.notes?.trim(), 'Needs review — mint time not confirmed'].filter(Boolean).join(' | ')
       : form.notes?.trim() || null
     const cleanForm = {
       ...form,
-      gas_limit:        parseInt(form.gas_limit)       || 200000,
-      max_mint:         parseInt(form.max_mint)        || 1,
-      contract_address: form.contract_address?.trim()  || null,
-      mint_date:        form.mint_date                 || null,
-      mint_price:       form.mint_price?.trim()        || null,
-      mint_phase:       form.mint_phase                || null,
+      gas_limit:        parseInt(form.gas_limit)      || 200000,
+      max_mint:         parseInt(form.max_mint)       || 1,
+      contract_address: form.contract_address?.trim() || null,
+      mint_date:        form.mint_date                || null,
+      mint_price:       form.mint_price?.trim()       || null,
+      mint_phase:       form.mint_phase               || null,
       notes:            notesValue,
     }
-    // Don't send status from this modal — let the parent/server decide
-    delete cleanForm.status
     setSaving(true)
     try {
       await onAdd(cleanForm)
@@ -198,17 +206,29 @@ export default function AddProjectModal({ onAdd, onClose }) {
     } finally {
       setSaving(false)
     }
-  }
+  }, [form, onAdd])
 
-  const conf = meta?.confidence || {}
+  // ── Derived state (memoised) ──────────────────────────────────────────────
+  const conf        = meta?.confidence || {}
+  const isLiveNow   = meta?.mint_status === 'live_now'
+  const isEnded     = meta?.mint_status === 'ended'
 
-  // Determine which fields are still missing
-  const missingChips = []
-  if (!form.mint_date)        missingChips.push('mint_date')
-  if (!form.contract_address) missingChips.push('contract_address')
-  if (!form.mint_price)       missingChips.push('mint_price')
+  const missingChips = useMemo(() => {
+    const chips = []
+    if (!isLiveNow && !form.mint_date)        chips.push('mint_date')
+    if (!form.contract_address)               chips.push('contract_address')
+    if (!form.mint_price)                     chips.push('mint_price')
+    return chips
+  }, [isLiveNow, form.mint_date, form.contract_address, form.mint_price])
 
-  const strikeBlockers = form.mint_mode === 'auto' ? getStrikeBlockers(form) : []
+  const strikeBlockers = useMemo(() =>
+    form.mint_mode === 'auto' ? getStrikeBlockers(form) : [],
+  [form])
+
+  const onKeyDownUrl = useCallback(e => { if (e.key === 'Enter') handleAnalyse() }, [handleAnalyse])
+  const onChangeUrl  = useCallback(e => setUrl(e.target.value), [])
+  const onSkip       = useCallback(() => { setMeta(null); setForm(makeForm()); setStep(2) }, [])
+  const onBack       = useCallback(() => setStep(1), [])
 
   return (
     <div
@@ -216,9 +236,10 @@ export default function AddProjectModal({ onAdd, onClose }) {
       onClick={e => e.target === e.currentTarget && onClose()}
     >
       <motion.div
-        initial={{ opacity: 0, scale: 0.95, y: 10 }}
-        animate={{ opacity: 1, scale: 1,    y: 0  }}
-        exit={{    opacity: 0, scale: 0.95 }}
+        initial={{ opacity: 0, scale: 0.96, y: 12 }}
+        animate={{ opacity: 1, scale: 1,    y: 0   }}
+        exit={{    opacity: 0, scale: 0.96, y: 6   }}
+        transition={{ type: 'spring', damping: 28, stiffness: 320 }}
         className="bg-surface border border-border rounded-2xl w-full max-w-md max-h-[92vh] overflow-y-auto"
       >
         {/* Header */}
@@ -228,71 +249,56 @@ export default function AddProjectModal({ onAdd, onClose }) {
             <h2 className="font-bold text-sm">
               {step === 1 ? 'Add Alpha' : form.name || 'New Project'}
             </h2>
+            {step === 2 && isLiveNow && <LiveBadge />}
           </div>
           <div className="flex items-center gap-2">
             {step === 2 && (meta?.source_url || url) && (
-              <a
-                href={meta?.source_url || url}
-                target="_blank"
-                rel="noreferrer"
-                className="text-muted hover:text-accent p-1"
-                title="View source"
-              >
+              <a href={meta?.source_url || url} target="_blank" rel="noreferrer"
+                 className="text-muted hover:text-accent p-1" title="View source">
                 <ExternalLink size={14} />
               </a>
             )}
-            <button onClick={onClose} className="text-muted hover:text-text p-1"><X size={16} /></button>
+            <button onClick={onClose} className="text-muted hover:text-text p-1">
+              <X size={16} />
+            </button>
           </div>
         </div>
 
         <div className="p-5">
           <AnimatePresence mode="wait">
 
-            {/* ── STEP 1: Paste URL / address / text ── */}
+            {/* ── STEP 1: Paste ── */}
             {step === 1 && (
-              <motion.div
-                key="step1"
-                initial={{ opacity: 0, x: -10 }}
-                animate={{ opacity: 1, x: 0 }}
-                exit={{    opacity: 0, x: -10 }}
+              <motion.div key="step1"
+                initial={{ opacity: 0, x: -10 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: -10 }}
                 className="space-y-4"
               >
-                <div>
-                  <p className="text-xs text-muted mb-3">
-                    Paste a URL, contract address <span className="font-mono">0x…</span>, or raw alpha text.
-                    We'll extract details automatically.
-                  </p>
-                  <div className="flex gap-2">
-                    <input
-                      ref={urlRef}
-                      className="input flex-1"
-                      placeholder="opensea.io/collection/… · 0x… · plain alpha"
-                      value={url}
-                      onChange={e => setUrl(e.target.value)}
-                      onKeyDown={e => e.key === 'Enter' && handleAnalyse()}
-                      autoFocus
-                    />
-                    <button
-                      onClick={handleAnalyse}
-                      disabled={loading}
-                      className="btn-primary px-4 flex items-center gap-2 shrink-0"
-                    >
-                      {loading
-                        ? <Loader size={14} className="animate-spin" />
-                        : <><Sparkles size={14} /><span>Analyse</span></>
-                      }
-                    </button>
-                  </div>
-                  <p className="text-xs text-muted mt-2 opacity-60">
-                    Supports: OpenSea · Zora · Magic Eden · Twitter/X · Contract 0x… · Any website · Plain text
-                  </p>
+                <p className="text-xs text-muted">
+                  Paste a URL, contract address <span className="font-mono">0x…</span>,
+                  or raw alpha text. We'll extract details automatically.
+                </p>
+                <div className="flex gap-2">
+                  <input
+                    ref={urlRef}
+                    className="input flex-1"
+                    placeholder="opensea.io/collection/… · 0x… · plain alpha"
+                    value={url}
+                    onChange={onChangeUrl}
+                    onKeyDown={onKeyDownUrl}
+                    autoFocus
+                  />
+                  <button onClick={handleAnalyse} disabled={loading}
+                    className="btn-primary px-4 flex items-center gap-2 shrink-0">
+                    {loading
+                      ? <Loader size={14} className="animate-spin" />
+                      : <><Sparkles size={14} /><span>Analyse</span></>}
+                  </button>
                 </div>
-
+                <p className="text-[10px] text-muted opacity-60">
+                  Supports: OpenSea · Zora · Magic Eden · Twitter/X · Contract 0x… · Any site · Plain text
+                </p>
                 <div className="flex justify-end">
-                  <button
-                    onClick={() => { setMeta(null); setForm(defaultForm()); setStep(2) }}
-                    className="text-xs text-accent hover:underline flex items-center gap-1"
-                  >
+                  <button onClick={onSkip} className="text-xs text-accent hover:underline flex items-center gap-1">
                     Skip — fill manually <ChevronRight size={12} />
                   </button>
                 </div>
@@ -301,80 +307,79 @@ export default function AddProjectModal({ onAdd, onClose }) {
 
             {/* ── STEP 2: Review + Fill ── */}
             {step === 2 && (
-              <motion.div
-                key="step2"
-                initial={{ opacity: 0, x: 10 }}
-                animate={{ opacity: 1, x: 0 }}
-                exit={{    opacity: 0, x: 10 }}
+              <motion.div key="step2"
+                initial={{ opacity: 0, x: 10 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: 10 }}
                 className="space-y-5"
               >
-                {/* Intelligence Report */}
+                {/* Intelligence Report card */}
                 {meta && (
                   <div className="bg-bg border border-border/60 rounded-xl p-3">
-                    <p className="text-[10px] font-mono text-muted uppercase tracking-wider mb-2 flex items-center gap-1.5">
-                      <Sparkles size={9} className="text-accent" /> Intelligence Report
-                    </p>
-                    <ReviewRow
-                      label="Name"
+                    <div className="flex items-center justify-between mb-2">
+                      <p className="text-[10px] font-mono text-muted uppercase tracking-wider flex items-center gap-1.5">
+                        <Sparkles size={9} className="text-accent" /> Intelligence Report
+                      </p>
+                      {isLiveNow && <LiveBadge />}
+                      {isEnded  && (
+                        <span className="text-[10px] font-mono px-2 py-0.5 rounded-full bg-muted/10 text-muted border border-border2">
+                          Ended
+                        </span>
+                      )}
+                    </div>
+
+                    <ReviewRow label="Name"
                       value={meta.name}
                       conf={conf.name}
-                      placeholder="Not detected"
-                    />
-                    <ReviewRow
-                      label="Chain"
+                      placeholder="Not detected" />
+                    <ReviewRow label="Chain"
                       value={meta.chain?.toUpperCase()}
                       conf={conf.chain}
-                      placeholder="Not detected"
-                    />
-                    <ReviewRow
-                      label="Contract"
+                      placeholder="Not detected" />
+                    <ReviewRow label="Contract"
                       value={meta.contract_address
                         ? `${meta.contract_address.slice(0,6)}…${meta.contract_address.slice(-4)}`
                         : null}
                       conf={conf.contract_address}
-                      placeholder="Not detected"
-                    />
+                      placeholder="Not detected" />
                     <ReviewRow
-                      label="Mint Date"
-                      value={meta.mint_date
-                        ? new Date(meta.mint_date).toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })
-                        : null}
-                      conf={conf.mint_date}
-                      placeholder="Not detected"
-                    />
-                    <ReviewRow
-                      label="Price"
+                      label={isLiveNow ? 'Mint State' : 'Mint Date'}
+                      value={isLiveNow
+                        ? 'Minting Now'
+                        : meta.mint_date
+                          ? new Date(meta.mint_date).toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })
+                          : null}
+                      conf={isLiveNow ? 'api_verified' : conf.mint_date}
+                      placeholder="Not detected" />
+                    <ReviewRow label="Price"
                       value={meta.mint_price
                         ? `${meta.mint_price} ${meta.chain === 'bnb' ? 'BNB' : 'ETH'}`
                         : null}
                       conf={conf.mint_price}
-                      placeholder="Not detected"
-                    />
+                      placeholder="Not detected" />
                     {meta.mint_phase && meta.mint_phase !== 'unknown' && (
-                      <ReviewRow
-                        label="Phase"
+                      <ReviewRow label="Phase"
                         value={PHASE_LABELS[meta.mint_phase] || meta.mint_phase}
-                        conf={conf.mint_phase}
-                      />
+                        conf={conf.mint_phase} />
                     )}
 
-                    {/* Stage breakdown (multi-phase drops) */}
-                    {Array.isArray(meta.stages) && meta.stages.length > 1 && (
+                    {/* Multi-stage breakdown — only real stage names */}
+                    {Array.isArray(meta.stages) && meta.stages.length >= 2 && (
                       <div className="mt-2 pt-2 border-t border-border/40">
                         <p className="text-[10px] text-muted uppercase tracking-wider mb-1.5 font-mono">Stages</p>
-                        {meta.stages.slice(0, 4).map((stage, i) => (
+                        {meta.stages.slice(0, 4).map((s, i) => (
                           <div key={i} className="flex items-center justify-between text-[10px] font-mono py-0.5">
-                            <span className="text-muted truncate max-w-[120px]">{stage.name || `Stage ${i + 1}`}</span>
+                            <span className="text-muted truncate max-w-[110px]">
+                              {s.name || `Stage ${i + 1}`}
+                            </span>
                             <span className="text-text">
-                              {stage.price != null ? `${stage.price} ETH` : ''}
-                              {stage.start_time
-                                ? ` · ${new Date(stage.start_time).toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}`
+                              {s.price != null ? `${s.price} ETH` : ''}
+                              {s.start_time
+                                ? ` · ${new Date(s.start_time).toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}`
                                 : ''}
                             </span>
                           </div>
                         ))}
                         {meta.stages.length > 4 && (
-                          <p className="text-[10px] text-muted mt-0.5">+{meta.stages.length - 4} more stages</p>
+                          <p className="text-[10px] text-muted mt-0.5">+{meta.stages.length - 4} more</p>
                         )}
                       </div>
                     )}
@@ -385,6 +390,13 @@ export default function AddProjectModal({ onAdd, onClose }) {
                         <span className="text-xs">{meta.warning}</span>
                       </div>
                     )}
+                  </div>
+                )}
+
+                {/* Loading skeleton (while fetching) */}
+                {loading && (
+                  <div className="bg-bg border border-border/60 rounded-xl p-3 space-y-0">
+                    {[...Array(5)].map((_, i) => <SkeletonRow key={i} />)}
                   </div>
                 )}
 
@@ -401,29 +413,22 @@ export default function AddProjectModal({ onAdd, onClose }) {
                     <label className="text-xs font-mono text-muted uppercase tracking-wider">Project Name *</label>
                     {conf.name && <ConfBadge level={conf.name} />}
                   </div>
-                  <input
-                    className="input"
-                    placeholder="e.g. CryptoSkulls"
-                    value={form.name}
-                    onChange={e => set('name', e.target.value)}
-                    autoFocus
-                  />
+                  <input className="input" placeholder="e.g. CryptoSkulls"
+                    value={form.name} onChange={e => set('name', e.target.value)} autoFocus />
                 </div>
 
-                {/* Mint Date — always visible, critical */}
-                <div>
-                  <div className="flex items-center justify-between mb-1.5">
-                    <label className="text-xs font-mono text-muted uppercase tracking-wider">Mint Date & Time</label>
-                    {conf.mint_date
-                      ? <ConfBadge level={conf.mint_date} />
-                      : !form.mint_date && <MissingChip type="mint_date" />
-                    }
+                {/* Mint Date — hidden when live now (no timestamp needed) */}
+                {!isLiveNow && (
+                  <div>
+                    <div className="flex items-center justify-between mb-1.5">
+                      <label className="text-xs font-mono text-muted uppercase tracking-wider">Mint Date & Time</label>
+                      {conf.mint_date
+                        ? <ConfBadge level={conf.mint_date} />
+                        : !form.mint_date && <MissingChip type="mint_date" />}
+                    </div>
+                    <DateTimePicker value={form.mint_date} onChange={v => set('mint_date', v)} />
                   </div>
-                  <DateTimePicker
-                    value={form.mint_date}
-                    onChange={utcStr => set('mint_date', utcStr)}
-                  />
-                </div>
+                )}
 
                 {/* Mint Price */}
                 <div>
@@ -433,24 +438,16 @@ export default function AddProjectModal({ onAdd, onClose }) {
                     </label>
                     {conf.mint_price
                       ? <ConfBadge level={conf.mint_price} />
-                      : !form.mint_price && <MissingChip type="mint_price" />
-                    }
+                      : !form.mint_price && <MissingChip type="mint_price" />}
                   </div>
-                  <input
-                    className="input"
-                    placeholder="e.g. 0.08  (leave blank if free / TBA)"
-                    value={form.mint_price}
-                    onChange={e => set('mint_price', e.target.value)}
-                  />
+                  <input className="input" placeholder="e.g. 0.08  (blank = free / TBA)"
+                    value={form.mint_price} onChange={e => set('mint_price', e.target.value)} />
                 </div>
 
-                {/* ── Advanced accordion ── */}
+                {/* Advanced accordion */}
                 <div>
-                  <button
-                    type="button"
-                    onClick={() => setAdvanced(a => !a)}
-                    className="flex items-center gap-1.5 text-xs text-muted hover:text-accent transition-colors w-full"
-                  >
+                  <button type="button" onClick={toggleAdvanced}
+                    className="flex items-center gap-1.5 text-xs text-muted hover:text-accent transition-colors w-full">
                     {advanced ? <ChevronUp size={13} /> : <ChevronDown size={13} />}
                     Advanced edit
                     <span className="ml-auto text-muted2 font-normal normal-case">
@@ -484,20 +481,15 @@ export default function AddProjectModal({ onAdd, onClose }) {
                       <div>
                         <div className="flex items-center justify-between mb-1.5">
                           <label className="text-xs font-mono text-muted uppercase tracking-wider">
-                            Contract Address
-                            <span className="text-muted2 normal-case ml-1 font-normal">(needed for auto-mint)</span>
+                            Contract
+                            <span className="text-muted2 normal-case ml-1 font-normal">(for auto-mint)</span>
                           </label>
                           {conf.contract_address
                             ? <ConfBadge level={conf.contract_address} />
-                            : !form.contract_address && <MissingChip type="contract_address" />
-                          }
+                            : !form.contract_address && <MissingChip type="contract_address" />}
                         </div>
-                        <input
-                          className="input font-mono text-xs"
-                          placeholder="0x…"
-                          value={form.contract_address}
-                          onChange={e => set('contract_address', e.target.value)}
-                        />
+                        <input className="input font-mono text-xs" placeholder="0x…"
+                          value={form.contract_address} onChange={e => set('contract_address', e.target.value)} />
                       </div>
 
                       {/* Mint Mode */}
@@ -505,23 +497,18 @@ export default function AddProjectModal({ onAdd, onClose }) {
                         <label className="text-xs font-mono text-muted uppercase tracking-wider block mb-2">Mint Mode</label>
                         <div className="grid grid-cols-2 gap-2">
                           {MINT_MODES.map(m => (
-                            <button
-                              key={m.val}
-                              type="button"
-                              onClick={() => set('mint_mode', m.val)}
+                            <button key={m.val} type="button" onClick={() => set('mint_mode', m.val)}
                               className={"p-3 rounded-lg border text-left transition-all " + (
                                 form.mint_mode === m.val
                                   ? (m.val === 'auto' ? 'border-green bg-green/8 text-green' : 'border-accent bg-accent/8 text-accent')
                                   : 'border-border2 text-muted hover:border-border'
-                              )}
-                            >
+                              )}>
                               <div className="text-sm font-bold">{m.icon} {m.label}</div>
                               <div className="text-xs opacity-70 mt-0.5">{m.desc}</div>
                             </button>
                           ))}
                         </div>
 
-                        {/* Strike Mode blockers panel */}
                         {strikeBlockers.length > 0 && (
                           <div className="mt-2.5 bg-amber-400/8 border border-amber-400/20 rounded-lg p-2.5 space-y-1">
                             <p className="text-[10px] font-mono text-amber-300 uppercase tracking-wider flex items-center gap-1">
@@ -540,34 +527,22 @@ export default function AddProjectModal({ onAdd, onClose }) {
                       <div className="grid grid-cols-3 gap-3">
                         <div>
                           <label className="text-xs font-mono text-muted uppercase tracking-wider block mb-1.5">Max Mint</label>
-                          <input
-                            className="input"
-                            type="number" min="1" max="20"
-                            value={form.max_mint}
-                            onChange={e => set('max_mint', parseInt(e.target.value) || 1)}
-                          />
+                          <input className="input" type="number" min="1" max="20"
+                            value={form.max_mint} onChange={e => set('max_mint', parseInt(e.target.value) || 1)} />
                         </div>
                         <div className="col-span-2">
                           <label className="text-xs font-mono text-muted uppercase tracking-wider block mb-1.5">Gas Limit</label>
-                          <input
-                            className="input"
-                            type="number"
-                            value={form.gas_limit}
-                            onChange={e => set('gas_limit', parseInt(e.target.value) || 200000)}
-                          />
+                          <input className="input" type="number"
+                            value={form.gas_limit} onChange={e => set('gas_limit', parseInt(e.target.value) || 200000)} />
                         </div>
                       </div>
 
                       {/* Notes */}
                       <div>
                         <label className="text-xs font-mono text-muted uppercase tracking-wider block mb-1.5">Notes</label>
-                        <textarea
-                          className="input resize-none"
-                          rows={2}
+                        <textarea className="input resize-none" rows={2}
                           placeholder="Discord role, contract notes, anything useful…"
-                          value={form.notes}
-                          onChange={e => set('notes', e.target.value)}
-                        />
+                          value={form.notes} onChange={e => set('notes', e.target.value)} />
                       </div>
 
                     </div>
@@ -577,7 +552,7 @@ export default function AddProjectModal({ onAdd, onClose }) {
                 {/* Actions */}
                 <div className="flex flex-col gap-2 pt-1">
                   <div className="flex gap-2">
-                    <button onClick={() => setStep(1)} className="btn-ghost flex-1">Back</button>
+                    <button onClick={onBack} className="btn-ghost flex-1">Back</button>
                     <button
                       onClick={() => handleSubmit(false)}
                       disabled={saving || !form.name.trim()}
@@ -585,11 +560,11 @@ export default function AddProjectModal({ onAdd, onClose }) {
                     >
                       {saving
                         ? <><Loader size={14} className="animate-spin" /> Saving…</>
-                        : <><Shield size={14} /> Add to MintGuard</>
-                      }
+                        : <><Shield size={14} /> Add to MintGuard</>}
                     </button>
                   </div>
-                  {!form.mint_date && (
+                  {/* "Save as Needs Review" only when no time AND not live */}
+                  {!isLiveNow && !form.mint_date && (
                     <button
                       onClick={() => handleSubmit(true)}
                       disabled={saving || !form.name.trim()}

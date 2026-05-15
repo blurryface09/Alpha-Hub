@@ -57,22 +57,25 @@ function scoreFor(project, tab) {
 }
 
 function isLive(project) {
+  // Explicit live_now flag from DB (set by OpenSea drops API or admin) — trust it directly
+  if (project.mint_status === 'live_now') return true
+
   if (!project.mint_date) return false
-  // Only trusted sources can use 'medium' confidence as confirmed for Live Now
+  // Only trusted sources can use 'medium' confidence as confirmed
   const trustedSource = ['opensea', 'alchemy', 'admin', 'community'].includes(project.source)
   const confidence = project.mint_date_confidence || project.source_confidence || 'low'
   const confirmed = ['high', 'manual', 'confirmed'].includes(confidence) ||
     (confidence === 'medium' && trustedSource)
-  if (!confirmed && project.mint_status !== 'live_now') return false
+  if (!confirmed) return false
   const date = new Date(project.mint_date).getTime()
   const now = Date.now()
   return date <= now && date > now - 12 * 60 * 60 * 1000
 }
 
 function friendlyMintStatus(project) {
-  if (project.mint_status === 'tba') return 'TBA'
+  if (project.mint_status === 'live_now' || isLive(project)) return 'Minting Now'
   if (project.mint_status === 'ended' || project.status === 'ended') return 'Ended'
-  if (isLive(project)) return 'Live now'
+  if (project.mint_status === 'tba') return 'TBA'
   if (!project.contract_address) return 'Needs contract'
   if (!project.mint_date) return 'Needs time'
   if (!project.mint_url && !project.website_url) return 'Needs mint URL'
