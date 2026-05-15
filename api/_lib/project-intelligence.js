@@ -1,3 +1,5 @@
+import { fetchOpenSeaDropBySlug } from '../../src/server/calendar/adapters/opensea.js'
+
 const ADDRESS_RE = /^0x[a-fA-F0-9]{40}$/
 const URL_RE = /https?:\/\/[^\s<>"')]+/i
 const PRICE_RE = /\b(?:price|mint price|cost)[:\s-]*([0-9]*\.?[0-9]+)\s*(?:eth|Ξ)\b/i
@@ -196,16 +198,19 @@ export async function detectProject(input = {}) {
   const url = firstUrl(raw) || (String(input.url || '').startsWith('http') ? String(input.url).trim() : null)
   const notes = []
   const urlInfo = url ? inferFromUrl(url) : (raw && !looksLikeAddress(raw) ? inferFromUrl(raw) : null)
+  const openSeaDrop = urlInfo?.source === 'opensea' && urlInfo.collectionSlug
+    ? await fetchOpenSeaDropBySlug(urlInfo.collectionSlug)
+    : null
   const pageMeta = url ? await fetchPageMetadata(url) : null
-  const contract = looksLikeAddress(raw) ? raw : (firstAddress(input.contractAddress) || firstAddress(raw) || pageMeta?.contractAddress || null)
-  const chain = normalizeChain(input.chain || urlInfo?.chain || raw)
-  const time = pageMeta?.time || detectTimeFromText(raw)
-  const phase = normalizePhase(raw)
-  const price = pageMeta?.price || raw.match(PRICE_RE)?.[1] || null
-  const name = input.projectName || pageMeta?.title?.replace(/\s+-\s+OpenSea.*$/i, '').replace(/\|.*$/g, '').trim() || urlInfo?.name || (contract ? `Needs Review ${contract.slice(0, 6)}...${contract.slice(-4)}` : 'Untitled Alpha')
-  const mintUrl = urlInfo?.mintUrl || url || null
+  const contract = looksLikeAddress(raw) ? raw : (firstAddress(input.contractAddress) || firstAddress(raw) || openSeaDrop?.contract_address || pageMeta?.contractAddress || null)
+  const chain = normalizeChain(input.chain || openSeaDrop?.chain || urlInfo?.chain || raw)
+  const time = openSeaDrop?.mint_date ? { mintDate: openSeaDrop.mint_date, source: 'opensea_drops', confidence: 'high' } : (pageMeta?.time || detectTimeFromText(raw))
+  const phase = openSeaDrop?.mint_type ? normalizePhase(openSeaDrop.mint_type) : normalizePhase(raw)
+  const price = openSeaDrop?.mint_price || pageMeta?.price || raw.match(PRICE_RE)?.[1] || null
+  const name = input.projectName || openSeaDrop?.name || pageMeta?.title?.replace(/\s+-\s+OpenSea.*$/i, '').replace(/\|.*$/g, '').trim() || urlInfo?.name || (contract ? `Needs Review ${contract.slice(0, 6)}...${contract.slice(-4)}` : 'Untitled Alpha')
+  const mintUrl = openSeaDrop?.mint_url || urlInfo?.mintUrl || url || null
   const hasMintSource = Boolean(mintUrl && !urlInfo?.xUrl)
-  const mintStatus = statusFromFields({ mintDate: time?.mintDate, mintEndDate: null, hasMintSource, mintText: `${raw} ${pageMeta?.description || ''}` })
+  const mintStatus = openSeaDrop?.mint_status || statusFromFields({ mintDate: time?.mintDate, mintEndDate: openSeaDrop?.mint_end_date || null, hasMintSource, mintText: `${raw} ${pageMeta?.description || ''}` })
   const missingFields = []
 
   if (!contract) missingFields.push('contract_address')
@@ -215,8 +220,9 @@ export async function detectProject(input = {}) {
 
   let confidenceScore = 20
   if (urlInfo) confidenceScore += 20
+  if (openSeaDrop?.source_confidence === 'high') confidenceScore += 30
   if (pageMeta?.title || pageMeta?.description) confidenceScore += 15
-  if (pageMeta?.imageUrl) confidenceScore += 10
+  if (pageMeta?.imageUrl || openSeaDrop?.image_url) confidenceScore += 10
   if (contract) confidenceScore += 20
   if (time?.mintDate) confidenceScore += time.confidence === 'high' ? 20 : time.confidence === 'medium' ? 12 : 6
   if (price) confidenceScore += 5
@@ -226,12 +232,13 @@ export async function detectProject(input = {}) {
 
   if (!urlInfo && !contract) notes.push('Add an official link or contract for stronger detection.')
   if (contract && !urlInfo) notes.push('Raw contract detected. Confirm official links before Strike Mode.')
+  if (openSeaDrop?.source_confidence === 'high') notes.push('Verified OpenSea Drop data found.')
   if (!time) notes.push('Mint time was not confidently detected. Ask the user to confirm manually.')
   if (mintStatus === 'needs_review') notes.push('Needs review: missing contract, mint time, or official mint source.')
   if (chain === 'solana') notes.push('Solana is scaffolded for discovery only. Mint execution is not enabled yet.')
 
   console.log('Alpha intake detection', {
-    source: urlInfo?.source || (contract ? 'contract' : 'text'),
+    source: openSeaDrop ? 'opensea_drops' : (urlInfo?.source || (contract ? 'contract' : 'text')),
     chain,
     contractFound: Boolean(contract),
     mintStatus,
@@ -247,14 +254,14 @@ export async function detectProject(input = {}) {
       chain,
       chainId: chainIdFor(chain),
       contractAddress: contract,
-      imageUrl: pageMeta?.imageUrl || null,
+      imageUrl: openSeaDrop?.image_url || pageMeta?.imageUrl || null,
       mintUrl,
-      websiteUrl: urlInfo?.websiteUrl || null,
+      websiteUrl: openSeaDrop?.website_url || urlInfo?.websiteUrl || null,
       xUrl: urlInfo?.xUrl || null,
       sourceUrl: urlInfo?.sourceUrl || null,
-      source: urlInfo?.source || (contract ? 'contract' : 'manual'),
+      source: openSeaDrop ? 'opensea_drops' : (urlInfo?.source || (contract ? 'contract' : 'manual')),
       mintDate: time?.mintDate || null,
-      mintEndDate: null,
+      mintEndDate: openSeaDrop?.mint_end_date || null,
       mintDateSource: time?.source || null,
       mintDateConfidence: time?.confidence || 'low',
       sourceTimezone: 'UTC',

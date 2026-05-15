@@ -28,7 +28,7 @@ export function calendarQualityScore(project) {
     hasUsefulProjectName(project),
     Boolean(project.image_url),
     Boolean(project.mint_url || project.website_url),
-    ['opensea', 'alchemy', 'zora', 'community', 'admin'].includes(project.source),
+    ['opensea_drops', 'opensea', 'alchemy', 'zora', 'community', 'admin'].includes(project.source),
     Boolean(project.contract_address),
     Boolean(project.mint_date || project.mint_status === 'live_now' || project.mint_status === 'upcoming'),
     Boolean(project.slug && !isAddressLikeName(project.slug)),

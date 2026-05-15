@@ -18,6 +18,9 @@ const EXTENDED_PROJECT_FIELDS = [
   'community_name',
   'community_x_handle',
   'submitted_by_label',
+  'mint_status',
+  'mint_end_date',
+  'source_metadata',
 ]
 
 const ADAPTERS = {
@@ -231,7 +234,7 @@ export async function getCalendarStatus(supabase) {
 
   const rows = projects.data || []
   const now = Date.now()
-  const liveCount = rows.filter(row => row.status === 'live' || (row.mint_date && new Date(row.mint_date).getTime() <= now)).length
+  const liveCount = rows.filter(row => row.mint_status === 'live_now' || row.status === 'live').length
   const upcomingCount = rows.filter(row => row.status === 'approved' && row.mint_date && new Date(row.mint_date).getTime() > now).length
   const pendingCount = rows.filter(row => row.status === 'pending_review').length
   const newContractCount = rows.filter(row => row.source === 'onchain').length
