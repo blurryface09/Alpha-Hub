@@ -58,7 +58,11 @@ function scoreFor(project, tab) {
 
 function isLive(project) {
   if (!project.mint_date) return false
-  const confirmed = ['high', 'medium', 'manual', 'confirmed'].includes(project.mint_date_confidence || project.source_confidence)
+  // Only trusted sources can use 'medium' confidence as confirmed for Live Now
+  const trustedSource = ['opensea', 'alchemy', 'admin', 'community'].includes(project.source)
+  const confidence = project.mint_date_confidence || project.source_confidence || 'low'
+  const confirmed = ['high', 'manual', 'confirmed'].includes(confidence) ||
+    (confidence === 'medium' && trustedSource)
   if (!confirmed && project.mint_status !== 'live_now') return false
   const date = new Date(project.mint_date).getTime()
   const now = Date.now()

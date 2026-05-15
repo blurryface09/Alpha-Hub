@@ -107,6 +107,15 @@ export default function ProjectCard({ project, isMinting, onMint, onDelete, onSt
                 <span className={"badge text-[10px] " + (project.chain === "eth" ? "badge-purple" : "badge-cyan")}>
                   {(project.chain || "eth").toUpperCase()}
                 </span>
+                {!project.contract_address && (
+                  <span className="badge badge-red text-[10px]">Needs Contract</span>
+                )}
+                {project.contract_address && !project.mint_date && (
+                  <span className="badge badge-yellow text-[10px]">Needs Time</span>
+                )}
+                {project.notes?.includes('Needs review') && (
+                  <span className="badge badge-yellow text-[10px]">Needs Review</span>
+                )}
                 {intel && intel.wl_giveaway_likely && (
                   <span className="badge badge-green text-[10px] animate-pulse-slow">WL GIVEAWAY</span>
                 )}
