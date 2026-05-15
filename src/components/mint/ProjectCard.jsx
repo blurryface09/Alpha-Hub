@@ -129,7 +129,7 @@ export default function ProjectCard({ project, isMinting, onMint, onDelete, onSt
                     mintDate={project.mint_date}
                     isAuto={false}
                   />
-                      : <span className="font-mono text-xs text-muted">{new Date(project.mint_date).toLocaleDateString()}</span>
+                      : <span className="font-mono text-xs text-muted" title={project.mint_date}>{new Date(project.mint_date).toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}</span>
                     }
                   </div>
                 )}
