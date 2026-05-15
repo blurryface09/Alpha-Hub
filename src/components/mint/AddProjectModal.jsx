@@ -63,6 +63,24 @@ function CountdownBadge({ text }) {
   )
 }
 
+// ── WL type badge (per stage) ─────────────────────────────────────────────────
+function WlTypeBadge({ type }) {
+  const MAP = {
+    GTD:     { cls: 'bg-green/12 text-green border-green/25',           label: 'GTD'    },
+    FCFS:    { cls: 'bg-yellow-400/12 text-yellow-400 border-yellow-400/25', label: 'FCFS'   },
+    RAFFLE:  { cls: 'bg-purple-400/12 text-purple-400 border-purple-400/25', label: 'Raffle' },
+    PUBLIC:  { cls: 'bg-blue-400/12 text-blue-400 border-blue-400/25',  label: 'Public' },
+    UNKNOWN: null,
+  }
+  const c = MAP[type]
+  if (!c) return null
+  return (
+    <span className={`inline-flex items-center text-[9px] font-mono px-1.5 py-0.5 rounded border font-semibold ${c.cls}`}>
+      {c.label}
+    </span>
+  )
+}
+
 // ── Phase label map ───────────────────────────────────────────────────────────
 const PHASE_LABELS = {
   gtd:          'GTD Allowlist',
@@ -163,6 +181,10 @@ export default function AddProjectModal({ onAdd, onClose }) {
       const resp = await fetch(`/api/metadata?url=${encodeURIComponent(trimmed)}`)
       const data = await resp.json()
       setMeta(data)
+      // When has WL phase, pick the first WL stage's type as the default wl_type
+      const firstWlStage = Array.isArray(data.stages)
+        ? data.stages.find(s => ['GTD', 'FCFS', 'RAFFLE'].includes(s.wl_type))
+        : null
       setForm(makeForm({
         source_url:       trimmed,
         name:             data.name             || '',
@@ -172,7 +194,7 @@ export default function AddProjectModal({ onAdd, onClose }) {
         mint_price:       data.mint_price       || '',
         mint_date:        data.mint_date        || '',
         mint_phase:       data.mint_phase       || '',
-        wl_type:          data.wl_type          || 'UNKNOWN',
+        wl_type:          firstWlStage?.wl_type || data.wl_type || 'UNKNOWN',
         notes:            data.notes            || '',
       }))
       setStep(2)
@@ -224,16 +246,19 @@ export default function AddProjectModal({ onAdd, onClose }) {
   const isEnded         = meta?.mint_status === 'ended'
   const countdownText   = meta?.countdown_text || null
   const priceNote       = meta?.price_note     || null  // "Price not exposed by OpenSea"
+  const hasWlPhase      = meta?.has_wl_phase   || false
+  const priceToken      = (form.chain || meta?.chain) === 'bnb' ? 'BNB' : 'ETH'
 
   const missingChips = useMemo(() => {
     const chips = []
     // Don't show "Needs time" when live or when countdown detected (upcoming is fine)
     if (!isLiveNow && !form.mint_date && !countdownText) chips.push('mint_date')
     if (!form.contract_address)                          chips.push('contract_address')
-    // Don't show "Optional price" when we have a specific note from OpenSea
-    if (!form.mint_price && !priceNote)                  chips.push('mint_price')
+    // Suppress "Optional price" when OpenSea gave a note OR we already have per-stage prices
+    const hasStagePrice = Array.isArray(meta?.stages) && meta.stages.some(s => s.price != null)
+    if (!form.mint_price && !priceNote && !hasStagePrice) chips.push('mint_price')
     return chips
-  }, [isLiveNow, form.mint_date, countdownText, form.contract_address, form.mint_price, priceNote])
+  }, [isLiveNow, form.mint_date, countdownText, form.contract_address, form.mint_price, priceNote, meta?.stages])
 
   const strikeBlockers = useMemo(() =>
     form.mint_mode === 'auto' ? getStrikeBlockers(form) : [],
@@ -373,39 +398,58 @@ export default function AddProjectModal({ onAdd, onClose }) {
                         : conf.mint_date
                       }
                       placeholder="Not detected" />
-                    <ReviewRow label="Price"
-                      value={meta.mint_price
-                        ? `${meta.mint_price} ${meta.chain === 'bnb' ? 'BNB' : 'ETH'}`
-                        : priceNote || null}
-                      conf={meta.mint_price ? conf.mint_price : null}
-                      placeholder="Not detected" />
-                    {meta.mint_phase && meta.mint_phase !== 'unknown' && (
-                      <ReviewRow label="Phase"
-                        value={PHASE_LABELS[meta.mint_phase] || meta.mint_phase}
-                        conf={conf.mint_phase} />
-                    )}
-
-                    {/* Multi-stage breakdown — only real stage names */}
-                    {Array.isArray(meta.stages) && meta.stages.length >= 2 && (
-                      <div className="mt-2 pt-2 border-t border-border/40">
-                        <p className="text-[10px] text-muted uppercase tracking-wider mb-1.5 font-mono">Stages</p>
-                        {meta.stages.slice(0, 4).map((s, i) => (
-                          <div key={i} className="flex items-center justify-between text-[10px] font-mono py-0.5">
-                            <span className="text-muted truncate max-w-[110px]">
-                              {s.name || `Stage ${i + 1}`}
+                    {/* Price — show per-stage table when stages available, else single price row */}
+                    {Array.isArray(meta.stages) && meta.stages.length ? (
+                      <div className="mt-1 pt-1.5 border-t border-border/40">
+                        <div className="flex items-center justify-between mb-1.5">
+                          <p className="text-[10px] text-muted uppercase tracking-wider font-mono">Mint Phases</p>
+                          {hasWlPhase && (
+                            <span className="inline-flex items-center gap-1 text-[9px] font-mono px-1.5 py-0.5 rounded border bg-green/10 text-green border-green/25 font-semibold">
+                              🔒 Has WL Phase
                             </span>
-                            <span className="text-text">
-                              {s.price != null ? `${s.price} ETH` : ''}
-                              {s.start_time
-                                ? ` · ${new Date(s.start_time).toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}`
-                                : ''}
-                            </span>
-                          </div>
-                        ))}
-                        {meta.stages.length > 4 && (
-                          <p className="text-[10px] text-muted mt-0.5">+{meta.stages.length - 4} more</p>
+                          )}
+                        </div>
+                        {meta.stages.slice(0, 5).map((s, i) => {
+                          const priceStr = s.price != null
+                            ? (s.price === '0' || s.price === 0 ? 'Free' : `${s.price} ${priceToken}`)
+                            : priceNote ? '—' : '—'
+                          const timeStr = s.start_time
+                            ? new Date(s.start_time).toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })
+                            : null
+                          return (
+                            <div key={i} className="flex items-center gap-1.5 py-0.5">
+                              <WlTypeBadge type={s.wl_type} />
+                              <span className="text-[10px] font-mono text-muted truncate flex-1 min-w-0">
+                                {s.name || `Phase ${i + 1}`}
+                                {timeStr && <span className="opacity-60"> · {timeStr}</span>}
+                              </span>
+                              <span className={`text-[10px] font-mono shrink-0 ${s.price == null ? 'text-muted/50' : s.price === '0' || s.price === 0 ? 'text-green' : 'text-text'}`}>
+                                {priceStr}
+                              </span>
+                            </div>
+                          )
+                        })}
+                        {meta.stages.length > 5 && (
+                          <p className="text-[10px] text-muted mt-0.5 font-mono">+{meta.stages.length - 5} more phases</p>
+                        )}
+                        {priceNote && (
+                          <p className="text-[10px] text-muted/60 font-mono mt-1 italic">{priceNote}</p>
                         )}
                       </div>
+                    ) : (
+                      <>
+                        <ReviewRow label="Price"
+                          value={meta.mint_price
+                            ? (meta.mint_price === '0' ? 'Free' : `${meta.mint_price} ${priceToken}`)
+                            : priceNote || null}
+                          conf={meta.mint_price ? conf.mint_price : null}
+                          placeholder="Not detected" />
+                        {meta.mint_phase && meta.mint_phase !== 'unknown' && (
+                          <ReviewRow label="Phase"
+                            value={PHASE_LABELS[meta.mint_phase] || meta.mint_phase}
+                            conf={conf.mint_phase} />
+                        )}
+                      </>
                     )}
 
                     {meta.warning && (

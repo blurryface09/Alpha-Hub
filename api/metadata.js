@@ -290,7 +290,8 @@ async function fetchOpenSeaDrops(slug) {
 
       if (nestedStages) {
         for (const s of nestedStages) {
-          const rawName = s.stage || s.stage_name || s.name || null
+          const rawName      = s.stage || s.stage_name || s.name || null
+          const allowlistRaw = s.allowlist_type || s.sale_type || null
           allStages.push({
             name:           stageDisplayName(rawName),
             raw_name:       rawName,
@@ -298,10 +299,13 @@ async function fetchOpenSeaDrops(slug) {
             end_time:       s.end_date    || s.end_time    || dropEnd   || null,
             price:          extractStagePrice(s, dropPrice),
             max_per_wallet: s.max_per_wallet || drop.max_per_wallet || null,
+            allowlist_type: allowlistRaw,
+            wl_type:        stageToWlType(rawName || allowlistRaw || ''),
           })
         }
       } else {
-        const rawName = drop.stage_name || drop.stage || null
+        const rawName      = drop.stage_name || drop.stage || null
+        const allowlistRaw = drop.allowlist_type || drop.sale_type || null
         allStages.push({
           name:           stageDisplayName(rawName),
           raw_name:       rawName,
@@ -309,6 +313,8 @@ async function fetchOpenSeaDrops(slug) {
           end_time:       dropEnd,
           price:          dropPrice,
           max_per_wallet: drop.max_per_wallet || null,
+          allowlist_type: allowlistRaw,
+          wl_type:        stageToWlType(rawName || allowlistRaw || ''),
         })
       }
     }
@@ -330,10 +336,24 @@ async function fetchOpenSeaDrops(slug) {
     const primary   = liveStage || upcomingStage || allStages.at(-1)
     const isLiveNow = Boolean(liveStage)
 
-    // Only expose stages when ≥2 exist with real names or times
+    // Include all stages that have a name or time (even single-stage drops)
     const cleanStages = allStages
-      .filter(s => s.name || s.start_time)
-      .map(s => ({ name: s.name, start_time: s.start_time, end_time: s.end_time, price: s.price }))
+      .filter(s => s.name || s.start_time || s.price != null)
+      .map(s => ({
+        name:           s.name,
+        start_time:     s.start_time,
+        end_time:       s.end_time,
+        price:          s.price,
+        wl_type:        s.wl_type        || 'UNKNOWN',
+        max_per_wallet: s.max_per_wallet || null,
+      }))
+
+    // WL phase = any stage that requires allowlist access (not plain PUBLIC)
+    const has_wl_phase = allStages.some(s =>
+      ['GTD', 'FCFS', 'RAFFLE'].includes(s.wl_type) ||
+      s.allowlist_type === 'merkle_tree' ||
+      s.allowlist_type === 'allowlist'
+    )
 
     const result = {
       mint_status:    isLiveNow ? 'live_now' : upcomingStage ? 'upcoming' : null,
@@ -344,7 +364,8 @@ async function fetchOpenSeaDrops(slug) {
       mint_price:     primary?.price      || null,
       stage_name:     primary?.raw_name   || null,
       max_per_wallet: primary?.max_per_wallet || null,
-      stages:         cleanStages.length >= 2 ? cleanStages : null,
+      stages:         cleanStages.length  ? cleanStages : null,
+      has_wl_phase,
     }
 
     console.log('[opensea-drops] slug=%s status=%s stage=%s start=%s price=%s stages=%d',
@@ -682,6 +703,7 @@ async function extractMetadata(rawInput) {
           wl_type:          stageName ? stageToWlType(stageName)    : 'UNKNOWN',
           max_per_wallet:   drop?.max_per_wallet || null,
           stages:           drop?.stages         || null,
+          has_wl_phase:     drop?.has_wl_phase   || false,
           notes:            api.description?.slice(0, 120) || `OpenSea: ${slug}`,
           confidence: {
             name:             'api_verified',
