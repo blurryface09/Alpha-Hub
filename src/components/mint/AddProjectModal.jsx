@@ -54,6 +54,15 @@ function LiveBadge() {
   )
 }
 
+// ── "Upcoming — N hours" countdown badge ─────────────────────────────────────
+function CountdownBadge({ text }) {
+  return (
+    <span className="inline-flex items-center gap-1 text-[10px] font-mono px-2.5 py-1 rounded-full bg-accent3/10 text-accent3 border border-accent3/25 font-semibold">
+      ⏱ Upcoming · {text}
+    </span>
+  )
+}
+
 // ── Phase label map ───────────────────────────────────────────────────────────
 const PHASE_LABELS = {
   gtd:          'GTD Allowlist',
@@ -209,17 +218,22 @@ export default function AddProjectModal({ onAdd, onClose }) {
   }, [form, onAdd])
 
   // ── Derived state (memoised) ──────────────────────────────────────────────
-  const conf        = meta?.confidence || {}
-  const isLiveNow   = meta?.mint_status === 'live_now'
-  const isEnded     = meta?.mint_status === 'ended'
+  const conf            = meta?.confidence || {}
+  const isLiveNow       = meta?.mint_status === 'live_now'
+  const isUpcoming      = meta?.mint_status === 'upcoming'
+  const isEnded         = meta?.mint_status === 'ended'
+  const countdownText   = meta?.countdown_text || null
+  const priceNote       = meta?.price_note     || null  // "Price not exposed by OpenSea"
 
   const missingChips = useMemo(() => {
     const chips = []
-    if (!isLiveNow && !form.mint_date)        chips.push('mint_date')
-    if (!form.contract_address)               chips.push('contract_address')
-    if (!form.mint_price)                     chips.push('mint_price')
+    // Don't show "Needs time" when live or when countdown detected (upcoming is fine)
+    if (!isLiveNow && !form.mint_date && !countdownText) chips.push('mint_date')
+    if (!form.contract_address)                          chips.push('contract_address')
+    // Don't show "Optional price" when we have a specific note from OpenSea
+    if (!form.mint_price && !priceNote)                  chips.push('mint_price')
     return chips
-  }, [isLiveNow, form.mint_date, form.contract_address, form.mint_price])
+  }, [isLiveNow, form.mint_date, countdownText, form.contract_address, form.mint_price, priceNote])
 
   const strikeBlockers = useMemo(() =>
     form.mint_mode === 'auto' ? getStrikeBlockers(form) : [],
@@ -250,6 +264,7 @@ export default function AddProjectModal({ onAdd, onClose }) {
               {step === 1 ? 'Add Alpha' : form.name || 'New Project'}
             </h2>
             {step === 2 && isLiveNow && <LiveBadge />}
+            {step === 2 && !isLiveNow && countdownText && <CountdownBadge text={countdownText} />}
           </div>
           <div className="flex items-center gap-2">
             {step === 2 && (meta?.source_url || url) && (
@@ -319,7 +334,8 @@ export default function AddProjectModal({ onAdd, onClose }) {
                         <Sparkles size={9} className="text-accent" /> Intelligence Report
                       </p>
                       {isLiveNow && <LiveBadge />}
-                      {isEnded  && (
+                      {!isLiveNow && countdownText && <CountdownBadge text={countdownText} />}
+                      {isEnded && (
                         <span className="text-[10px] font-mono px-2 py-0.5 rounded-full bg-muted/10 text-muted border border-border2">
                           Ended
                         </span>
@@ -341,19 +357,27 @@ export default function AddProjectModal({ onAdd, onClose }) {
                       conf={conf.contract_address}
                       placeholder="Not detected" />
                     <ReviewRow
-                      label={isLiveNow ? 'Mint State' : 'Mint Date'}
-                      value={isLiveNow
-                        ? 'Minting Now'
-                        : meta.mint_date
-                          ? new Date(meta.mint_date).toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })
-                          : null}
-                      conf={isLiveNow ? 'api_verified' : conf.mint_date}
+                      label="Mint State"
+                      value={
+                        isLiveNow     ? 'Minting Now'
+                      : countdownText ? `Upcoming · in ${countdownText}`
+                      : isUpcoming    ? 'Upcoming'
+                      : isEnded       ? 'Ended'
+                      : meta.mint_date
+                        ? new Date(meta.mint_date).toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })
+                        : null
+                      }
+                      conf={
+                        isLiveNow ? 'api_verified'
+                        : (isUpcoming || countdownText) ? (conf.mint_date || 'page_detected')
+                        : conf.mint_date
+                      }
                       placeholder="Not detected" />
                     <ReviewRow label="Price"
                       value={meta.mint_price
                         ? `${meta.mint_price} ${meta.chain === 'bnb' ? 'BNB' : 'ETH'}`
-                        : null}
-                      conf={conf.mint_price}
+                        : priceNote || null}
+                      conf={meta.mint_price ? conf.mint_price : null}
                       placeholder="Not detected" />
                     {meta.mint_phase && meta.mint_phase !== 'unknown' && (
                       <ReviewRow label="Phase"
@@ -422,11 +446,18 @@ export default function AddProjectModal({ onAdd, onClose }) {
                   <div>
                     <div className="flex items-center justify-between mb-1.5">
                       <label className="text-xs font-mono text-muted uppercase tracking-wider">Mint Date & Time</label>
-                      {conf.mint_date
+                      {conf.mint_date && conf.mint_date !== 'low'
                         ? <ConfBadge level={conf.mint_date} />
-                        : !form.mint_date && <MissingChip type="mint_date" />}
+                        : countdownText
+                          ? <span className="text-[10px] font-mono text-amber-300 px-1.5 py-0.5 bg-amber-400/10 rounded">⏱ Approx — confirm</span>
+                          : !form.mint_date && <MissingChip type="mint_date" />}
                     </div>
                     <DateTimePicker value={form.mint_date} onChange={v => set('mint_date', v)} />
+                    {countdownText && !form.mint_date && (
+                      <p className="text-[10px] text-muted mt-1">
+                        Countdown detected: <span className="text-accent3 font-mono">{countdownText}</span> — confirm exact time before arming Strike Mode
+                      </p>
+                    )}
                   </div>
                 )}
 
