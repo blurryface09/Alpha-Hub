@@ -1,0 +1,16 @@
+{
+  "name": "opensea-render-extractor",
+  "version": "1.0.0",
+  "description": "Railway browser-render service for OpenSea mint schedule extraction",
+  "type": "module",
+  "main": "opensea-render-extractor.js",
+  "scripts": {
+    "start": "node opensea-render-extractor.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "playwright": "^1.44.0"
+  }
+}

@@ -2,8 +2,10 @@
 // Supports: OpenSea (API + page scrape + countdown), Zora, Magic Eden,
 //           Twitter/X, direct 0x contract address, plain alpha text, generic URLs
 
-const OPENSEA_KEY = process.env.OPENSEA_API_KEY
-const GROQ_KEY    = process.env.GROQ_API_KEY || process.env.VITE_GROQ_API_KEY
+const OPENSEA_KEY             = process.env.OPENSEA_API_KEY
+const GROQ_KEY                = process.env.GROQ_API_KEY || process.env.VITE_GROQ_API_KEY
+const RENDER_EXTRACTOR_URL    = process.env.RENDER_EXTRACTOR_URL    || ''
+const RENDER_EXTRACTOR_SECRET = process.env.RENDER_EXTRACTOR_SECRET || ''
 
 const CHAIN_MAP = {
   ethereum: 'eth', eth: 'eth', mainnet: 'eth',
@@ -684,6 +686,62 @@ async function resolveOpenSeaStages(slug, pageUrl, token = 'ETH') {
           schedule_exposed: false, needs_manual_confirmation: true,
           debug_opensea_extraction: debug,
         }
+      }
+    }
+
+    // ── Browser render extractor fallback ────────────────────────────────
+    if (RENDER_EXTRACTOR_URL) {
+      debug.sources_called.push('render_extractor:attempt')
+      try {
+        const extractUrl = `${RENDER_EXTRACTOR_URL.replace(/\/$/, '')}/extract?url=${encodeURIComponent(pageUrl)}`
+        const headers = { 'Content-Type': 'application/json' }
+        if (RENDER_EXTRACTOR_SECRET) headers['X-Extractor-Secret'] = RENDER_EXTRACTOR_SECRET
+        const renderRes = await fetch(extractUrl, {
+          headers,
+          signal: AbortSignal.timeout(30_000),
+        })
+        if (renderRes.ok) {
+          const renderData = await renderRes.json()
+          debug.sources_called.push('render_extractor:ok')
+          if (renderData.schedule_exposed && Array.isArray(renderData.stages) && renderData.stages.length > 0) {
+            debug.schedule_exposed           = true
+            debug.needs_manual_confirmation  = renderData.needs_manual_confirmation ?? false
+            debug.final_reason               = 'render_extractor_stages'
+            debug.accepted_stages            = renderData.stages.length
+            return {
+              stages:                   renderData.stages,
+              current_stage:            renderData.current_stage            || null,
+              next_stage:               renderData.next_stage               || null,
+              mint_status:              renderData.mint_status              || null,
+              mint_date:                renderData.mint_date                || null,
+              end_date:                 renderData.end_date                 || null,
+              mint_price:               renderData.mint_price               || null,
+              max_per_wallet:           renderData.max_per_wallet           || null,
+              has_wl_phase:             renderData.has_wl_phase             ?? false,
+              countdown_text:           renderData.countdown_text           || null,
+              schedule_exposed:         true,
+              needs_manual_confirmation: renderData.needs_manual_confirmation ?? false,
+              debug_opensea_extraction:  debug,
+            }
+          }
+          // Render extractor ran but found no stages — absorb any text signals it returned
+          debug.sources_called.push('render_extractor:no_stages')
+          if (renderData.mint_status && renderData.mint_status !== 'unknown') {
+            debug.final_reason = `render_extractor_text:${renderData.mint_status}`
+            return {
+              stages: [], mint_status: renderData.mint_status,
+              mint_date:     renderData.mint_date     || null,
+              countdown_text: renderData.countdown_text || null,
+              has_wl_phase: false, schedule_exposed: false,
+              needs_manual_confirmation: true,
+              debug_opensea_extraction: debug,
+            }
+          }
+        } else {
+          debug.sources_called.push(`render_extractor:http_${renderRes.status}`)
+        }
+      } catch (err) {
+        debug.sources_called.push(`render_extractor:error:${err.message?.slice(0, 60)}`)
       }
     }
 
