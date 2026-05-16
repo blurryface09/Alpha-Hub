@@ -18,13 +18,87 @@
  *            blocked_or_bot_detected, failure_reason, debug{} }
  */
 
-import { chromium } from 'playwright'
-import http          from 'http'
-import { URL }       from 'url'
+import { chromium as chromiumExtra } from 'playwright-extra'
+import StealthPlugin                 from 'puppeteer-extra-plugin-stealth'
+import http                          from 'http'
+import { URL }                       from 'url'
 
-const PORT   = Number(process.env.PORT || 3001)
-const SECRET = process.env.RENDER_EXTRACTOR_SECRET || ''
-const MAX_MS = Number(process.env.EXTRACTOR_TIMEOUT_MS || 25000)
+// Register stealth plugin — patches navigator.webdriver, chrome runtime,
+// permissions, plugins, etc. Must be called before first launch().
+chromiumExtra.use(StealthPlugin())
+
+const PORT            = Number(process.env.PORT || 3001)
+const SECRET          = process.env.RENDER_EXTRACTOR_SECRET || ''
+const MAX_MS          = Number(process.env.EXTRACTOR_TIMEOUT_MS || 30000)
+const PROXY_SERVER    = process.env.PROXY_SERVER    || ''
+const PROXY_USERNAME  = process.env.PROXY_USERNAME  || ''
+const PROXY_PASSWORD  = process.env.PROXY_PASSWORD  || ''
+
+// Realistic Chrome 124 stable UA
+const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.6367.155 Safari/537.36'
+
+// ────────────────────────────────────────────────────────────────────────────
+// STEALTH INIT SCRIPT
+// Injected into every page before any JS executes.
+// Belt-and-suspenders on top of playwright-extra-plugin-stealth.
+// ────────────────────────────────────────────────────────────────────────────
+
+const STEALTH_SCRIPT = `(function () {
+  // 1. navigator.webdriver → false
+  try { Object.defineProperty(navigator, 'webdriver', { get: () => false, configurable: true }) } catch {}
+
+  // 2. window.chrome (required by many bot-detection scripts)
+  try {
+    if (!window.chrome) window.chrome = {}
+    if (!window.chrome.runtime) window.chrome.runtime = {}
+    if (!window.chrome.app)     window.chrome.app     = { isInstalled: false, getDetails: function(){}, getIsInstalled: function(){}, installState: function(){} }
+    if (!window.chrome.csi)     window.chrome.csi     = function () {}
+    if (!window.chrome.loadTimes) window.chrome.loadTimes = function () { return {} }
+  } catch {}
+
+  // 3. navigator.languages
+  try { Object.defineProperty(navigator, 'languages', { get: () => ['en-US', 'en'], configurable: true }) } catch {}
+
+  // 4. navigator.plugins (fake three common Chrome plugins)
+  try {
+    const fakePlugins = [
+      { name: 'Chrome PDF Plugin',   filename: 'internal-pdf-viewer',               description: 'Portable Document Format' },
+      { name: 'Chrome PDF Viewer',   filename: 'mhjfbmdgcfjbbpaeojofohoefgiehjai',  description: '' },
+      { name: 'Native Client',       filename: 'internal-nacl-plugin',              description: '' },
+    ]
+    Object.defineProperty(navigator, 'plugins', { get: () => fakePlugins, configurable: true })
+    Object.defineProperty(navigator, 'mimeTypes', { get: () => [], configurable: true })
+  } catch {}
+
+  // 5. Hardware profile
+  try { Object.defineProperty(navigator, 'hardwareConcurrency', { get: () => 8,  configurable: true }) } catch {}
+  try { Object.defineProperty(navigator, 'deviceMemory',        { get: () => 8,  configurable: true }) } catch {}
+  try { Object.defineProperty(navigator, 'platform',            { get: () => 'Win32', configurable: true }) } catch {}
+
+  // 6. permissions.query — spoof notification permission
+  try {
+    const origQuery = window.navigator.permissions.query.bind(navigator.permissions)
+    window.navigator.permissions.query = (params) =>
+      params.name === 'notifications'
+        ? Promise.resolve({ state: Notification.permission, onchange: null })
+        : origQuery(params)
+  } catch {}
+
+  // 7. Erase CDP / Playwright artefacts
+  try { delete window.__playwright } catch {}
+  try { delete window.__pw_manual  } catch {}
+  try { delete window._phantom     } catch {}
+  try { delete window.callPhantom  } catch {}
+
+  // 8. Overwrite Notification.permission so it's not 'denied' (default in headless)
+  try { Object.defineProperty(Notification, 'permission', { get: () => 'default', configurable: true }) } catch {}
+
+  // 9. Screen dimensions consistent with 1280×900 viewport
+  try { Object.defineProperty(screen, 'availWidth',  { get: () => 1280, configurable: true }) } catch {}
+  try { Object.defineProperty(screen, 'availHeight', { get: () => 900,  configurable: true }) } catch {}
+  try { Object.defineProperty(screen, 'width',       { get: () => 1280, configurable: true }) } catch {}
+  try { Object.defineProperty(screen, 'height',      { get: () => 900,  configurable: true }) } catch {}
+})();`
 
 // ────────────────────────────────────────────────────────────────────────────
 // STAGE DEFINITIONS
@@ -481,50 +555,139 @@ function normalizeRawStage(s, token = 'ETH') {
 }
 
 // ────────────────────────────────────────────────────────────────────────────
+// ANTI-BOT HELPERS
+// ────────────────────────────────────────────────────────────────────────────
+
+/** Random integer in [base, base+range) */
+function jitter(base, range) {
+  return base + Math.floor(Math.random() * range)
+}
+
+/** Human-like mouse wiggle across the page */
+async function humanMouseMove(page) {
+  try {
+    const moves = jitter(3, 4)
+    for (let i = 0; i < moves; i++) {
+      await page.mouse.move(jitter(200, 900), jitter(150, 500), { steps: jitter(8, 15) })
+      await page.waitForTimeout(jitter(60, 140))
+    }
+  } catch {}
+}
+
+/** Gradual scroll down then back to top */
+async function humanScroll(page) {
+  try {
+    const bodyH = await page.evaluate(() => document.body.scrollHeight).catch(() => 3000)
+    const steps = jitter(4, 3) // 4–6 steps
+    for (let i = 1; i <= steps; i++) {
+      const y = Math.floor(bodyH * i / steps)
+      await page.evaluate((yy) => window.scrollTo({ top: yy, behavior: 'smooth' }), y)
+      await page.waitForTimeout(jitter(350, 500))
+    }
+    await page.evaluate(() => window.scrollTo({ top: 0, behavior: 'smooth' }))
+    await page.waitForTimeout(jitter(250, 350))
+  } catch {}
+}
+
+/**
+ * After a Cloudflare challenge page is detected, poll every second until the
+ * challenge clears (title/body no longer match BOT_PATTERNS) or timeout.
+ * Returns { resolved, waitMs }.
+ */
+async function waitForCloudflareClear(page, timeoutMs = 20000) {
+  const start = Date.now()
+  while (Date.now() - start < timeoutMs) {
+    await page.waitForTimeout(1000)
+    const { title, bodySnippet } = await page.evaluate(() => ({
+      title:       document.title || '',
+      bodySnippet: document.body?.innerText?.slice(0, 400) || '',
+    })).catch(() => ({ title: '', bodySnippet: '' }))
+    if (!BOT_PATTERNS.test(title + ' ' + bodySnippet)) {
+      return { resolved: true, waitMs: Date.now() - start }
+    }
+  }
+  return { resolved: false, waitMs: timeoutMs }
+}
+
+// ────────────────────────────────────────────────────────────────────────────
 // BROWSER EXTRACTION
 // ────────────────────────────────────────────────────────────────────────────
 
 async function extractFromBrowser(pageUrl, debugMode = false) {
   const info = {
-    steps:              [],
-    elapsed_ms:         0,
-    page_url:           pageUrl,
-    final_url:          null,
-    title:              null,
-    body_text_sample:   null,
-    selectors_found:    {},
-    iframe_count:       0,
+    steps:                   [],
+    elapsed_ms:              0,
+    page_url:                pageUrl,
+    final_url:               null,
+    title:                   null,
+    body_text_sample:        null,
+    selectors_found:         {},
+    iframe_count:            0,
     blocked_or_bot_detected: false,
-    schedule_text_found: false,
-    mint_keywords_found: [],
-    screenshot_captured: false,
-    inner_text_len:     0,
-    stage_elements:     0,
-    has_next_data:      false,
+    cloudflare_resolved:     false,
+    challenge_wait_ms:       0,
+    ua_used:                 UA,
+    schedule_text_found:     false,
+    mint_keywords_found:     [],
+    screenshot_captured:     false,
+    inner_text_len:          0,
+    stage_elements:          0,
+    has_next_data:           false,
   }
   const t0 = Date.now()
 
   let browser = null
   try {
-    browser = await chromium.launch({
+    // ── Launch with stealth + anti-detection flags ────────────────────────
+    const launchOptions = {
       headless: true,
       args: [
-        '--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage',
-        '--disable-accelerated-2d-canvas', '--no-first-run', '--no-zygote',
-        '--disable-gpu', '--disable-blink-features=AutomationControlled',
+        '--no-sandbox',
+        '--disable-setuid-sandbox',
+        '--disable-dev-shm-usage',
+        '--disable-accelerated-2d-canvas',
+        '--no-first-run',
+        '--no-zygote',
+        '--disable-gpu',
+        '--disable-blink-features=AutomationControlled',
+        '--disable-features=IsolateOrigins,site-per-process',
+        '--window-size=1280,900',
+        '--lang=en-US',
+        '--accept-lang=en-US,en;q=0.9',
       ],
-    })
+    }
 
-    const context = await browser.newContext({
-      userAgent:   'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+    if (PROXY_SERVER) {
+      launchOptions.proxy = {
+        server:   PROXY_SERVER,
+        username: PROXY_USERNAME || undefined,
+        password: PROXY_PASSWORD || undefined,
+      }
+      info.steps.push(`proxy:${PROXY_SERVER.replace(/\/\/.*@/, '//')}`)
+    }
+
+    browser = await chromiumExtra.launch(launchOptions)
+
+    const contextOptions = {
+      userAgent:   UA,
       viewport:    { width: 1280, height: 900 },
       locale:      'en-US',
       timezoneId:  'America/New_York',
-      // Hide automation flags
-      extraHTTPHeaders: { 'sec-ch-ua': '"Chromium";v="124", "Google Chrome";v="124"' },
-    })
+      colorScheme: 'dark',
+      extraHTTPHeaders: {
+        'sec-ch-ua':          '"Google Chrome";v="124", "Chromium";v="124", "Not-A.Brand";v="99"',
+        'sec-ch-ua-mobile':   '?0',
+        'sec-ch-ua-platform': '"Windows"',
+        'accept-language':    'en-US,en;q=0.9',
+      },
+    }
 
-    // Block only heavy assets — allow scripts, XHR, fetch (OpenSea needs them)
+    const context = await browser.newContext(contextOptions)
+
+    // Belt-and-suspenders stealth init script (runs before any page JS)
+    await context.addInitScript(STEALTH_SCRIPT)
+
+    // Block only heavy non-essential assets — allow scripts, XHR, fetch
     await context.route('**/*', (route, req) => {
       const type = req.resourceType()
       if (['image', 'media', 'font'].includes(type)) route.abort()
@@ -537,68 +700,95 @@ async function extractFromBrowser(pageUrl, debugMode = false) {
     // ── Phase 1: Navigate ─────────────────────────────────────────────────
     try {
       await page.goto(pageUrl, {
-        waitUntil: 'load',
-        timeout: Math.min(MAX_MS * 0.55, 14000),
+        waitUntil: 'domcontentloaded',
+        timeout:   Math.min(MAX_MS * 0.45, 12000),
       })
-      info.steps.push('page_load:ok')
+      info.steps.push('page_load:domcontentloaded')
     } catch (e) {
-      info.steps.push(`page_load:timeout_or_error:${String(e.message).slice(0,60)}`)
-      // Continue — partial load may still have useful content
+      info.steps.push(`page_load:error:${String(e.message).slice(0, 60)}`)
     }
 
-    // ── Phase 2: Wait for network to settle ───────────────────────────────
+    // ── Phase 2: Random pre-interaction delay (feels human) ───────────────
+    await page.waitForTimeout(jitter(600, 800))
+
+    // ── Phase 3: Detect Cloudflare challenge and wait for it to clear ─────
+    const earlyCheck = await page.evaluate(() => ({
+      title:  document.title || '',
+      body:   document.body?.innerText?.slice(0, 300) || '',
+    })).catch(() => ({ title: '', body: '' }))
+
+    if (BOT_PATTERNS.test(earlyCheck.title + ' ' + earlyCheck.body)) {
+      info.steps.push('cloudflare_challenge_detected')
+      info.blocked_or_bot_detected = true
+      // Move mouse realistically while waiting
+      await humanMouseMove(page)
+      const cfWait = await waitForCloudflareClear(page, 20000)
+      info.cloudflare_resolved = cfWait.resolved
+      info.challenge_wait_ms   = cfWait.waitMs
+      if (cfWait.resolved) {
+        info.steps.push(`cloudflare_cleared_after_${cfWait.waitMs}ms`)
+        info.blocked_or_bot_detected = false // cleared!
+      } else {
+        info.steps.push('cloudflare_not_cleared')
+        // Return early — no point extracting a challenge page
+        await browser.close(); browser = null
+        info.elapsed_ms = Date.now() - t0
+        return { extracted: null, debugInfo: info, error: 'cloudflare_not_cleared' }
+      }
+    }
+
+    // ── Phase 4: Wait for full load + networkidle ─────────────────────────
     try {
-      await page.waitForLoadState('networkidle', { timeout: 6000 })
+      await page.waitForLoadState('load', { timeout: 8000 })
+      info.steps.push('load_state:ok')
+    } catch {
+      info.steps.push('load_state:timeout')
+    }
+    try {
+      await page.waitForLoadState('networkidle', { timeout: 7000 })
       info.steps.push('networkidle:ok')
     } catch {
       info.steps.push('networkidle:timeout')
     }
 
-    // ── Phase 3: Wait for mint-relevant keywords ──────────────────────────
+    // ── Phase 5: Wait for mint-relevant keywords ──────────────────────────
     try {
       await page.waitForFunction(
-        (kws) => {
-          const t = document.body?.innerText || ''
-          return kws.some(k => t.includes(k))
-        },
+        (kws) => { const t = document.body?.innerText || ''; return kws.some(k => t.includes(k)) },
         WAIT_KEYWORDS,
-        { timeout: 8000 }
+        { timeout: 8000 },
       )
       info.steps.push('keywords:found')
     } catch {
       info.steps.push('keywords:timeout')
     }
 
-    // ── Phase 4: Scroll gradually (trigger lazy-loaded schedule) ─────────
-    await page.evaluate(() => window.scrollTo(0, Math.floor(document.body.scrollHeight * 0.33)))
-    await page.waitForTimeout(600)
-    await page.evaluate(() => window.scrollTo(0, Math.floor(document.body.scrollHeight * 0.66)))
-    await page.waitForTimeout(600)
-    await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight))
-    await page.waitForTimeout(600)
-    await page.evaluate(() => window.scrollTo(0, 0))
-    await page.waitForTimeout(500)
+    // ── Phase 6: Human mouse movement + gradual scroll ───────────────────
+    await humanMouseMove(page)
+    await humanScroll(page)
     info.steps.push('scroll:done')
 
-    // ── Phase 5: Screenshot (debug only) ─────────────────────────────────
+    // Extra settle time after scroll
+    await page.waitForTimeout(jitter(500, 600))
+
+    // ── Phase 7: Screenshot (debug only) ─────────────────────────────────
     if (debugMode) {
       try {
         await page.screenshot({ path: '/tmp/opensea-debug.png', fullPage: true })
         info.screenshot_captured = true
-        info.steps.push('screenshot:saved:/tmp/opensea-debug.png')
+        info.steps.push('screenshot:saved')
       } catch (e) {
-        info.steps.push(`screenshot:failed:${String(e.message).slice(0,60)}`)
+        info.steps.push(`screenshot:failed:${String(e.message).slice(0, 60)}`)
       }
     }
 
-    // ── Phase 6: Extract all data via page.evaluate ───────────────────────
+    // ── Phase 8: Extract all data ─────────────────────────────────────────
     const extracted = await page.evaluate(() => {
       const body      = document.body
       const innerText = (body?.innerText || '').trim()
       const title     = document.title || ''
       const finalUrl  = window.location.href
 
-      // Stage name elements via TreeWalker
       const STAGE_NAMES = [
         'Public Sale','Public Stage','Public Mint','Public',
         'Allowlist Sale','Allowlist Stage','Allowlist','Allow List',
@@ -607,6 +797,7 @@ async function extractFromBrowser(pageUrl, debugMode = false) {
         'Holder Mint','Holder','Raffle','OG','VIP','Community',
         'Early Access','Partner','Waitlist','Private',
       ]
+
       const stageElements = []
       try {
         const walker = document.createTreeWalker(body, NodeFilter.SHOW_TEXT)
@@ -614,36 +805,27 @@ async function extractFromBrowser(pageUrl, debugMode = false) {
         while ((node = walker.nextNode())) {
           const t = (node.textContent || '').trim()
           if (STAGE_NAMES.some(n => t.toLowerCase() === n.toLowerCase())) {
-            // Walk up to find stage card container (~8 levels)
             let el = node.parentElement
             for (let i = 0; i < 8 && el && el !== body; i++) {
-              // Stop if container looks like a full card (has enough text)
               if (el.innerText && el.innerText.length > 30 && el.innerText.length < 2000) break
               el = el.parentElement
             }
             if (el && el !== body) {
-              stageElements.push({
-                stageName: t,
-                cardText: (el.innerText || '').trim().slice(0, 600),
-              })
+              stageElements.push({ stageName: t, cardText: (el.innerText || '').trim().slice(0, 600) })
             }
           }
         }
       } catch {}
 
-      // __NEXT_DATA__
       let nextDataJson = null
       try {
-        if (window.__NEXT_DATA__) {
-          nextDataJson = JSON.stringify(window.__NEXT_DATA__).slice(0, 100000)
-        }
+        if (window.__NEXT_DATA__) nextDataJson = JSON.stringify(window.__NEXT_DATA__).slice(0, 100000)
       } catch {}
 
-      // Selector counts for debug
       const selectorHits = {}
       for (const sel of [
-        '[data-testid*="mint"]', '[class*="mintSchedule"]', '[class*="mint-schedule"]',
-        '[class*="stage"]', '[class*="phase"]', '[data-testid*="stage"]',
+        '[data-testid*="mint"]','[class*="mintSchedule"]','[class*="mint-schedule"]',
+        '[class*="stage"]','[class*="phase"]','[data-testid*="stage"]',
       ]) {
         try { selectorHits[sel] = document.querySelectorAll(sel).length } catch {}
       }
@@ -663,37 +845,36 @@ async function extractFromBrowser(pageUrl, debugMode = false) {
 
     info.steps.push('dom_extracted')
 
-    // ── Enrich debug info ─────────────────────────────────────────────────
-    info.final_url              = extracted.finalUrl
-    info.title                  = extracted.title
-    info.body_text_sample       = extracted.bodyTextSample
-    info.iframe_count           = extracted.iframeCount
-    info.selectors_found        = extracted.selectorHits
-    info.inner_text_len         = extracted.innerText.length
-    info.stage_elements         = extracted.stageElements.length
-    info.has_next_data          = extracted.hasNextData
-    info.schedule_text_found    = /mint\s+schedule/i.test(extracted.innerText)
-    info.mint_keywords_found    = WAIT_KEYWORDS.filter(k => extracted.innerText.includes(k))
+    // ── Populate debug fields ─────────────────────────────────────────────
+    info.final_url           = extracted.finalUrl
+    info.title               = extracted.title
+    info.body_text_sample    = extracted.bodyTextSample
+    info.iframe_count        = extracted.iframeCount
+    info.selectors_found     = extracted.selectorHits
+    info.inner_text_len      = extracted.innerText.length
+    info.stage_elements      = extracted.stageElements.length
+    info.has_next_data       = extracted.hasNextData
+    info.schedule_text_found = /mint\s+schedule/i.test(extracted.innerText)
+    info.mint_keywords_found = WAIT_KEYWORDS.filter(k => extracted.innerText.includes(k))
 
-    // Bot/blocked detection
+    // Final bot-check on actual page content
     const checkText = (extracted.title + ' ' + extracted.bodyTextSample).toLowerCase()
-    info.blocked_or_bot_detected = BOT_PATTERNS.test(checkText)
-    if (info.blocked_or_bot_detected) {
-      info.steps.push('bot_detected')
+    if (BOT_PATTERNS.test(checkText)) {
+      info.blocked_or_bot_detected = true
+      info.steps.push('bot_still_detected_after_wait')
     }
 
     if (debugMode) {
       console.log(`[extractor:debug] title="${extracted.title}" url="${extracted.finalUrl}"`)
-      console.log(`[extractor:debug] bodyText[0:200]=${extracted.bodyTextSample.slice(0,200).replace(/\n/g,' ')}`)
+      console.log(`[extractor:debug] body[0:200]=${extracted.bodyTextSample.slice(0,200).replace(/\n/g,' ')}`)
     }
 
-    await browser.close()
-    browser = null
+    await browser.close(); browser = null
     info.elapsed_ms = Date.now() - t0
-
     return { extracted, debugInfo: info }
+
   } catch (e) {
-    info.steps.push(`fatal_error:${String(e.message).slice(0,100)}`)
+    info.steps.push(`fatal_error:${String(e.message).slice(0, 100)}`)
     info.elapsed_ms = Date.now() - t0
     return { extracted: null, debugInfo: info, error: e.message }
   } finally {
@@ -806,9 +987,16 @@ async function handleExtract(pageUrl, debugMode = false) {
 
   const { extracted, debugInfo, error } = browserResult
 
+  const cfFields = {
+    cloudflare_resolved: debugInfo?.cloudflare_resolved ?? false,
+    challenge_wait_ms:   debugInfo?.challenge_wait_ms   ?? 0,
+    ua_used:             debugInfo?.ua_used             ?? UA,
+  }
+
   if (!extracted) {
     return {
       ...buildResult([]),
+      ...cfFields,
       error,
       failure_reason:            error || 'browser_extract_failed',
       blocked_or_bot_detected:   debugInfo?.blocked_or_bot_detected ?? false,
@@ -820,6 +1008,7 @@ async function handleExtract(pageUrl, debugMode = false) {
   if (debugInfo.blocked_or_bot_detected) {
     return {
       ...buildResult([]),
+      ...cfFields,
       blocked_or_bot_detected:   true,
       failure_reason:            'blocked_or_bot_detected',
       needs_manual_confirmation: true,
@@ -888,6 +1077,7 @@ async function handleExtract(pageUrl, debugMode = false) {
         debugInfo.steps.push('countdown_fallback')
         return {
           ...buildResult([]),
+          ...cfFields,
           schedule_exposed:          false,
           mint_status:               'upcoming',
           mint_date:                 new Date(Date.now() + ms).toISOString(),
@@ -909,6 +1099,7 @@ async function handleExtract(pageUrl, debugMode = false) {
 
     return {
       ...buildResult([]),
+      ...cfFields,
       blocked_or_bot_detected:   false,
       failure_reason:            reason,
       needs_manual_confirmation: true,
@@ -921,6 +1112,7 @@ async function handleExtract(pageUrl, debugMode = false) {
 
   return {
     ...result,
+    ...cfFields,
     blocked_or_bot_detected: false,
     failure_reason:           null,
     debug: debugInfo,
