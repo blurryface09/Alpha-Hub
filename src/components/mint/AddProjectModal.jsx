@@ -245,9 +245,11 @@ export default function AddProjectModal({ onAdd, onClose }) {
   const isUpcoming      = meta?.mint_status === 'upcoming'
   const isEnded         = meta?.mint_status === 'ended'
   const countdownText   = meta?.countdown_text || null
-  const priceNote       = meta?.price_note     || null  // "Price not exposed by OpenSea"
-  const hasWlPhase      = meta?.has_wl_phase   || false
-  const priceToken      = (form.chain || meta?.chain) === 'bnb' ? 'BNB' : 'ETH'
+  const priceNote           = meta?.price_note              || null
+  const hasWlPhase          = meta?.has_wl_phase            || false
+  const scheduleExposed     = meta?.schedule_exposed        ?? true   // default true for non-OpenSea
+  const needsManualConfirm  = meta?.needs_manual_confirmation ?? false
+  const priceToken          = (form.chain || meta?.chain) === 'bnb' ? 'BNB' : 'ETH'
 
   const missingChips = useMemo(() => {
     const chips = []
@@ -398,8 +400,8 @@ export default function AddProjectModal({ onAdd, onClose }) {
                         : conf.mint_date
                       }
                       placeholder="Not detected" />
-                    {/* Price — show per-stage table when stages available, else single price row */}
-                    {Array.isArray(meta.stages) && meta.stages.length ? (
+                    {/* Mint Phases table — only when real stages exist (never fake Phase 1) */}
+                    {Array.isArray(meta.stages) && meta.stages.length > 0 ? (
                       <div className="mt-1 pt-1.5 border-t border-border/40">
                         <div className="flex items-center justify-between mb-1.5">
                           <p className="text-[10px] text-muted uppercase tracking-wider font-mono">Mint Phases</p>
@@ -410,21 +412,30 @@ export default function AddProjectModal({ onAdd, onClose }) {
                           )}
                         </div>
                         {meta.stages.slice(0, 5).map((s, i) => {
+                          // Never show fake "Phase N" — skip rows with no name and no meaningful data
+                          const hasContent = s.name || s.start_time || s.price != null || s.wl_type !== 'UNKNOWN'
+                          if (!hasContent) return null
                           const priceStr = s.price != null
-                            ? (s.price === '0' || s.price === 0 ? 'Free' : `${s.price} ${priceToken}`)
-                            : priceNote ? '—' : '—'
+                            ? (s.price === '0' || s.price === 0 ? 'Free' : `${s.price} ${s.token || priceToken}`)
+                            : null
                           const timeStr = s.start_time
                             ? new Date(s.start_time).toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })
                             : null
+                          const statusDot = s.status === 'live_now'  ? '🟢'
+                                          : s.status === 'upcoming'  ? '🔵'
+                                          : s.status === 'ended'     ? '⚫'
+                                          : null
                           return (
                             <div key={i} className="flex items-center gap-1.5 py-0.5">
                               <WlTypeBadge type={s.wl_type} />
                               <span className="text-[10px] font-mono text-muted truncate flex-1 min-w-0">
-                                {s.name || `Phase ${i + 1}`}
+                                {statusDot && <span className="mr-0.5">{statusDot}</span>}
+                                {s.name || '—'}
                                 {timeStr && <span className="opacity-60"> · {timeStr}</span>}
+                                {s.max_per_wallet && <span className="opacity-50"> · {s.max_per_wallet}×</span>}
                               </span>
-                              <span className={`text-[10px] font-mono shrink-0 ${s.price == null ? 'text-muted/50' : s.price === '0' || s.price === 0 ? 'text-green' : 'text-text'}`}>
-                                {priceStr}
+                              <span className={`text-[10px] font-mono shrink-0 ${priceStr == null ? 'text-muted/40' : priceStr === 'Free' ? 'text-green' : 'text-text'}`}>
+                                {priceStr ?? '—'}
                               </span>
                             </div>
                           )
@@ -432,22 +443,28 @@ export default function AddProjectModal({ onAdd, onClose }) {
                         {meta.stages.length > 5 && (
                           <p className="text-[10px] text-muted mt-0.5 font-mono">+{meta.stages.length - 5} more phases</p>
                         )}
-                        {priceNote && (
-                          <p className="text-[10px] text-muted/60 font-mono mt-1 italic">{priceNote}</p>
-                        )}
                       </div>
                     ) : (
                       <>
                         <ReviewRow label="Price"
                           value={meta.mint_price
                             ? (meta.mint_price === '0' ? 'Free' : `${meta.mint_price} ${priceToken}`)
-                            : priceNote || null}
+                            : null}
                           conf={meta.mint_price ? conf.mint_price : null}
                           placeholder="Not detected" />
                         {meta.mint_phase && meta.mint_phase !== 'unknown' && (
                           <ReviewRow label="Phase"
                             value={PHASE_LABELS[meta.mint_phase] || meta.mint_phase}
                             conf={conf.mint_phase} />
+                        )}
+                        {/* Schedule not exposed — instruct user to open source */}
+                        {meta.needs_manual_confirmation && meta.source_type === 'opensea' && (
+                          <div className="mt-1.5 flex items-start gap-1.5 text-amber-300/80 bg-amber-400/6 rounded-lg px-2 py-1.5">
+                            <AlertTriangle size={11} className="mt-0.5 shrink-0 opacity-70" />
+                            <span className="text-[10px] font-mono">
+                              OpenSea did not expose mint schedule data. Open source to confirm.
+                            </span>
+                          </div>
                         )}
                       </>
                     )}

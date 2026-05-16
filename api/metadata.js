@@ -125,27 +125,16 @@ function normalizeEthPrice(raw) {
 }
 
 /**
- * Try every known price field on an OpenSea stage/drop object.
- * OpenSea v2 has used at least: mint_price, price, price_per_token,
- * native_price, sale_config.publicSalePrice, payment_token.eth_price.
+ * Extract price from a stage/drop object.
+ * Delegates to extractAllPrices() — defined below — after the stage normalizer section.
+ * This wrapper exists so callers before the normalizer section can still call it.
+ * NOTE: extractAllPrices() is defined in the normalizer section; JS hoisting handles it.
  */
 function extractStagePrice(stage, dropFallback = null) {
-  if (!stage) return dropFallback
-  const candidates = [
-    stage.mint_price,
-    stage.price,
-    stage.price_per_token,
-    stage.native_price,
-    stage.sale_config?.publicSalePrice,
-    stage.sale_config?.preSalePrice,
-    stage.sale_config?.presalePrice,
-    stage.payment_token?.eth_price,
-  ]
-  for (const raw of candidates) {
-    const v = normalizeEthPrice(raw)
-    if (v !== null) return v
-  }
-  return dropFallback
+  if (!stage) return dropFallback ?? null
+  // extractAllPrices is defined later in the file; call it directly
+  const v = extractAllPrices(stage)
+  return v !== null ? v : (dropFallback ?? null)
 }
 
 // ════════════════════════════════════════════════════════════════════════════
@@ -245,25 +234,120 @@ async function fetchOpenSea(slug) {
 }
 
 // ════════════════════════════════════════════════════════════════════════════
-// OPENSEA STAGE NORMALIZER — source of truth
+// OPENSEA STAGE NORMALIZER — generic, project-agnostic source of truth
 // ════════════════════════════════════════════════════════════════════════════
 
-/** True if obj has enough fields to be treated as a mint stage */
-function looksLikeStage(obj) {
-  if (!obj || typeof obj !== 'object' || Array.isArray(obj)) return false
-  return !!(
-    obj.start_date        || obj.start_time        ||
-    obj.end_date          || obj.end_time           ||
-    obj.mint_price != null || obj.price != null      ||
-    obj.price_per_token != null                      ||
-    obj.allowlist_type    || obj.sale_type           ||
-    (typeof obj.stage === 'string' && obj.stage.length < 60) ||
-    obj.stage_name
-  )
+// Recognized stage names per OpenSea and common NFT drop conventions
+const RECOGNIZED_STAGE_NAMES = new Set([
+  'public', 'allowlist', 'allow_list', 'whitelist', 'presale', 'pre_sale',
+  'fcfs', 'gtd', 'guaranteed', 'team_treasury', 'team', 'treasury', 'claim',
+  'open_edition', 'openedition', 'holder_mint', 'holdermint', 'wl', 'raffle',
+  'private', 'community', 'og', 'vip', 'early_access', 'public_sale',
+  'allowlist_sale', 'partner', 'waitlist',
+])
+
+// Keys that mark an object as collection/drop metadata rather than a stage.
+// Objects dominated by these keys with no stage-specific data must be rejected.
+const COLLECTION_META_KEYS = new Set([
+  'collection_slug', 'collection_name', 'image_url', 'banner_image_url',
+  'total_supply', 'twitter_username', 'discord_url', 'description',
+  'created_date', 'opensea_url', 'category', 'is_minting', 'drop_type',
+  'chain', 'contract_address', 'contract',
+])
+
+/**
+ * Extended price extraction — tries every known OpenSea price variant.
+ * Handles nested sale_config, payment_token, display_price, wei values.
+ */
+function extractAllPrices(obj) {
+  if (!obj || typeof obj !== 'object') return null
+  const candidates = [
+    obj.mint_price,
+    obj.price,
+    obj.price_per_token,
+    obj.native_price,
+    obj.display_price,
+    obj.price_in_eth,
+    obj.sale_config?.publicSalePrice,
+    obj.sale_config?.preSalePrice,
+    obj.sale_config?.presalePrice,
+    obj.sale_config?.price,
+    obj.sale_config?.mintPrice,
+    obj.payment_token?.eth_price,
+    obj.payment_token?.usd_price,  // skip: not ETH
+    obj.price_details?.price,
+    obj.price_details?.amount,
+  ]
+  // Only numeric candidates; skip usd_price which would be a large number in USD
+  const ethCandidates = candidates.filter((_, i) => i !== 13) // skip usd_price index
+  for (const raw of ethCandidates) {
+    const v = normalizeEthPrice(raw)
+    if (v !== null) return v
+  }
+  // Also try sale_config children recursively (one level)
+  if (obj.sale_config && typeof obj.sale_config === 'object') {
+    for (const v of Object.values(obj.sale_config)) {
+      const n = normalizeEthPrice(v)
+      if (n !== null) return n
+    }
+  }
+  return null
 }
 
 /**
- * Flatten a drops-API `drops[]` array into raw stage-like objects.
+ * Strict stage candidate validator.
+ *
+ * A raw object is a REAL stage if it has at least one strong signal:
+ *   - price (any field variant)
+ *   - start_time / end_time
+ *   - max_per_wallet
+ *   - allowlist_type / sale_type / eligibility
+ *   - recognized stage name
+ *
+ * Objects that are purely collection metadata (dominated by COLLECTION_META_KEYS
+ * with zero stage-specific signals) are rejected and never become stages.
+ *
+ * Returns: null (rejected) | reason string for logging
+ */
+function validateStageCandidate(obj) {
+  if (!obj || typeof obj !== 'object' || Array.isArray(obj)) return null
+
+  // Count how many collection metadata markers this object has
+  const keys = Object.keys(obj)
+  const metaCount  = keys.filter(k => COLLECTION_META_KEYS.has(k)).length
+
+  const hasPrice       = extractAllPrices(obj) !== null
+  const hasTime        = !!(obj.start_date || obj.start_time || obj.end_date || obj.end_time)
+  const hasWalletLimit = obj.max_per_wallet != null
+  const hasEligibility = !!(obj.allowlist_type || obj.sale_type || obj.eligibility)
+  const rawStageName   = String(obj.stage || obj.stage_name || obj.name || obj.phase || '').toLowerCase().trim()
+  const hasKnownName   = rawStageName.length > 0 &&
+    [...RECOGNIZED_STAGE_NAMES].some(n => rawStageName.includes(n))
+
+  const strongSignals = [hasPrice, hasTime, hasWalletLimit, hasEligibility, hasKnownName]
+  const signalCount   = strongSignals.filter(Boolean).length
+
+  // Objects with 2+ collection meta keys and zero strong signals = metadata, not a stage
+  if (metaCount >= 2 && signalCount === 0) {
+    return null // rejected: collection metadata object
+  }
+
+  // Must have at least one strong signal
+  if (signalCount === 0) return null
+
+  // Single-signal acceptance: only accept lone start_time if something else validates it
+  if (signalCount === 1 && hasTime && !hasPrice && !hasKnownName && !hasEligibility && !hasWalletLimit) {
+    // A lone timestamp from a wrapper object is too ambiguous — require 2+ keys that are stage-specific
+    const stageSpecificKeys = keys.filter(k => !COLLECTION_META_KEYS.has(k) &&
+      !['name', 'slug', 'id', 'created_at', 'updated_at'].includes(k))
+    if (stageSpecificKeys.length < 2) return null // rejected: only metadata + timestamp
+  }
+
+  return `signals:${[hasPrice && 'price', hasTime && 'time', hasWalletLimit && 'wallet', hasEligibility && 'eligibility', hasKnownName && 'name'].filter(Boolean).join('+')}`
+}
+
+/**
+ * Flatten a drops-API `drops[]` array into raw stage candidates.
  * Nested stages[] inherit their parent drop's timing/price as fallbacks.
  */
 function harvestFromDropsApi(drops) {
@@ -276,54 +360,74 @@ function harvestFromDropsApi(drops) {
       for (const s of nested) {
         raw.push({
           ...s,
-          // inherit drop-level time if stage doesn't have its own
-          start_date:     s.start_date || s.start_time || dropStart,
-          end_date:       s.end_date   || s.end_time   || dropEnd,
-          _drop_price:    drop.mint_price ?? drop.price ?? null,
-          _drop_max:      drop.max_per_wallet ?? null,
+          start_date:  s.start_date || s.start_time || dropStart,
+          end_date:    s.end_date   || s.end_time   || dropEnd,
+          _drop_price: drop.mint_price ?? drop.price ?? null,
+          _drop_max:   drop.max_per_wallet ?? null,
+          _source:     'drops_api',
         })
       }
     } else {
-      raw.push(drop)
+      raw.push({ ...drop, _source: 'drops_api' })
     }
   }
   return raw
 }
 
 /**
- * Recursively harvest stage-like objects from any JSON blob.
- * Walks known container keys; collects arrays that look like stage lists.
+ * Recursively harvest stage candidates from any JSON blob (__NEXT_DATA__, etc.).
+ * Walks known stage-container keys; also recurses into Next.js SSR wrappers.
+ * Each candidate is validated with validateStageCandidate() before returning.
  */
-function harvestFromJson(node, depth = 0) {
-  if (!node || typeof node !== 'object' || depth > 12) return []
+function harvestFromJson(node, depth = 0, source = '__next_data__') {
+  if (!node || typeof node !== 'object' || depth > 14) return []
   const results = []
 
   if (Array.isArray(node)) {
-    const stageLike = node.filter(looksLikeStage)
-    // If most items in the array look like stages, collect them all
-    if (stageLike.length && stageLike.length >= Math.ceil(node.length / 2)) {
-      return stageLike
+    for (const item of node) {
+      const reason = validateStageCandidate(item)
+      if (reason) {
+        results.push({ ...item, _source: source, _validation: reason })
+      } else {
+        results.push(...harvestFromJson(item, depth + 1, source))
+      }
     }
-    for (const item of node) results.push(...harvestFromJson(item, depth + 1))
     return results
   }
 
-  // Keys known to contain stage arrays
-  for (const key of ['stages', 'sale_stages', 'mint_stages', 'saleStages', 'phases',
-                      'mintSchedule', 'schedule', 'drops', 'mintStages']) {
-    if (node[key]) results.push(...harvestFromJson(node[key], depth + 1))
+  // Keys that are known to directly contain stage arrays or stage objects
+  const STAGE_CONTAINER_KEYS = [
+    'stages', 'sale_stages', 'mint_stages', 'saleStages', 'phases',
+    'mintSchedule', 'schedule', 'mintStages', 'sale_schedule',
+    'allowlist_stages', 'mint_phases',
+  ]
+  for (const key of STAGE_CONTAINER_KEYS) {
+    if (node[key]) results.push(...harvestFromJson(node[key], depth + 1, source))
   }
 
-  // Single-object stage (e.g. a lone drop at depth > 1)
-  if (depth > 1 && looksLikeStage(node) && results.length === 0) {
-    results.push(node)
+  // Keys that may contain drop/stage info at single-object level
+  const SINGLE_STAGE_KEYS = ['drop', 'mint', 'activeDrop', 'currentDrop', 'mintInfo']
+  for (const key of SINGLE_STAGE_KEYS) {
+    if (node[key] && typeof node[key] === 'object' && !Array.isArray(node[key])) {
+      const reason = validateStageCandidate(node[key])
+      if (reason) {
+        results.push({ ...node[key], _source: source, _validation: reason })
+      } else {
+        results.push(...harvestFromJson(node[key], depth + 1, source))
+      }
+    }
   }
 
-  // Recurse into wrapper objects
-  for (const key of ['drop', 'collection', 'initialData', 'pageProps', 'props',
-                      'data', 'event', 'nft', 'launchpad', 'mintInfo']) {
+  // Recurse into Next.js SSR/hydration wrapper keys
+  const WRAPPER_KEYS = [
+    'drops', 'collection', 'initialData', 'pageProps', 'props',
+    'data', 'event', 'nft', 'launchpad', 'ssrLazyProps',
+    'dehydratedState', 'initialState', 'serverSideProps',
+    'initialProps', 'queries',
+  ]
+  for (const key of WRAPPER_KEYS) {
     if (node[key] && typeof node[key] === 'object') {
-      results.push(...harvestFromJson(node[key], depth + 1))
+      results.push(...harvestFromJson(node[key], depth + 1, source))
     }
   }
 
@@ -333,14 +437,16 @@ function harvestFromJson(node, depth = 0) {
 /**
  * THE source of truth for all OpenSea stage data.
  *
- * Input:  rawList — any array of stage-like objects from any source
+ * Input:  rawList — validated stage candidate objects from any source
  * Output: normalized, deduplicated, time-sorted stage array
  *
- * Each stage: { name, raw_name, start_time, end_time, price, token,
- *               max_per_wallet, eligibility, wl_type, status }
+ * Each stage: { name, status, start_time, end_time, price, token,
+ *               max_per_wallet, eligibility, wl_type, source }
  *
- * Status is computed from timestamps first; API status field is only a fallback.
- * Text-based detection is NOT used here — it happens upstream only if stages = [].
+ * Rules:
+ * - Status computed from timestamps only; API status used only as last resort
+ * - Text detection NEVER called here — happens upstream after stages = []
+ * - Stages with no name AND no price AND no time are dropped (post-validation)
  */
 function normalizeOpenSeaStages(rawList, token = 'ETH') {
   if (!rawList?.length) return []
@@ -354,18 +460,23 @@ function normalizeOpenSeaStages(rawList, token = 'ETH') {
     const rawName   = s.stage || s.stage_name || s.name || s.phase || null
     const startRaw  = s.start_date  || s.start_time  || s.startDate  || null
     const endRaw    = s.end_date    || s.end_time    || s.endDate    || null
-    // Try all known price fields; then fall back to inherited drop price
-    const price     = extractStagePrice(s) ??
+    const price     = extractAllPrices(s) ??
                       (s._drop_price != null ? normalizeEthPrice(s._drop_price) : null)
     const maxWallet = s.max_per_wallet ?? s._drop_max ?? null
-    const allowRaw  = s.allowlist_type || s.sale_type || null
+    const allowRaw  = s.allowlist_type || s.sale_type || s.eligibility || null
+    const source    = s._source || 'unknown'
 
-    // Deduplicate by (start, end, price, name)
+    // Final validation: skip if nothing meaningful after normalization
+    const hasAnyContent = rawName || startRaw || endRaw || price != null ||
+                          maxWallet != null || allowRaw
+    if (!hasAnyContent) continue
+
+    // Deduplicate by (start, end, price, name) fingerprint
     const fp = `${startRaw}|${endRaw}|${price}|${rawName}`
     if (seen.has(fp)) continue
     seen.add(fp)
 
-    // Compute status from timestamp window — never from page text
+    // Status: timestamps first, API status only if no timestamps
     let status = 'unknown'
     if (startRaw) {
       const start = new Date(startRaw).getTime()
@@ -376,7 +487,6 @@ function normalizeOpenSeaStages(rawList, token = 'ETH') {
         else                               status = 'upcoming'
       }
     }
-    // Only use API status field when there are no timestamps
     if (status === 'unknown') {
       status = classifyDropStatus(s.status || s.stage_status || s.mint_status) || 'unknown'
     }
@@ -392,10 +502,11 @@ function normalizeOpenSeaStages(rawList, token = 'ETH') {
       eligibility:    allowRaw,
       wl_type:        stageToWlType(rawName || allowRaw || ''),
       status,
+      source,
     })
   }
 
-  // Sort: live → upcoming (by start_time) → ended → unknown
+  // Sort: live → upcoming (by start) → ended → unknown
   const ORDER = { live_now: 0, upcoming: 1, ended: 2, unknown: 3 }
   return out.sort((a, b) => {
     const od = (ORDER[a.status] ?? 3) - (ORDER[b.status] ?? 3)
@@ -408,166 +519,201 @@ function normalizeOpenSeaStages(rawList, token = 'ETH') {
 }
 
 /**
- * Unified OpenSea resolver — replaces fetchOpenSeaDrops + scrapeOpenSeaPage.
+ * Unified OpenSea resolver.
  *
- * Sources (all attempted, not sequential fallbacks):
- *   1. OpenSea drops API  (requires OPENSEA_API_KEY)
- *   2. Page __NEXT_DATA__ (always — no key required)
+ * Fires ALL three sources in parallel (not sequential fallbacks):
+ *   1. OpenSea collection API  (metadata: name, chain, contract, image)
+ *   2. OpenSea drops API       (structured stage data, requires API key)
+ *   3. OpenSea page HTML       (__NEXT_DATA__ + text fallback, no key needed)
  *
- * normalizeOpenSeaStages() is the sole consumer of all raw data.
- * Text-based detection is ONLY used when zero structured stages are found.
+ * normalizeOpenSeaStages() is the ONLY consumer of raw stage data.
+ * Text detection runs ONLY when structured stages = [] after all sources.
+ * live_now is NEVER produced from text alone when stages exist.
  *
- * Returns:
- *   { stages, current_stage, next_stage, mint_status, mint_date, end_date,
- *     mint_price, stage_name, max_per_wallet, has_wl_phase, countdown_text,
- *     debug_opensea_extraction }
+ * Returns full debug_opensea_extraction block with rejection tracking.
  */
 async function resolveOpenSeaStages(slug, pageUrl, token = 'ETH') {
   const debug = {
-    source_used:      [],
-    stages_found:     0,
-    raw_stage_keys:   [],
-    price_candidates: [],
-    time_candidates:  [],
-    selected_stage:   null,
-    failure_reason:   null,
+    sources_called:             [],
+    api_key_present:            Boolean(OPENSEA_KEY),
+    candidates_found:           0,
+    candidates_rejected:        0,
+    rejection_reasons:          [],
+    accepted_stages:            0,
+    selected_stage:             null,
+    price_candidates:           [],
+    time_candidates:            [],
+    schedule_exposed:           false,
+    needs_manual_confirmation:  false,
+    final_reason:               null,
   }
 
-  const rawStages = []
-  let   pageText  = ''
+  // Fire all three sources in parallel
+  const [dropsResult, pageResult] = await Promise.allSettled([
+    // ── Source 1: Drops API ────────────────────────────────────────────────
+    OPENSEA_KEY
+      ? fetch(
+          `https://api.opensea.io/api/v2/drops?collection_slug=${encodeURIComponent(slug)}&limit=20`,
+          { headers: { 'X-API-KEY': OPENSEA_KEY, accept: 'application/json' },
+            signal: AbortSignal.timeout(6000) }
+        ).then(r => r.ok ? r.json() : null).catch(() => null)
+      : Promise.resolve(null),
 
-  // ── 1. Drops API (if key present) ────────────────────────────────────────
-  if (OPENSEA_KEY) {
-    try {
-      const r = await fetch(
-        `https://api.opensea.io/api/v2/drops?collection_slug=${encodeURIComponent(slug)}&limit=20`,
-        { headers: { 'X-API-KEY': OPENSEA_KEY, accept: 'application/json' },
-          signal: AbortSignal.timeout(6000) }
-      )
-      if (r.ok) {
-        const d    = await r.json()
-        const from = harvestFromDropsApi(Array.isArray(d.drops) ? d.drops : [])
-        if (from.length) {
-          rawStages.push(...from)
-          debug.source_used.push('drops_api')
-        } else {
-          console.log('[opensea-drops] empty drops for slug:', slug)
-        }
-      } else {
-        console.warn('[opensea-drops] non-ok', r.status, 'slug:', slug)
-      }
-    } catch (e) { console.warn('[opensea-drops]', e.message) }
-  }
-
-  // ── 2. Page HTML → __NEXT_DATA__ (always, not just as fallback) ──────────
-  try {
-    const r = await fetch(pageUrl, {
+    // ── Source 2: Page HTML ────────────────────────────────────────────────
+    fetch(pageUrl, {
       headers: {
         'User-Agent':      'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36',
         'Accept':          'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
         'Accept-Language': 'en-US,en;q=0.9',
       },
       signal: AbortSignal.timeout(10000),
-    })
-    if (r.ok) {
-      const html = await r.text()
+    }).then(r => r.ok ? r.text() : '').catch(() => ''),
+  ])
 
-      // Strip HTML for text fallback
-      pageText = html
-        .replace(/<script[\s\S]*?<\/script>/gi, ' ')
-        .replace(/<style[\s\S]*?<\/style>/gi, ' ')
-        .replace(/<[^>]+>/g, ' ')
-        .replace(/\s+/g, ' ')
-        .slice(0, 100_000)
+  const dropsJson  = dropsResult.status === 'fulfilled' ? dropsResult.value  : null
+  const pageHtml   = pageResult.status  === 'fulfilled' ? pageResult.value   : ''
 
-      // Extract __NEXT_DATA__ and recursively harvest stages from it
-      const nextData = extractNextData(html)
-      if (nextData) {
-        const from = harvestFromJson(nextData)
-        if (from.length) {
-          rawStages.push(...from)
-          debug.source_used.push('__next_data__')
-        } else {
-          debug.source_used.push('__next_data__:no_stages')
-        }
+  // Track what was called
+  if (OPENSEA_KEY) debug.sources_called.push('drops_api')
+  debug.sources_called.push('page_html')
+
+  // ── Harvest raw candidates ─────────────────────────────────────────────
+  const rawCandidates = []
+  const rejectedLog   = []
+
+  // From drops API
+  if (dropsJson) {
+    debug.sources_called.push('drops_api:ok')
+    const fromDrops = harvestFromDropsApi(Array.isArray(dropsJson.drops) ? dropsJson.drops : [])
+    rawCandidates.push(...fromDrops)
+  }
+
+  // From __NEXT_DATA__
+  let pageText = ''
+  if (pageHtml) {
+    pageText = pageHtml
+      .replace(/<script[\s\S]*?<\/script>/gi, ' ')
+      .replace(/<style[\s\S]*?<\/style>/gi, ' ')
+      .replace(/<[^>]+>/g, ' ')
+      .replace(/\s+/g, ' ')
+      .slice(0, 100_000)
+
+    const nextData = extractNextData(pageHtml)
+    if (nextData) {
+      debug.sources_called.push('__next_data__:ok')
+      const fromPage = harvestFromJson(nextData)
+      rawCandidates.push(...fromPage)
+    } else {
+      debug.sources_called.push('__next_data__:not_found')
+    }
+  }
+
+  // ── Re-validate candidates and track rejections ────────────────────────
+  // (harvestFromJson already validates, but drops API candidates need checking too)
+  const validatedCandidates = []
+  for (const c of rawCandidates) {
+    if (c._validation) {
+      // Already validated by harvestFromJson
+      validatedCandidates.push(c)
+    } else {
+      // Drops API candidates — validate now
+      const reason = validateStageCandidate(c)
+      if (reason) {
+        validatedCandidates.push({ ...c, _validation: reason })
       } else {
-        debug.source_used.push('page:no_next_data')
+        rejectedLog.push({
+          keys:   Object.keys(c).filter(k => !k.startsWith('_')).slice(0, 8),
+          reason: 'failed_stage_validation',
+        })
       }
     }
-  } catch (e) { console.warn('[opensea-page]', e.message) }
+  }
 
-  // ── 3. Normalize all raw stages via source of truth ──────────────────────
-  const stages = normalizeOpenSeaStages(rawStages, token)
-
-  debug.stages_found     = stages.length
-  debug.raw_stage_keys   = [...new Set(rawStages.flatMap(s =>
-    Object.keys(s).filter(k => !k.startsWith('_'))))]
-  debug.price_candidates = rawStages.map(s => extractStagePrice(s)).filter(v => v !== null)
-  debug.time_candidates  = rawStages
+  debug.candidates_found    = rawCandidates.length
+  debug.candidates_rejected = rawCandidates.length - validatedCandidates.length
+  debug.rejection_reasons   = rejectedLog
+  debug.price_candidates    = validatedCandidates.map(s => extractAllPrices(s)).filter(Boolean)
+  debug.time_candidates     = validatedCandidates
     .map(s => s.start_date || s.start_time).filter(Boolean).slice(0, 10)
 
-  // ── 4. No structured stages → text-based fallback (last resort only) ─────
+  // ── Normalize ──────────────────────────────────────────────────────────
+  const stages = normalizeOpenSeaStages(validatedCandidates, token)
+  debug.accepted_stages  = stages.length
+  debug.schedule_exposed = stages.length > 0
+
+  // ── No structured stages → text fallback (last resort) ────────────────
   if (!stages.length) {
-    debug.failure_reason  = 'no_structured_stages'
-    debug.source_used.push('text_fallback')
+    debug.needs_manual_confirmation = true
+    debug.final_reason = 'no_structured_stages_found'
+    debug.sources_called.push('text_fallback')
 
     if (pageText) {
       const textStatus = detectTextStatus(pageText)
 
       if (textStatus === 'upcoming') {
-        const countdown   = parseCountdown(pageText)
-        const approxStart = countdown?.totalMs > 30_000
-          ? new Date(Date.now() + countdown.totalMs).toISOString()
-          : null
-        debug.selected_stage = { source: 'text_countdown', countdown: countdown?.text }
+        const cd = parseCountdown(pageText)
+        const approxStart = cd?.totalMs > 30_000
+          ? new Date(Date.now() + cd.totalMs).toISOString() : null
+        debug.selected_stage = { source: 'text_countdown', countdown: cd?.text }
+        debug.final_reason   = 'text_countdown_detected'
         return {
           stages: [], mint_status: 'upcoming',
-          mint_date: approxStart, countdown_text: countdown?.text || null,
-          has_wl_phase: false, debug_opensea_extraction: debug,
-        }
-      }
-
-      if (textStatus === 'live_now') {
-        debug.selected_stage = { source: 'text_live_now' }
-        return {
-          stages: [], mint_status: 'live_now', has_wl_phase: false,
+          mint_date: approxStart, countdown_text: cd?.text || null,
+          has_wl_phase: false, schedule_exposed: false,
+          needs_manual_confirmation: true,
           debug_opensea_extraction: debug,
         }
       }
 
-      if (textStatus) {
-        debug.selected_stage = { source: `text_${textStatus}` }
+      // NOTE: live_now from TEXT alone is intentionally NOT produced here.
+      // "Minting" in page text is ambiguous; only timestamps confirm live state.
+      if (textStatus === 'ended') {
+        debug.selected_stage = { source: 'text_ended' }
+        debug.final_reason   = 'text_ended_detected'
         return {
-          stages: [], mint_status: textStatus, has_wl_phase: false,
+          stages: [], mint_status: 'ended', has_wl_phase: false,
+          schedule_exposed: false, needs_manual_confirmation: true,
+          debug_opensea_extraction: debug,
+        }
+      }
+
+      if (textStatus === 'tba') {
+        debug.final_reason = 'text_tba_detected'
+        return {
+          stages: [], mint_status: 'tba', has_wl_phase: false,
+          schedule_exposed: false, needs_manual_confirmation: true,
           debug_opensea_extraction: debug,
         }
       }
     }
 
-    debug.failure_reason = 'no_signal_found'
-    return { stages: [], mint_status: null, has_wl_phase: false,
-             debug_opensea_extraction: debug }
+    debug.final_reason = 'no_signal_found'
+    return {
+      stages: [], mint_status: null, has_wl_phase: false,
+      schedule_exposed: false, needs_manual_confirmation: true,
+      debug_opensea_extraction: debug,
+    }
   }
 
-  // ── 5. Compute top-level fields from normalized stages ────────────────────
-  const now      = Date.now()
-  const liveSt   = stages.filter(s => s.status === 'live_now')
-  const upcomSt  = stages.filter(s => s.status === 'upcoming')
-  const endedSt  = stages.filter(s => s.status === 'ended')
+  // ── Compute top-level fields from validated stages ─────────────────────
+  const now     = Date.now()
+  const liveSt  = stages.filter(s => s.status === 'live_now')
+  const upcomSt = stages.filter(s => s.status === 'upcoming')
+  const endedSt = stages.filter(s => s.status === 'ended')
 
-  const current  = liveSt[0]  || null
-  const next     = upcomSt[0] || null
-  const primary  = current || next || stages[0]
+  const current = liveSt[0]  || null
+  const next    = upcomSt[0] || null
+  const primary = current || next || stages[0]
 
   const mintStatus =
-    current                             ? 'live_now'
-    : next                              ? 'upcoming'
-    : endedSt.length === stages.length  ? 'ended'
-    : null
+    current                            ? 'live_now'
+    : next                             ? 'upcoming'
+    : endedSt.length === stages.length ? 'ended'
+    : 'needs_review'
 
   const hasWl = stages.some(s => ['GTD', 'FCFS', 'RAFFLE'].includes(s.wl_type))
 
-  // Countdown from actual next_stage start_time (accurate, not parsed from text)
+  // Countdown from actual next_stage start_time — NOT from page text
   let countdownText = null
   if (next?.start_time) {
     const ms = new Date(next.start_time).getTime() - now
@@ -584,35 +730,40 @@ async function resolveOpenSeaStages(slug, pageUrl, token = 'ETH') {
   }
 
   debug.selected_stage = primary
-    ? { name: primary.name, status: primary.status, price: primary.price }
+    ? { name: primary.name, status: primary.status, price: primary.price, source: primary.source }
     : null
+  debug.final_reason = `stages_ok:${mintStatus}`
 
   console.log('[opensea-stages] slug=%s status=%s stage=%s price=%s stages=%d sources=%s',
-    slug, mintStatus || 'none', primary?.name || 'n/a',
-    primary?.price || 'n/a', stages.length, debug.source_used.join('+'))
+    slug, mintStatus, primary?.name || 'n/a',
+    primary?.price ?? 'n/a', stages.length, debug.sources_called.join('+'))
 
   return {
     stages:          stages.map(s => ({
       name:           s.name,
+      status:         s.status,
       start_time:     s.start_time,
       end_time:       s.end_time,
       price:          s.price,
       token:          s.token,
-      wl_type:        s.wl_type,
       max_per_wallet: s.max_per_wallet,
-      status:         s.status,
+      eligibility:    s.eligibility,
+      wl_type:        s.wl_type,
+      source:         s.source,
     })),
-    current_stage:   current?.name  || null,
-    next_stage:      next?.name     || null,
-    mint_status:     mintStatus,
-    mint_date:       primary?.start_time || null,
-    end_date:        primary?.end_time   || null,
-    mint_price:      primary?.price      || null,
-    stage_name:      primary?.raw_name   || null,
-    max_per_wallet:  primary?.max_per_wallet || null,
-    has_wl_phase:    hasWl,
-    countdown_text:  countdownText,
-    debug_opensea_extraction: debug,
+    current_stage:             current?.name || null,
+    next_stage:                next?.name    || null,
+    mint_status:               mintStatus,
+    mint_date:                 primary?.start_time || null,
+    end_date:                  primary?.end_time   || null,
+    mint_price:                primary?.price      || null,
+    stage_name:                primary?.raw_name   || null,
+    max_per_wallet:            primary?.max_per_wallet || null,
+    has_wl_phase:              hasWl,
+    countdown_text:            countdownText,
+    schedule_exposed:          true,
+    needs_manual_confirmation: false,
+    debug_opensea_extraction:  debug,
   }
 }
 
@@ -737,42 +888,70 @@ async function extractMetadata(rawInput) {
     if (m) {
       const slug = m[1]
 
-      // Fetch collection metadata + resolve all stages in parallel.
-      // resolveOpenSeaStages() is the sole source of truth for timing/price/status.
-      // It hits drops API (if key) AND __NEXT_DATA__ always.
+      // All three sources are fired in parallel inside resolveOpenSeaStages:
+      //   drops API + page __NEXT_DATA__ + page HTML.
+      // fetchOpenSea (collection metadata) runs concurrently alongside.
       const [api, stageResult] = await Promise.all([
         fetchOpenSea(slug),
-        resolveOpenSeaStages(slug, url, 'ETH'),   // token corrected below after chain is known
+        resolveOpenSeaStages(slug, url, 'ETH'),  // token corrected after chain resolved
       ])
 
       const chain = api?.chain || 'eth'
       const token = chain === 'bnb' ? 'BNB' : 'ETH'
 
-      // Re-stamp stages with correct token now that we know the chain
+      // Re-stamp stages with correct token once chain is known
       const stages = (stageResult.stages || []).map(s => ({ ...s, token }))
 
-      const mintStatus    = stageResult.mint_status    || null
-      const mintDate      = stageResult.mint_date      || null
-      const endDate       = stageResult.end_date       || null
-      const mintPrice     = stageResult.mint_price     || null
-      const stageName     = stageResult.stage_name     || null
-      const countdownText = stageResult.countdown_text || null
+      const mintStatus             = stageResult.mint_status              || null
+      const mintDate               = stageResult.mint_date                || null
+      const endDate                = stageResult.end_date                 || null
+      const mintPrice              = stageResult.mint_price               || null
+      const stageName              = stageResult.stage_name               || null
+      const countdownText          = stageResult.countdown_text           || null
+      const scheduleExposed        = stageResult.schedule_exposed         ?? stages.length > 0
+      const needsManualConfirm     = stageResult.needs_manual_confirmation ?? !scheduleExposed
 
       const isLiveNow   = mintStatus === 'live_now'
       const hasContract = Boolean(api?.contract_address || urlContract)
       const hasDate     = Boolean(mintDate)
-      // "has price" = top-level mint_price OR any stage with a price
       const hasPrice    = Boolean(mintPrice) || stages.some(s => s.price != null)
-      const priceNote   = !hasPrice ? 'Price not exposed by OpenSea' : null
+
+      // Price note: specific message if schedule not exposed vs just missing price
+      const priceNote = hasPrice ? null
+        : scheduleExposed ? 'Price not set in OpenSea schedule'
+        : 'OpenSea did not expose mint schedule. Open source to confirm.'
 
       console.log('[opensea-resolver]', JSON.stringify({
         slug, chain, token,
-        status:   mintStatus || 'none',
-        stages:   stages.length,
-        price:    mintPrice || 'none',
-        sources:  stageResult.debug_opensea_extraction?.source_used || [],
-        selected: stageResult.debug_opensea_extraction?.selected_stage || null,
+        status:          mintStatus || 'none',
+        stages:          stages.length,
+        price:           mintPrice  || 'none',
+        schedule:        scheduleExposed,
+        manual_confirm:  needsManualConfirm,
+        sources:         stageResult.debug_opensea_extraction?.sources_called || [],
+        selected:        stageResult.debug_opensea_extraction?.selected_stage || null,
+        rejected:        stageResult.debug_opensea_extraction?.candidates_rejected || 0,
       }))
+
+      // Build shared fields used in both API and no-API return paths
+      const sharedStageFields = {
+        mint_status:               mintStatus,
+        mint_date:                 mintDate,
+        end_date:                  endDate,
+        mint_price:                mintPrice,
+        price_note:                priceNote,
+        countdown_text:            countdownText,
+        mint_phase:                stageName ? stageToMintPhase(stageName) : null,
+        wl_type:                   stageName ? stageToWlType(stageName)    : 'UNKNOWN',
+        max_per_wallet:            stageResult.max_per_wallet  || null,
+        stages,
+        has_wl_phase:              stageResult.has_wl_phase    || false,
+        current_stage:             stageResult.current_stage   || null,
+        next_stage:                stageResult.next_stage      || null,
+        schedule_exposed:          scheduleExposed,
+        needs_manual_confirmation: needsManualConfirm,
+        debug_opensea_extraction:  stageResult.debug_opensea_extraction,
+      }
 
       if (api) {
         return {
@@ -784,19 +963,7 @@ async function extractMetadata(rawInput) {
           image_url:        api.image_url,
           twitter_handle:   api.twitter_handle,
           discord_url:      api.discord_url,
-          mint_status:      mintStatus,
-          mint_date:        mintDate,
-          end_date:         endDate,
-          mint_price:       mintPrice,
-          price_note:       priceNote,
-          countdown_text:   countdownText,
-          mint_phase:       stageName ? stageToMintPhase(stageName) : null,
-          wl_type:          stageName ? stageToWlType(stageName)    : 'UNKNOWN',
-          max_per_wallet:   stageResult.max_per_wallet  || null,
-          stages,
-          has_wl_phase:     stageResult.has_wl_phase    || false,
-          current_stage:    stageResult.current_stage   || null,
-          next_stage:       stageResult.next_stage      || null,
+          ...sharedStageFields,
           notes:            api.description?.slice(0, 120) || `OpenSea: ${slug}`,
           confidence: {
             name:             'api_verified',
@@ -813,11 +980,10 @@ async function extractMetadata(rawInput) {
             ...(!hasPrice              ? ['mint_price']       : []),
             ...(!hasContract           ? ['contract_address'] : []),
           ],
-          debug_opensea_extraction: stageResult.debug_opensea_extraction,
         }
       }
 
-      // No collection API key — use stage result + slug-derived name
+      // No collection API key — slug-derived name + stage data only
       const slugName = slug.split('-').map(w => (w[0] || '').toUpperCase() + w.slice(1)).join(' ')
 
       if (mintStatus || mintDate || stages.length) {
@@ -826,16 +992,15 @@ async function extractMetadata(rawInput) {
           source_type:      'opensea',
           chain:            'eth',
           contract_address: urlContract,
-          mint_status:      mintStatus,
-          mint_date:        mintDate,
-          end_date:         endDate,
-          mint_price:       mintPrice,
-          price_note:       priceNote,
-          countdown_text:   countdownText,
-          stages,
-          has_wl_phase:     stageResult.has_wl_phase  || false,
-          current_stage:    stageResult.current_stage || null,
-          next_stage:       stageResult.next_stage    || null,
+          ...sharedStageFields,
+          notes:            `OpenSea collection: ${slug}`,
+          confidence: {
+            name:             'url_extracted',
+            chain:            'url_extracted',
+            contract_address: urlContract ? 'url_extracted' : 'missing',
+            mint_date:        mintDate    ? 'low' : mintStatus ? 'page_detected' : 'missing',
+            mint_price:       hasPrice    ? 'low' : 'missing',
+          },
           notes:            `OpenSea collection: ${slug}`,
           confidence: {
             name:             'url_extracted',
@@ -849,18 +1014,19 @@ async function extractMetadata(rawInput) {
             ...(!hasPrice                ? ['mint_price']       : []),
             ...(!urlContract             ? ['contract_address'] : []),
           ],
-          debug_opensea_extraction: stageResult.debug_opensea_extraction,
         }
       }
 
-      // Pure slug fallback (no data at all)
+      // Pure slug fallback — no schedule data found at all
       return {
-        name:             slugName,
-        source_type:      'opensea',
-        chain:            'eth',
-        contract_address: urlContract,
-        price_note:       'Price not exposed by OpenSea',
-        notes:            `OpenSea collection: ${slug}`,
+        name:                      slugName,
+        source_type:               'opensea',
+        chain:                     'eth',
+        contract_address:          urlContract,
+        price_note:                'OpenSea did not expose mint schedule. Open source to confirm.',
+        schedule_exposed:          false,
+        needs_manual_confirmation: true,
+        notes:                     `OpenSea collection: ${slug}`,
         confidence: {
           name: 'url_extracted', chain: 'url_extracted',
           contract_address: urlContract ? 'url_extracted' : 'missing',
