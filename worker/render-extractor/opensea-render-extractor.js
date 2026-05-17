@@ -30,7 +30,7 @@ chromiumExtra.use(StealthPlugin())
 
 const PORT            = Number(process.env.PORT || 3001)
 const SECRET          = process.env.RENDER_EXTRACTOR_SECRET || ''
-const MAX_MS          = Number(process.env.EXTRACTOR_TIMEOUT_MS || 30000)
+const MAX_MS          = Number(process.env.EXTRACTOR_TIMEOUT_MS || 20000)
 const PROXY_SERVER    = process.env.PROXY_SERVER    || ''
 const PROXY_USERNAME  = process.env.PROXY_USERNAME  || ''
 const PROXY_PASSWORD  = process.env.PROXY_PASSWORD  || ''
@@ -688,9 +688,19 @@ async function waitForCloudflareClear(page, timeoutMs = 20000) {
 // ────────────────────────────────────────────────────────────────────────────
 
 async function extractFromBrowser(pageUrl, debugMode = false) {
+  // ── Time budget ────────────────────────────────────────────────────────────
+  // All phases draw from a shared budget. rem() never returns < 500 so we
+  // never pass 0 to a Playwright timeout. The function NEVER throws — it always
+  // returns { extracted, debugInfo } with whatever was collected.
+  const BUDGET   = Math.min(MAX_MS, 20000)
+  const deadline = Date.now() + BUDGET
+  const rem      = () => Math.max(500, deadline - Date.now())
+  const t0       = Date.now()
+
   const info = {
     steps:                   [],
     elapsed_ms:              0,
+    timeout_stage:           null,
     page_url:                pageUrl,
     final_url:               null,
     title:                   null,
@@ -709,34 +719,69 @@ async function extractFromBrowser(pageUrl, debugMode = false) {
     stage_elements:          0,
     has_next_data:           false,
   }
-  const t0 = Date.now()
 
-  let browser = null
+  // Snapshot captured early — used if later phases time out.
+  // Returns a minimal extracted object or null.
+  async function captureSnapshot(page) {
+    try {
+      return await Promise.race([
+        page.evaluate(() => {
+          const txt = (document.body?.innerText || '').trim()
+          let ndJson = null
+          try { if (window.__NEXT_DATA__) ndJson = JSON.stringify(window.__NEXT_DATA__).slice(0, 100000) } catch {}
+          return {
+            title:          document.title || '',
+            finalUrl:       window.location.href,
+            innerText:      txt.slice(0, 80000),
+            bodyTextSample: txt.slice(0, 5000),
+            iframeCount:    document.querySelectorAll('iframe').length,
+            hasNextData:    Boolean(ndJson),
+            nextDataJson:   ndJson,
+            selectorHits:   {},
+            stageElements:  [],
+          }
+        }),
+        new Promise((_, rej) => setTimeout(() => rej(new Error('snapshot_timeout')), 3000)),
+      ])
+    } catch { return null }
+  }
+
+  // Populate info from a snapshot object (shared between early + full capture)
+  function applySnapshot(snap) {
+    if (!snap) return
+    info.final_url           = snap.finalUrl
+    info.title               = snap.title
+    info.body_text_sample    = snap.bodyTextSample
+    info.iframe_count        = snap.iframeCount
+    info.selectors_found     = snap.selectorHits
+    info.inner_text_len      = snap.innerText?.length ?? 0
+    info.stage_elements      = snap.stageElements?.length ?? 0
+    info.has_next_data       = snap.hasNextData
+    info.schedule_text_found = /mint\s+schedule/i.test(snap.innerText || '')
+    info.mint_keywords_found = WAIT_KEYWORDS.filter(k => (snap.innerText || '').includes(k))
+    const checkText = ((snap.title || '') + ' ' + (snap.bodyTextSample || '')).toLowerCase()
+    if (BOT_PATTERNS.test(checkText)) info.blocked_or_bot_detected = true
+  }
+
+  let browser  = null
+  let snapshot = null // best page data captured so far — used as fallback on timeout
+
   try {
-    // ── Connect to remote CDP endpoint OR launch local Chromium ──────────
+    // ── Browser launch / CDP connect ──────────────────────────────────────
+    info.timeout_stage = 'browser_launch'
     const usingCdp = Boolean(CDP_ENDPOINT)
     if (usingCdp) {
-      // Remote browser (Browserless.io / BrightData / Apify etc.)
-      // These services already use residential/trusted IPs — no stealth needed.
       info.steps.push(`cdp_connect:${CDP_ENDPOINT.replace(/token=[^&]+/, 'token=***').replace(/:([^@:]+)@/, ':***@')}`)
       browser = await rawChromium.connectOverCDP(CDP_ENDPOINT)
     } else {
-      // Local Chromium with stealth plugin + anti-detection flags
       const launchOptions = {
         headless: true,
         args: [
-          '--no-sandbox',
-          '--disable-setuid-sandbox',
-          '--disable-dev-shm-usage',
-          '--disable-accelerated-2d-canvas',
-          '--no-first-run',
-          '--no-zygote',
-          '--disable-gpu',
-          '--disable-blink-features=AutomationControlled',
+          '--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage',
+          '--disable-accelerated-2d-canvas', '--no-first-run', '--no-zygote',
+          '--disable-gpu', '--disable-blink-features=AutomationControlled',
           '--disable-features=IsolateOrigins,site-per-process',
-          '--window-size=1280,900',
-          '--lang=en-US',
-          '--accept-lang=en-US,en;q=0.9',
+          '--window-size=1280,900', '--lang=en-US', '--accept-lang=en-US,en;q=0.9',
         ],
       }
       if (PROXY_SERVER) {
@@ -764,8 +809,6 @@ async function extractFromBrowser(pageUrl, debugMode = false) {
       },
     }
 
-    // For CDP connections, use the existing default context if available;
-    // otherwise create a new one (behaviour differs across CDP providers).
     let context
     if (usingCdp) {
       const existing = browser.contexts()
@@ -774,95 +817,105 @@ async function extractFromBrowser(pageUrl, debugMode = false) {
       context = await browser.newContext(contextOptions)
     }
 
-    // Belt-and-suspenders stealth init script (runs before any page JS)
     await context.addInitScript(STEALTH_SCRIPT)
-
-    // Block only heavy non-essential assets — allow scripts, XHR, fetch
     await context.route('**/*', (route, req) => {
       const type = req.resourceType()
       if (['image', 'media', 'font'].includes(type)) route.abort()
       else route.continue()
-    }).catch(() => {}) // some CDP contexts don't support routing
+    }).catch(() => {})
 
     const page = await context.newPage()
     info.steps.push(usingCdp ? 'cdp_page_opened' : 'browser_launched')
 
     // ── Phase 1: Navigate ─────────────────────────────────────────────────
+    info.timeout_stage = 'page_load'
     try {
       await page.goto(pageUrl, {
         waitUntil: 'domcontentloaded',
-        timeout:   Math.min(MAX_MS * 0.45, 12000),
+        timeout:   Math.min(rem(), 12000),
       })
-      info.steps.push('page_load:domcontentloaded')
+      info.steps.push('page_load:ok')
     } catch (e) {
       info.steps.push(`page_load:error:${String(e.message).slice(0, 60)}`)
     }
 
-    // ── Phase 2: Random pre-interaction delay (feels human) ───────────────
-    await page.waitForTimeout(jitter(600, 800))
+    // Capture early snapshot — used as fallback if later phases time out
+    snapshot = await captureSnapshot(page)
+    applySnapshot(snapshot)
 
-    // ── Phase 3: Detect Cloudflare challenge and wait for it to clear ─────
+    // ── Phase 2: Pre-interaction delay ────────────────────────────────────
+    if (rem() > 2000) await page.waitForTimeout(jitter(400, 400))
+
+    // ── Phase 3: Cloudflare challenge detection + wait ────────────────────
+    info.timeout_stage = 'cloudflare_wait'
     const earlyCheck = await page.evaluate(() => ({
-      title:  document.title || '',
-      body:   document.body?.innerText?.slice(0, 300) || '',
+      title: document.title || '',
+      body:  document.body?.innerText?.slice(0, 300) || '',
     })).catch(() => ({ title: '', body: '' }))
 
     if (BOT_PATTERNS.test(earlyCheck.title + ' ' + earlyCheck.body)) {
       info.steps.push('cloudflare_challenge_detected')
       info.blocked_or_bot_detected = true
-      // Move mouse realistically while waiting
       await humanMouseMove(page)
-      const cfWait = await waitForCloudflareClear(page, 20000)
+      const cfBudget = Math.min(rem() - 3000, 12000) // leave 3s for extraction
+      const cfWait   = cfBudget > 1000
+        ? await waitForCloudflareClear(page, cfBudget)
+        : { resolved: false, waitMs: 0 }
       info.cloudflare_resolved = cfWait.resolved
       info.challenge_wait_ms   = cfWait.waitMs
       if (cfWait.resolved) {
-        info.steps.push(`cloudflare_cleared_after_${cfWait.waitMs}ms`)
-        info.blocked_or_bot_detected = false // cleared!
+        info.steps.push(`cloudflare_cleared:${cfWait.waitMs}ms`)
+        info.blocked_or_bot_detected = false
+        snapshot = await captureSnapshot(page)
+        applySnapshot(snapshot)
       } else {
         info.steps.push('cloudflare_not_cleared')
-        // Return early — no point extracting a challenge page
+        // Return with whatever snapshot we have
         await browser.close(); browser = null
         info.elapsed_ms = Date.now() - t0
-        return { extracted: null, debugInfo: info, error: 'cloudflare_not_cleared' }
+        return { extracted: snapshot, debugInfo: info, error: 'cloudflare_not_cleared' }
       }
     }
 
-    // ── Phase 4: Wait for full load + networkidle ─────────────────────────
-    try {
-      await page.waitForLoadState('load', { timeout: 8000 })
-      info.steps.push('load_state:ok')
-    } catch {
-      info.steps.push('load_state:timeout')
-    }
-    try {
-      await page.waitForLoadState('networkidle', { timeout: 7000 })
-      info.steps.push('networkidle:ok')
-    } catch {
-      info.steps.push('networkidle:timeout')
+    // ── Phase 4: networkidle (bounded) ────────────────────────────────────
+    info.timeout_stage = 'networkidle'
+    if (rem() > 2000) {
+      try {
+        await page.waitForLoadState('networkidle', { timeout: Math.min(rem() - 1000, 5000) })
+        info.steps.push('networkidle:ok')
+      } catch {
+        info.steps.push('networkidle:timeout')
+      }
     }
 
-    // ── Phase 5: Wait for mint-relevant keywords ──────────────────────────
-    try {
-      await page.waitForFunction(
-        (kws) => { const t = document.body?.innerText || ''; return kws.some(k => t.includes(k)) },
-        WAIT_KEYWORDS,
-        { timeout: 8000 },
-      )
-      info.steps.push('keywords:found')
-    } catch {
-      info.steps.push('keywords:timeout')
+    // ── Phase 5: Keyword wait (bounded) ──────────────────────────────────
+    info.timeout_stage = 'keyword_wait'
+    if (rem() > 2000) {
+      try {
+        await page.waitForFunction(
+          (kws) => { const t = document.body?.innerText || ''; return kws.some(k => t.includes(k)) },
+          WAIT_KEYWORDS,
+          { timeout: Math.min(rem() - 1000, 5000) },
+        )
+        info.steps.push('keywords:found')
+      } catch {
+        info.steps.push('keywords:timeout')
+      }
     }
 
-    // ── Phase 6: Human mouse movement + gradual scroll ───────────────────
-    await humanMouseMove(page)
-    await humanScroll(page)
-    info.steps.push('scroll:done')
+    // ── Phase 6: Scroll ───────────────────────────────────────────────────
+    info.timeout_stage = 'scroll'
+    if (rem() > 3000) {
+      await humanMouseMove(page)
+      await humanScroll(page)
+      info.steps.push('scroll:done')
+      if (rem() > 1500) await page.waitForTimeout(jitter(300, 400))
+    } else {
+      info.steps.push('scroll:skipped_no_budget')
+    }
 
-    // Extra settle time after scroll
-    await page.waitForTimeout(jitter(500, 600))
-
-    // ── Phase 7: Screenshot (debug only) ─────────────────────────────────
-    if (debugMode) {
+    // ── Phase 7: Screenshot (debug) ───────────────────────────────────────
+    if (debugMode && rem() > 1500) {
       try {
         await page.screenshot({ path: '/tmp/opensea-debug.png', fullPage: true })
         info.screenshot_captured = true
@@ -872,101 +925,104 @@ async function extractFromBrowser(pageUrl, debugMode = false) {
       }
     }
 
-    // ── Phase 8: Extract all data ─────────────────────────────────────────
-    const extracted = await page.evaluate(() => {
-      const body      = document.body
-      const innerText = (body?.innerText || '').trim()
-      const title     = document.title || ''
-      const finalUrl  = window.location.href
+    // ── Phase 8: Full DOM extraction ──────────────────────────────────────
+    info.timeout_stage = 'dom_extract'
+    const STAGE_NAMES = [
+      'Public Sale','Public Stage','Public Mint','Public',
+      'Allowlist Sale','Allowlist Stage','Allowlist','Allow List',
+      'Whitelist','WL','Presale','Pre-Sale','FCFS','GTD','Guaranteed',
+      'Team Treasury','Treasury','Team','Claim','Open Edition',
+      'Holder Mint','Holder','Raffle','OG','VIP','Community',
+      'Early Access','Partner','Waitlist','Private',
+    ]
 
-      const STAGE_NAMES = [
-        'Public Sale','Public Stage','Public Mint','Public',
-        'Allowlist Sale','Allowlist Stage','Allowlist','Allow List',
-        'Whitelist','WL','Presale','Pre-Sale','FCFS','GTD','Guaranteed',
-        'Team Treasury','Treasury','Team','Claim','Open Edition',
-        'Holder Mint','Holder','Raffle','OG','VIP','Community',
-        'Early Access','Partner','Waitlist','Private',
-      ]
+    let extracted = null
+    try {
+      extracted = await Promise.race([
+        page.evaluate((stageNames) => {
+          const body      = document.body
+          const innerText = (body?.innerText || '').trim()
+          const title     = document.title || ''
+          const finalUrl  = window.location.href
 
-      const stageElements = []
-      try {
-        const walker = document.createTreeWalker(body, NodeFilter.SHOW_TEXT)
-        let node
-        while ((node = walker.nextNode())) {
-          const t = (node.textContent || '').trim()
-          if (STAGE_NAMES.some(n => t.toLowerCase() === n.toLowerCase())) {
-            let el = node.parentElement
-            for (let i = 0; i < 8 && el && el !== body; i++) {
-              if (el.innerText && el.innerText.length > 30 && el.innerText.length < 2000) break
-              el = el.parentElement
+          const stageElements = []
+          try {
+            const walker = document.createTreeWalker(body, NodeFilter.SHOW_TEXT)
+            let node
+            while ((node = walker.nextNode())) {
+              const t = (node.textContent || '').trim()
+              if (stageNames.some(n => t.toLowerCase() === n.toLowerCase())) {
+                let el = node.parentElement
+                for (let i = 0; i < 8 && el && el !== body; i++) {
+                  if (el.innerText && el.innerText.length > 30 && el.innerText.length < 2000) break
+                  el = el.parentElement
+                }
+                if (el && el !== body) {
+                  stageElements.push({ stageName: t, cardText: (el.innerText || '').trim().slice(0, 600) })
+                }
+              }
             }
-            if (el && el !== body) {
-              stageElements.push({ stageName: t, cardText: (el.innerText || '').trim().slice(0, 600) })
-            }
+          } catch {}
+
+          let nextDataJson = null
+          try { if (window.__NEXT_DATA__) nextDataJson = JSON.stringify(window.__NEXT_DATA__).slice(0, 100000) } catch {}
+
+          const selectorHits = {}
+          for (const sel of [
+            '[data-testid*="mint"]','[class*="mintSchedule"]','[class*="mint-schedule"]',
+            '[class*="stage"]','[class*="phase"]','[data-testid*="stage"]',
+          ]) {
+            try { selectorHits[sel] = document.querySelectorAll(sel).length } catch {}
           }
-        }
-      } catch {}
 
-      let nextDataJson = null
-      try {
-        if (window.__NEXT_DATA__) nextDataJson = JSON.stringify(window.__NEXT_DATA__).slice(0, 100000)
-      } catch {}
+          return {
+            title, finalUrl,
+            innerText:      innerText.slice(0, 80000),
+            bodyTextSample: innerText.slice(0, 5000),
+            iframeCount:    document.querySelectorAll('iframe').length,
+            stageElements:  stageElements.slice(0, 25),
+            hasNextData:    Boolean(nextDataJson),
+            nextDataJson,
+            selectorHits,
+          }
+        }, STAGE_NAMES),
+        new Promise((_, rej) => setTimeout(() => rej(new Error('dom_extract_timeout')), Math.min(rem(), 5000))),
+      ])
+      info.steps.push('dom_extracted')
+    } catch (e) {
+      info.steps.push(`dom_extract:timeout_using_snapshot`)
+      // Fall back to the early snapshot — still parse it
+      extracted = snapshot
+    }
 
-      const selectorHits = {}
-      for (const sel of [
-        '[data-testid*="mint"]','[class*="mintSchedule"]','[class*="mint-schedule"]',
-        '[class*="stage"]','[class*="phase"]','[data-testid*="stage"]',
-      ]) {
-        try { selectorHits[sel] = document.querySelectorAll(sel).length } catch {}
-      }
+    // Merge into info
+    if (extracted) {
+      applySnapshot(extracted)
+    }
 
-      return {
-        title,
-        finalUrl,
-        innerText:      innerText.slice(0, 80000),
-        bodyTextSample: innerText.slice(0, 5000),
-        iframeCount:    document.querySelectorAll('iframe').length,
-        stageElements:  stageElements.slice(0, 25),
-        hasNextData:    Boolean(nextDataJson),
-        nextDataJson,
-        selectorHits,
-      }
-    })
-
-    info.steps.push('dom_extracted')
-
-    // ── Populate debug fields ─────────────────────────────────────────────
-    info.final_url           = extracted.finalUrl
-    info.title               = extracted.title
-    info.body_text_sample    = extracted.bodyTextSample
-    info.iframe_count        = extracted.iframeCount
-    info.selectors_found     = extracted.selectorHits
-    info.inner_text_len      = extracted.innerText.length
-    info.stage_elements      = extracted.stageElements.length
-    info.has_next_data       = extracted.hasNextData
-    info.schedule_text_found = /mint\s+schedule/i.test(extracted.innerText)
-    info.mint_keywords_found = WAIT_KEYWORDS.filter(k => extracted.innerText.includes(k))
-
-    // Final bot-check on actual page content
-    const checkText = (extracted.title + ' ' + extracted.bodyTextSample).toLowerCase()
+    // Final bot-check
+    const checkText = ((extracted?.title || '') + ' ' + (extracted?.bodyTextSample || '')).toLowerCase()
     if (BOT_PATTERNS.test(checkText)) {
       info.blocked_or_bot_detected = true
-      info.steps.push('bot_still_detected_after_wait')
+      info.steps.push('bot_still_detected')
     }
 
-    if (debugMode) {
+    if (debugMode && extracted) {
       console.log(`[extractor:debug] title="${extracted.title}" url="${extracted.finalUrl}"`)
-      console.log(`[extractor:debug] body[0:200]=${extracted.bodyTextSample.slice(0,200).replace(/\n/g,' ')}`)
+      console.log(`[extractor:debug] body[0:200]=${(extracted.bodyTextSample||'').slice(0,200).replace(/\n/g,' ')}`)
     }
 
+    info.timeout_stage = null // cleared — completed normally
     await browser.close(); browser = null
     info.elapsed_ms = Date.now() - t0
-    return { extracted, debugInfo: info }
+    return { extracted: extracted || snapshot, debugInfo: info }
 
   } catch (e) {
     info.steps.push(`fatal_error:${String(e.message).slice(0, 100)}`)
     info.elapsed_ms = Date.now() - t0
-    return { extracted: null, debugInfo: info, error: e.message }
+    // Return with snapshot (may be null if crash happened before page load)
+    if (snapshot) applySnapshot(snapshot)
+    return { extracted: snapshot, debugInfo: info, error: e.message }
   } finally {
     if (browser) { try { await browser.close() } catch {} }
   }
@@ -1055,25 +1111,9 @@ function buildResult(stages) {
 // ────────────────────────────────────────────────────────────────────────────
 
 async function handleExtract(pageUrl, debugMode = false) {
-  const overallTimeout = new Promise((_, rej) =>
-    setTimeout(() => rej(new Error('extraction_timeout')), MAX_MS + 5000)
-  )
-
-  let browserResult
-  try {
-    browserResult = await Promise.race([
-      extractFromBrowser(pageUrl, debugMode),
-      overallTimeout,
-    ])
-  } catch (e) {
-    return {
-      ...buildResult([]),
-      error:                     e.message,
-      failure_reason:            'extraction_timeout_or_fatal',
-      needs_manual_confirmation: true,
-      debug: { error: e.message },
-    }
-  }
+  // extractFromBrowser manages its own time budget and never throws.
+  // No external Promise.race needed — partial debug always comes back.
+  const browserResult = await extractFromBrowser(pageUrl, debugMode)
 
   const { extracted, debugInfo, error } = browserResult
 
@@ -1081,6 +1121,7 @@ async function handleExtract(pageUrl, debugMode = false) {
     cloudflare_resolved: debugInfo?.cloudflare_resolved ?? false,
     challenge_wait_ms:   debugInfo?.challenge_wait_ms   ?? 0,
     ua_used:             debugInfo?.ua_used             ?? UA,
+    timeout_stage:       debugInfo?.timeout_stage       ?? null,
   }
 
   if (!extracted) {
