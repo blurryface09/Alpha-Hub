@@ -242,6 +242,25 @@ function parseDateText(text) {
 }
 
 // ────────────────────────────────────────────────────────────────────────────
+// COUNTDOWN HELPER
+// Converts "2d · 3h · 45m", "2 days 3 hours", "1d 5h", etc. → milliseconds.
+// Returns 0 if nothing parseable found.
+// ────────────────────────────────────────────────────────────────────────────
+
+function parseCountdownMs(text) {
+  if (!text) return 0
+  // Normalise middle-dots, bullets, pipes to spaces
+  const t = String(text).replace(/[·•|,]/g, ' ')
+  // Allow optional space between number and unit (split-line rendering)
+  const d = Number((t.match(/(\d+)\s*d(?:ay)?s?\b/i)  || [])[1] || 0)
+  const h = Number((t.match(/(\d+)\s*h(?:our)?s?\b/i) || [])[1] || 0)
+  // 'm' must not be followed by 'o' (month) or 's' (ms)
+  const m = Number((t.match(/(\d+)\s*m(?:in(?:ute)?s?)?\b(?!o|s)/i) || [])[1] || 0)
+  const s = Number((t.match(/(\d+)\s*s(?:ec(?:ond)?s?)?\b/i) || [])[1] || 0)
+  return ((d * 86400) + (h * 3600) + (m * 60) + s) * 1000
+}
+
+// ────────────────────────────────────────────────────────────────────────────
 // STAGE NAME MATCHER
 // ────────────────────────────────────────────────────────────────────────────
 
@@ -312,10 +331,52 @@ function extractStageFromBlock(stageName, wlType, blockLines) {
       if (wm) maxWallet = Number(wm[1])
     }
 
+    // ── "Starts in 2d · 3h · 45m" on a single line ───────────────────────
+    if (!startTime) {
+      const siM = t.match(/^starts?\s+in\s+(.+)/i) || t.match(/^minting\s+in\s+(.+)/i)
+      if (siM) {
+        const ms = parseCountdownMs(siM[1])
+        if (ms > 0) { startTime = new Date(now + ms).toISOString(); status = 'upcoming' }
+      }
+    }
+
+    // ── "Ends in 2d · 3h · 45m" on a single line — implies stage is live ─
+    if (!endTime) {
+      const eiM = t.match(/^ends?\s+in\s+(.+)/i)
+      if (eiM) {
+        const ms = parseCountdownMs(eiM[1])
+        if (ms > 0) { endTime = new Date(now + ms).toISOString(); if (status === 'unknown') status = 'live_now' }
+      }
+    }
+
     // ── Status text badge ─────────────────────────────────────────────────
-    if (/\b(live|minting\s+now|sale\s+live)\b/i.test(t))    status = 'live_now'
-    if (/\bended\b|\bsold\s+out\b|\bclosed\b/i.test(t))     status = 'ended'
-    if (/\bupcoming\b|\bscheduled\b|\bnot\s+started\b/i.test(t)) status = 'upcoming'
+    if (/^(live|minting\s+now|sale\s+live|active)$/i.test(t))   status = 'live_now'
+    if (/^(ended|sold\s*out|closed)$/i.test(t))                  status = 'ended'
+    if (/^(upcoming|scheduled|not\s+started)$/i.test(t))         status = 'upcoming'
+    // Broader in-line badge (won't mis-fire on "Live Art" because we need \b boundary)
+    if (/\b(minting\s+now|sale\s+live)\b/i.test(t))              status = 'live_now'
+  }
+
+  // ── Joined-block sweep for split-line countdowns ───────────────────────
+  // OpenSea sometimes renders "Starts in\n2d\n·\n3h\n·\n45m" across many lines.
+  // Joining with spaces lets a single regex catch them all.
+  const joinedBlock = blockLines.join(' ')
+
+  if (!startTime) {
+    const siM = joinedBlock.match(/starts?\s+in\s+([\d\s·•dhm]+)/i)
+             || joinedBlock.match(/minting\s+in\s+([\d\s·•dhm]+)/i)
+    if (siM) {
+      const ms = parseCountdownMs(siM[1])
+      if (ms > 0) { startTime = new Date(now + ms).toISOString(); if (status === 'unknown') status = 'upcoming' }
+    }
+  }
+
+  if (!endTime) {
+    const eiM = joinedBlock.match(/ends?\s+in\s+([\d\s·•dhm]+)/i)
+    if (eiM) {
+      const ms = parseCountdownMs(eiM[1])
+      if (ms > 0) { endTime = new Date(now + ms).toISOString(); if (status === 'unknown') status = 'live_now' }
+    }
   }
 
   // ── Compute status from timestamps when not overridden by badge ────────
@@ -384,6 +445,13 @@ function isScheduleDataLine(t) {
     /^eth$/i.test(t)                                  ||  // standalone "ETH" token
     /^start(?:s|ed)?[:\s]/i.test(t)                  ||  // "Started:", "Starts:", "Start:"
     /^end(?:s|ed)?[:\s]/i.test(t)                    ||  // "Ended:", "Ends:", "End:"
+    /^starts?\s+in\b/i.test(t)                       ||  // "Starts in 2d · 3h · 45m"
+    /^ends?\s+in\b/i.test(t)                         ||  // "Ends in 2d · 3h · 45m"
+    /^minting\s+in\b/i.test(t)                       ||  // "Minting in 2d ..."
+    /^\d+\s*d\b(?!\w)/i.test(t)                      ||  // "2d" countdown fragment
+    /^\d+\s*h\b(?!\w)/i.test(t)                      ||  // "3h" countdown fragment
+    /^\d+\s*m\b(?!o)(?!\w)/i.test(t)                 ||  // "45m" countdown fragment (not "mo")
+    /^[·•]\s*\d/i.test(t)                            ||  // "· 3h" separator+fragment
     parseDateText(t) !== null                         ||  // any parseable date
     /^\d+\s+per\s+wallet/i.test(t)                   ||  // "2 per wallet"
     /^(live|upcoming|ended|sold\s*out|active|minting\s*now|scheduled|not\s+started)$/i.test(t)
@@ -1079,19 +1147,30 @@ function buildResult(stages) {
 
   const hasWl = sorted.some(s => ['GTD','FCFS','RAFFLE'].includes(s.wl_type))
 
+  function formatMs(ms) {
+    if (ms <= 0) return null
+    const d = Math.floor(ms / 86400000)
+    const h = Math.floor((ms % 86400000) / 3600000)
+    const m = Math.floor((ms % 3600000) / 60000)
+    const parts = []
+    if (d) parts.push(`${d}d`)
+    if (h) parts.push(`${h}h`)
+    if (m && !d) parts.push(`${m}m`)
+    return parts.join(' ') || '< 1m'
+  }
+
+  // Countdown to next upcoming stage start
   let countdownText = null
   if (next?.start_time) {
     const ms = new Date(next.start_time).getTime() - Date.now()
-    if (ms > 0 && ms < 30 * 24 * 3600 * 1000) {
-      const d = Math.floor(ms / 86400000)
-      const h = Math.floor((ms % 86400000) / 3600000)
-      const m = Math.floor((ms % 3600000) / 60000)
-      const parts = []
-      if (d) parts.push(`${d}d`)
-      if (h) parts.push(`${h}h`)
-      if (m && !d) parts.push(`${m}m`)
-      countdownText = parts.join(' ') || '< 1m'
-    }
+    if (ms > 0 && ms < 30 * 24 * 3600 * 1000) countdownText = formatMs(ms)
+  }
+
+  // Time remaining in current live stage (for auto-mint: know when window closes)
+  let endsInText = null
+  if (current?.end_time) {
+    const ms = new Date(current.end_time).getTime() - Date.now()
+    if (ms > 0 && ms < 30 * 24 * 3600 * 1000) endsInText = formatMs(ms)
   }
 
   return {
@@ -1102,6 +1181,7 @@ function buildResult(stages) {
     end_date:                  primary?.end_time   || null,
     mint_price:                primary?.price      || null,
     countdown_text:            countdownText,
+    ends_in:                   endsInText,       // non-null when a stage is live_now
     has_wl_phase:              hasWl,
     max_per_wallet:            primary?.max_per_wallet || null,
     current_stage:             current?.name || null,
@@ -1211,33 +1291,61 @@ async function handleExtract(pageUrl, debugMode = false) {
     }
   }
 
-  // ── Countdown fallback when no stages found ───────────────────────────
+  // ── Countdown / live fallback when no stages found ───────────────────
   if (!allStages.length) {
-    const cdMatch = (extracted.innerText || '').match(/minting\s+in\b[\s\S]{0,200}/i)
-    if (cdMatch) {
-      const t = cdMatch[0]
-      const d = Number((t.match(/(\d+)\s*d/i) || [])[1] || 0)
-      const h = Number((t.match(/(\d+)\s*h/i) || [])[1] || 0)
-      const m = Number((t.match(/(\d+)\s*m(?!o)/i) || [])[1] || 0)
-      const ms = ((d * 86400) + (h * 3600) + (m * 60)) * 1000
+    const fullText = (extracted.innerText || '').replace(/[·•|,]/g, ' ')
+
+    // Live-mint signal: "Ends in X" without stage context
+    const endsInMatch = fullText.match(/ends?\s+in\s+([\d\s·•dhm]+)/i)
+    if (endsInMatch) {
+      const ms = parseCountdownMs(endsInMatch[1])
       if (ms > 0) {
-        const parts = []
-        if (d) parts.push(`${d}d`)
-        if (h) parts.push(`${h}h`)
-        if (m && !d) parts.push(`${m}m`)
-        debugInfo.steps.push('countdown_fallback')
+        debugInfo.steps.push('ends_in_fallback')
         return {
           ...buildResult([]),
           ...cfFields,
           schedule_exposed:          false,
-          mint_status:               'upcoming',
-          mint_date:                 new Date(Date.now() + ms).toISOString(),
-          countdown_text:            parts.join(' ') || '< 1m',
+          mint_status:               'live_now',
+          end_date:                  new Date(Date.now() + ms).toISOString(),
+          ends_in:                   (() => { const d=Math.floor(ms/86400000),h=Math.floor((ms%86400000)/3600000),m=Math.floor((ms%3600000)/60000); const p=[]; if(d)p.push(`${d}d`); if(h)p.push(`${h}h`); if(m&&!d)p.push(`${m}m`); return p.join(' ')||'< 1m' })(),
           needs_manual_confirmation: true,
           blocked_or_bot_detected:   false,
           failure_reason:            null,
           debug: debugInfo,
         }
+      }
+    }
+
+    // Upcoming-mint signal: "Starts in X" / "Minting in X" / "Sale starts in X"
+    const COUNTDOWN_PATTERNS = [
+      /starts?\s+in\s+([\d\s·•dhm]+)/i,
+      /minting\s+in\s+([\d\s·•dhm]+)/i,
+      /sale\s+starts?\s+in\s+([\d\s·•dhm]+)/i,
+      /mint\s+starts?\s+in\s+([\d\s·•dhm]+)/i,
+    ]
+    for (const re of COUNTDOWN_PATTERNS) {
+      const m = fullText.match(re)
+      if (m) {
+        const ms = parseCountdownMs(m[1])
+        if (ms > 0) {
+          const d=Math.floor(ms/86400000),h=Math.floor((ms%86400000)/3600000),mn=Math.floor((ms%3600000)/60000)
+          const parts=[]; if(d)parts.push(`${d}d`); if(h)parts.push(`${h}h`); if(mn&&!d)parts.push(`${mn}m`)
+          debugInfo.steps.push('countdown_fallback')
+          return {
+            ...buildResult([]),
+            ...cfFields,
+            schedule_exposed:          false,
+            mint_status:               'upcoming',
+            mint_date:                 new Date(Date.now() + ms).toISOString(),
+            countdown_text:            parts.join(' ') || '< 1m',
+            ends_in:                   null,
+            needs_manual_confirmation: true,
+            blocked_or_bot_detected:   false,
+            failure_reason:            null,
+            debug: debugInfo,
+          }
+        }
+        break
       }
     }
 
