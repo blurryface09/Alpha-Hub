@@ -1154,10 +1154,26 @@ async function handleExtract(pageUrl, debugMode = false) {
   const allStages = []
   const dedupeKey = new Set()
 
+  // Richness score: prefer stages with more populated fields.
+  // Used to keep the best version when the same stage appears from multiple sources.
+  function stageScore(s) {
+    return (s.price        != null ? 2 : 0)
+         + (s.max_per_wallet != null ? 1 : 0)
+         + (s.start_time   != null ? 2 : 0)
+         + (s.end_time     != null ? 1 : 0)
+  }
+
   function addStage(s) {
     if (!s || (!s.name && !s.start_time && s.price == null)) return
-    const fp = `${s.name}|${s.start_time}|${s.price}`
-    if (dedupeKey.has(fp)) return
+    // Deduplicate by name + start_time only — ignore price differences so that
+    // "Team / null / 0" and "Team / null / null" collapse to the same stage.
+    const fp = `${s.name ?? ''}|${s.start_time ?? 'null'}`
+    if (dedupeKey.has(fp)) {
+      // Replace existing entry if the new one is richer
+      const idx = allStages.findIndex(e => `${e.name ?? ''}|${e.start_time ?? 'null'}` === fp)
+      if (idx >= 0 && stageScore(s) > stageScore(allStages[idx])) allStages[idx] = s
+      return
+    }
     dedupeKey.add(fp)
     allStages.push(s)
   }
