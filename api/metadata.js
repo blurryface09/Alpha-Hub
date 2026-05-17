@@ -550,7 +550,26 @@ async function resolveOpenSeaStages(slug, pageUrl, token = 'ETH') {
     final_reason:               null,
   }
 
-  // Fire all three sources in parallel
+  // ── Source 3: Render extractor — pre-launched in parallel ───────────────
+  // Started immediately so it runs concurrently with the API/HTML fetch.
+  // If the API returns stages we discard the result at no extra cost.
+  // If the API fails the result is already (partially) in-flight — no added latency.
+  const renderExtractorPromise = RENDER_EXTRACTOR_URL
+    ? (async () => {
+        try {
+          const extractUrl = `${RENDER_EXTRACTOR_URL.replace(/\/$/, '')}/extract?url=${encodeURIComponent(pageUrl)}`
+          const headers = { 'Content-Type': 'application/json' }
+          if (RENDER_EXTRACTOR_SECRET) headers['X-Extractor-Secret'] = RENDER_EXTRACTOR_SECRET
+          const res = await fetch(extractUrl, {
+            headers,
+            signal: AbortSignal.timeout(28_000),
+          })
+          return res.ok ? await res.json() : null
+        } catch { return null }
+      })()
+    : Promise.resolve(null)
+
+  // Fire API + HTML in parallel
   const [dropsResult, pageResult] = await Promise.allSettled([
     // ── Source 1: Drops API ────────────────────────────────────────────────
     OPENSEA_KEY
@@ -689,48 +708,41 @@ async function resolveOpenSeaStages(slug, pageUrl, token = 'ETH') {
       }
     }
 
-    // ── Browser render extractor fallback ────────────────────────────────
+    // ── Browser render extractor — await the pre-launched parallel promise ─
     if (RENDER_EXTRACTOR_URL) {
-      debug.sources_called.push('render_extractor:attempt')
+      debug.sources_called.push('render_extractor:await')
       try {
-        const extractUrl = `${RENDER_EXTRACTOR_URL.replace(/\/$/, '')}/extract?url=${encodeURIComponent(pageUrl)}`
-        const headers = { 'Content-Type': 'application/json' }
-        if (RENDER_EXTRACTOR_SECRET) headers['X-Extractor-Secret'] = RENDER_EXTRACTOR_SECRET
-        const renderRes = await fetch(extractUrl, {
-          headers,
-          signal: AbortSignal.timeout(30_000),
-        })
-        if (renderRes.ok) {
-          const renderData = await renderRes.json()
+        const renderData = await renderExtractorPromise
+        if (renderData) {
           debug.sources_called.push('render_extractor:ok')
           if (renderData.schedule_exposed && Array.isArray(renderData.stages) && renderData.stages.length > 0) {
-            debug.schedule_exposed           = true
-            debug.needs_manual_confirmation  = renderData.needs_manual_confirmation ?? false
-            debug.final_reason               = 'render_extractor_stages'
-            debug.accepted_stages            = renderData.stages.length
+            debug.schedule_exposed          = true
+            debug.needs_manual_confirmation = renderData.needs_manual_confirmation ?? false
+            debug.final_reason              = 'render_extractor_stages'
+            debug.accepted_stages           = renderData.stages.length
             return {
-              stages:                   renderData.stages,
-              current_stage:            renderData.current_stage            || null,
-              next_stage:               renderData.next_stage               || null,
-              mint_status:              renderData.mint_status              || null,
-              mint_date:                renderData.mint_date                || null,
-              end_date:                 renderData.end_date                 || null,
-              mint_price:               renderData.mint_price               || null,
-              max_per_wallet:           renderData.max_per_wallet           || null,
-              has_wl_phase:             renderData.has_wl_phase             ?? false,
-              countdown_text:           renderData.countdown_text           || null,
-              schedule_exposed:         true,
+              stages:                    renderData.stages,
+              current_stage:             renderData.current_stage   || null,
+              next_stage:                renderData.next_stage      || null,
+              mint_status:               renderData.mint_status     || null,
+              mint_date:                 renderData.mint_date       || null,
+              end_date:                  renderData.end_date        || null,
+              mint_price:                renderData.mint_price      || null,
+              max_per_wallet:            renderData.max_per_wallet  || null,
+              has_wl_phase:              renderData.has_wl_phase    ?? false,
+              countdown_text:            renderData.countdown_text  || null,
+              schedule_exposed:          true,
               needs_manual_confirmation: renderData.needs_manual_confirmation ?? false,
               debug_opensea_extraction:  debug,
             }
           }
-          // Render extractor ran but found no stages — absorb any text signals it returned
+          // Ran but no stages — absorb any text signal
           debug.sources_called.push('render_extractor:no_stages')
           if (renderData.mint_status && renderData.mint_status !== 'unknown') {
             debug.final_reason = `render_extractor_text:${renderData.mint_status}`
             return {
               stages: [], mint_status: renderData.mint_status,
-              mint_date:     renderData.mint_date     || null,
+              mint_date:      renderData.mint_date      || null,
               countdown_text: renderData.countdown_text || null,
               has_wl_phase: false, schedule_exposed: false,
               needs_manual_confirmation: true,
@@ -738,7 +750,7 @@ async function resolveOpenSeaStages(slug, pageUrl, token = 'ETH') {
             }
           }
         } else {
-          debug.sources_called.push(`render_extractor:http_${renderRes.status}`)
+          debug.sources_called.push('render_extractor:null')
         }
       } catch (err) {
         debug.sources_called.push(`render_extractor:error:${err.message?.slice(0, 60)}`)
@@ -791,6 +803,9 @@ async function resolveOpenSeaStages(slug, pageUrl, token = 'ETH') {
     ? { name: primary.name, status: primary.status, price: primary.price, source: primary.source }
     : null
   debug.final_reason = `stages_ok:${mintStatus}`
+
+  // Render extractor was pre-launched in parallel — log that it was discarded
+  if (RENDER_EXTRACTOR_URL) debug.sources_called.push('render_extractor:discarded_api_ok')
 
   console.log('[opensea-stages] slug=%s status=%s stage=%s price=%s stages=%d sources=%s',
     slug, mintStatus, primary?.name || 'n/a',
