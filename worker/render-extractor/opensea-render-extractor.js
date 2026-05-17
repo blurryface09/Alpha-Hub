@@ -19,6 +19,7 @@
  */
 
 import { chromium as chromiumExtra } from 'playwright-extra'
+import { chromium as rawChromium }   from 'playwright'       // used for CDP connections
 import StealthPlugin                 from 'puppeteer-extra-plugin-stealth'
 import http                          from 'http'
 import { URL }                       from 'url'
@@ -33,6 +34,14 @@ const MAX_MS          = Number(process.env.EXTRACTOR_TIMEOUT_MS || 30000)
 const PROXY_SERVER    = process.env.PROXY_SERVER    || ''
 const PROXY_USERNAME  = process.env.PROXY_USERNAME  || ''
 const PROXY_PASSWORD  = process.env.PROXY_PASSWORD  || ''
+// Remote browser endpoint (Browserless.io, Apify, BrightData Scraping Browser, etc.)
+// When set, skips local Chromium launch entirely and connects to the remote CDP endpoint.
+// Examples:
+//   Browserless.io v1:  wss://chrome.browserless.io?token=YOUR_TOKEN
+//   Browserless.io v2:  wss://production-sfo.browserless.io?token=YOUR_TOKEN&blockAds=true
+//   BrightData CDP:     wss://brd-customer-XXXX-zone-scraping_browser:PASS@brd.superproxy.io:9222
+//   Apify:              wss://api.apify.com/v2/browser-proxy/...
+const CDP_ENDPOINT    = process.env.CDP_ENDPOINT    || ''
 
 // Realistic Chrome 124 stable UA
 const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.6367.155 Safari/537.36'
@@ -631,10 +640,31 @@ async function humanScroll(page) {
 /**
  * After a Cloudflare challenge page is detected, poll every second until the
  * challenge clears (title/body no longer match BOT_PATTERNS) or timeout.
+ * While waiting, attempts to click the Turnstile checkbox / challenge iframe.
  * Returns { resolved, waitMs }.
  */
 async function waitForCloudflareClear(page, timeoutMs = 20000) {
   const start = Date.now()
+
+  // Try clicking the CF Turnstile checkbox (fires once early, once mid-wait)
+  async function tryCfClick() {
+    try {
+      // CF challenge lives inside an iframe — iterate all frames
+      for (const frame of page.frames()) {
+        // Turnstile checkbox
+        const cb = await frame.$('input[type="checkbox"]').catch(() => null)
+        if (cb) { await cb.click(); return true }
+        // CF challenge button / widget container
+        const btn = await frame.$('.cf-turnstile, [data-turnstile-sitekey], #turnstile-wrapper, .challenge-form button').catch(() => null)
+        if (btn) { await btn.click(); return true }
+      }
+    } catch {}
+    return false
+  }
+
+  await tryCfClick()
+
+  let midClickDone = false
   while (Date.now() - start < timeoutMs) {
     await page.waitForTimeout(1000)
     const { title, bodySnippet } = await page.evaluate(() => ({
@@ -643,6 +673,11 @@ async function waitForCloudflareClear(page, timeoutMs = 20000) {
     })).catch(() => ({ title: '', bodySnippet: '' }))
     if (!BOT_PATTERNS.test(title + ' ' + bodySnippet)) {
       return { resolved: true, waitMs: Date.now() - start }
+    }
+    // Second click attempt around the 5-second mark
+    if (!midClickDone && Date.now() - start > 4000) {
+      midClickDone = true
+      await tryCfClick()
     }
   }
   return { resolved: false, waitMs: timeoutMs }
@@ -666,6 +701,7 @@ async function extractFromBrowser(pageUrl, debugMode = false) {
     cloudflare_resolved:     false,
     challenge_wait_ms:       0,
     ua_used:                 UA,
+    cdp_endpoint_used:       Boolean(CDP_ENDPOINT),
     schedule_text_found:     false,
     mint_keywords_found:     [],
     screenshot_captured:     false,
@@ -677,35 +713,42 @@ async function extractFromBrowser(pageUrl, debugMode = false) {
 
   let browser = null
   try {
-    // ── Launch with stealth + anti-detection flags ────────────────────────
-    const launchOptions = {
-      headless: true,
-      args: [
-        '--no-sandbox',
-        '--disable-setuid-sandbox',
-        '--disable-dev-shm-usage',
-        '--disable-accelerated-2d-canvas',
-        '--no-first-run',
-        '--no-zygote',
-        '--disable-gpu',
-        '--disable-blink-features=AutomationControlled',
-        '--disable-features=IsolateOrigins,site-per-process',
-        '--window-size=1280,900',
-        '--lang=en-US',
-        '--accept-lang=en-US,en;q=0.9',
-      ],
-    }
-
-    if (PROXY_SERVER) {
-      launchOptions.proxy = {
-        server:   PROXY_SERVER,
-        username: PROXY_USERNAME || undefined,
-        password: PROXY_PASSWORD || undefined,
+    // ── Connect to remote CDP endpoint OR launch local Chromium ──────────
+    const usingCdp = Boolean(CDP_ENDPOINT)
+    if (usingCdp) {
+      // Remote browser (Browserless.io / BrightData / Apify etc.)
+      // These services already use residential/trusted IPs — no stealth needed.
+      info.steps.push(`cdp_connect:${CDP_ENDPOINT.replace(/token=[^&]+/, 'token=***').replace(/:([^@:]+)@/, ':***@')}`)
+      browser = await rawChromium.connectOverCDP(CDP_ENDPOINT)
+    } else {
+      // Local Chromium with stealth plugin + anti-detection flags
+      const launchOptions = {
+        headless: true,
+        args: [
+          '--no-sandbox',
+          '--disable-setuid-sandbox',
+          '--disable-dev-shm-usage',
+          '--disable-accelerated-2d-canvas',
+          '--no-first-run',
+          '--no-zygote',
+          '--disable-gpu',
+          '--disable-blink-features=AutomationControlled',
+          '--disable-features=IsolateOrigins,site-per-process',
+          '--window-size=1280,900',
+          '--lang=en-US',
+          '--accept-lang=en-US,en;q=0.9',
+        ],
       }
-      info.steps.push(`proxy:${PROXY_SERVER.replace(/\/\/.*@/, '//')}`)
+      if (PROXY_SERVER) {
+        launchOptions.proxy = {
+          server:   PROXY_SERVER,
+          username: PROXY_USERNAME || undefined,
+          password: PROXY_PASSWORD || undefined,
+        }
+        info.steps.push(`proxy:${PROXY_SERVER.replace(/\/\/.*@/, '//')}`)
+      }
+      browser = await chromiumExtra.launch(launchOptions)
     }
-
-    browser = await chromiumExtra.launch(launchOptions)
 
     const contextOptions = {
       userAgent:   UA,
@@ -721,7 +764,15 @@ async function extractFromBrowser(pageUrl, debugMode = false) {
       },
     }
 
-    const context = await browser.newContext(contextOptions)
+    // For CDP connections, use the existing default context if available;
+    // otherwise create a new one (behaviour differs across CDP providers).
+    let context
+    if (usingCdp) {
+      const existing = browser.contexts()
+      context = existing.length > 0 ? existing[0] : await browser.newContext(contextOptions)
+    } else {
+      context = await browser.newContext(contextOptions)
+    }
 
     // Belt-and-suspenders stealth init script (runs before any page JS)
     await context.addInitScript(STEALTH_SCRIPT)
@@ -731,10 +782,10 @@ async function extractFromBrowser(pageUrl, debugMode = false) {
       const type = req.resourceType()
       if (['image', 'media', 'font'].includes(type)) route.abort()
       else route.continue()
-    })
+    }).catch(() => {}) // some CDP contexts don't support routing
 
     const page = await context.newPage()
-    info.steps.push('browser_launched')
+    info.steps.push(usingCdp ? 'cdp_page_opened' : 'browser_launched')
 
     // ── Phase 1: Navigate ─────────────────────────────────────────────────
     try {
