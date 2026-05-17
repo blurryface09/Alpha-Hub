@@ -662,53 +662,14 @@ async function resolveOpenSeaStages(slug, pageUrl, token = 'ETH') {
   debug.accepted_stages  = stages.length
   debug.schedule_exposed = stages.length > 0
 
-  // ── No structured stages → text fallback (last resort) ────────────────
+  // ── No structured stages from API/HTML ───────────────────────────────────
   if (!stages.length) {
     debug.needs_manual_confirmation = true
     debug.final_reason = 'no_structured_stages_found'
-    debug.sources_called.push('text_fallback')
 
-    if (pageText) {
-      const textStatus = detectTextStatus(pageText)
-
-      if (textStatus === 'upcoming') {
-        const cd = parseCountdown(pageText)
-        const approxStart = cd?.totalMs > 30_000
-          ? new Date(Date.now() + cd.totalMs).toISOString() : null
-        debug.selected_stage = { source: 'text_countdown', countdown: cd?.text }
-        debug.final_reason   = 'text_countdown_detected'
-        return {
-          stages: [], mint_status: 'upcoming',
-          mint_date: approxStart, countdown_text: cd?.text || null,
-          has_wl_phase: false, schedule_exposed: false,
-          needs_manual_confirmation: true,
-          debug_opensea_extraction: debug,
-        }
-      }
-
-      // NOTE: live_now from TEXT alone is intentionally NOT produced here.
-      // "Minting" in page text is ambiguous; only timestamps confirm live state.
-      if (textStatus === 'ended') {
-        debug.selected_stage = { source: 'text_ended' }
-        debug.final_reason   = 'text_ended_detected'
-        return {
-          stages: [], mint_status: 'ended', has_wl_phase: false,
-          schedule_exposed: false, needs_manual_confirmation: true,
-          debug_opensea_extraction: debug,
-        }
-      }
-
-      if (textStatus === 'tba') {
-        debug.final_reason = 'text_tba_detected'
-        return {
-          stages: [], mint_status: 'tba', has_wl_phase: false,
-          schedule_exposed: false, needs_manual_confirmation: true,
-          debug_opensea_extraction: debug,
-        }
-      }
-    }
-
-    // ── Browser render extractor — await the pre-launched parallel promise ─
+    // ── 1. Render extractor (already running in parallel — await first) ──
+    // Must be awaited BEFORE any text-fallback early-return so the browser
+    // result is never abandoned. Real stage data always beats text signals.
     if (RENDER_EXTRACTOR_URL) {
       debug.sources_called.push('render_extractor:await')
       try {
@@ -736,7 +697,7 @@ async function resolveOpenSeaStages(slug, pageUrl, token = 'ETH') {
               debug_opensea_extraction:  debug,
             }
           }
-          // Ran but no stages — absorb any text signal
+          // Ran but no structured stages — absorb any text signal it produced
           debug.sources_called.push('render_extractor:no_stages')
           if (renderData.mint_status && renderData.mint_status !== 'unknown') {
             debug.final_reason = `render_extractor_text:${renderData.mint_status}`
@@ -754,6 +715,47 @@ async function resolveOpenSeaStages(slug, pageUrl, token = 'ETH') {
         }
       } catch (err) {
         debug.sources_called.push(`render_extractor:error:${err.message?.slice(0, 60)}`)
+      }
+    }
+
+    // ── 2. Text fallback (only reached when render extractor found nothing) ─
+    debug.sources_called.push('text_fallback')
+    if (pageText) {
+      const textStatus = detectTextStatus(pageText)
+
+      if (textStatus === 'upcoming') {
+        const cd = parseCountdown(pageText)
+        const approxStart = cd?.totalMs > 30_000
+          ? new Date(Date.now() + cd.totalMs).toISOString() : null
+        debug.selected_stage = { source: 'text_countdown', countdown: cd?.text }
+        debug.final_reason   = 'text_countdown_detected'
+        return {
+          stages: [], mint_status: 'upcoming',
+          mint_date: approxStart, countdown_text: cd?.text || null,
+          has_wl_phase: false, schedule_exposed: false,
+          needs_manual_confirmation: true,
+          debug_opensea_extraction: debug,
+        }
+      }
+
+      // NOTE: live_now is intentionally NOT produced from text alone.
+      if (textStatus === 'ended') {
+        debug.selected_stage = { source: 'text_ended' }
+        debug.final_reason   = 'text_ended_detected'
+        return {
+          stages: [], mint_status: 'ended', has_wl_phase: false,
+          schedule_exposed: false, needs_manual_confirmation: true,
+          debug_opensea_extraction: debug,
+        }
+      }
+
+      if (textStatus === 'tba') {
+        debug.final_reason = 'text_tba_detected'
+        return {
+          stages: [], mint_status: 'tba', has_wl_phase: false,
+          schedule_exposed: false, needs_manual_confirmation: true,
+          debug_opensea_extraction: debug,
+        }
       }
     }
 
