@@ -915,9 +915,13 @@ async function extractFromBrowser(pageUrl, debugMode = false) {
     }
 
     // ── Phase 7: Screenshot (debug) ───────────────────────────────────────
-    if (debugMode && rem() > 1500) {
+    if (debugMode && rem() > 2000) {
       try {
-        await page.screenshot({ path: '/tmp/opensea-debug.png', fullPage: true })
+        await page.screenshot({
+          path:     '/tmp/opensea-debug.png',
+          fullPage: true,
+          timeout:  Math.min(rem() - 1000, 5000),
+        })
         info.screenshot_captured = true
         info.steps.push('screenshot:saved')
       } catch (e) {
