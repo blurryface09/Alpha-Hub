@@ -283,10 +283,10 @@ function extractStageFromBlock(stageName, wlType, blockLines) {
       }
     }
 
-    // ── "Starts" / "Ends" lines ────────────────────────────────────────────
-    const startM = t.match(/starts?\s+(.+)/i)
+    // ── "Started:" / "Starts:" / "Ended:" / "Ends:" lines ───────────────────
+    const startM = t.match(/^start(?:s|ed)?[:\s]+(.+)/i)
     if (startM && !startTime) { const d = parseDateText(startM[1]); if (d) startTime = d }
-    const endM = t.match(/ends?\s+(.+)/i)
+    const endM = t.match(/^end(?:s|ed)?[:\s]+(.+)/i)
     if (endM && !endTime) { const d = parseDateText(endM[1]); if (d) endTime = d }
 
     // ── Solo date (only if no other date yet) ─────────────────────────────
@@ -338,99 +338,138 @@ function guessWlType(name) {
   const s = String(name || '').toLowerCase()
   if (s.includes('fcfs'))                              return 'FCFS'
   if (s.includes('raffle'))                            return 'RAFFLE'
+  // Check PUBLIC before GTD so "Public NFT Sale" → PUBLIC
+  if (/\bpublic\b/.test(s) || s.includes('open edition') || /\bclaim\b/.test(s)) return 'PUBLIC'
   if (s.includes('gtd') || s.includes('guaranteed'))  return 'GTD'
-  if (s.includes('allow') || s.includes('white') || s.includes('wl') || s.includes('presale')) return 'GTD'
-  if (s.includes('public') || s.includes('open') || s.includes('claim')) return 'PUBLIC'
-  return 'UNKNOWN'
+  if (s.includes('allow') || s.includes('white') || s.includes('wl') ||
+      s.includes('presale') || s.includes('holder') || s.includes('og') ||
+      s.includes('vip') || s.includes('team') || s.includes('early'))     return 'GTD'
+  // Unknown/custom names (e.g. "OH NFT + PFP Holders") default to gated
+  return 'GTD'
 }
 
 // ────────────────────────────────────────────────────────────────────────────
 // FULL TEXT PARSER
-// Two-pass approach:
-//   Pass 1 — stage-name anchors: find known stage labels, parse block below
-//   Pass 2 — price anchors: find ETH lines, look backward for stage name
-// Both passes operate on the "Mint Schedule" section when found.
+//
+// Strategy: block-boundary detection.
+// After clipping to the Mint Schedule section (stop before LIVE MINTS etc.),
+// identify "stage header" lines by what follows them, not by recognising the
+// name itself.  A line is a stage header when it is NOT a data line AND the
+// next 4 lines contain at least one data signal (date / price / wallet limit).
+// This handles arbitrary custom stage names like "OH NFT + PFP Holders".
+//
+// Fallback: price-anchor pass when no headers are found.
 // ────────────────────────────────────────────────────────────────────────────
 
+// These section titles signal the end of the Mint Schedule content.
+const SCHEDULE_STOP_RE = /^(live\s+mints?|live\s+sales?|items|offers|activity|listings|recently\s+listed|attributes|details|about|description|explore|related|more\s+from|recently\s+sold|top\s+offers|collection\s+stats?)$/i
+
+/**
+ * Returns true for lines that are data/metadata within a stage block,
+ * NOT stage name candidates.
+ */
+function isScheduleDataLine(t) {
+  if (!t) return false
+  return (
+    parsePriceFromLine(t) !== null                    ||  // price / Free
+    /^eth$/i.test(t)                                  ||  // standalone "ETH" token
+    /^start(?:s|ed)?[:\s]/i.test(t)                  ||  // "Started:", "Starts:", "Start:"
+    /^end(?:s|ed)?[:\s]/i.test(t)                    ||  // "Ended:", "Ends:", "End:"
+    parseDateText(t) !== null                         ||  // any parseable date
+    /^\d+\s+per\s+wallet/i.test(t)                   ||  // "2 per wallet"
+    /^(live|upcoming|ended|sold\s*out|active|minting\s*now|scheduled|not\s+started)$/i.test(t)
+    // ↑ status badge — exact-line match only so "Live Art" won't be caught
+  )
+}
+
 function parseRenderedText(rawText) {
-  const lines = rawText.split('\n').map(l => l.trim()).filter(Boolean)
+  const allLines = rawText.split('\n').map(l => l.trim()).filter(Boolean)
 
-  // Find "Mint Schedule" section header
-  const schedIdx = lines.findIndex(l => /\bmint\s+schedule\b/i.test(l))
-  const workLines = schedIdx >= 0
-    ? lines.slice(schedIdx + 1, schedIdx + 250)
-    : lines.slice(0, 500) // scan first 500 lines when no header
+  // ── Locate "Mint Schedule" section ──────────────────────────────────────
+  const schedIdx  = allLines.findIndex(l => /^mint\s+schedule$/i.test(l))
+  const searchFrom = schedIdx >= 0 ? schedIdx + 1 : 0
 
-  const stages    = []
-  const usedIdxs  = new Set()
-
-  // ── Pass 1: Stage-name anchors ──────────────────────────────────────────
-  const nameHits = []
-  for (let i = 0; i < workLines.length; i++) {
-    const def = matchStageDef(workLines[i])
-    if (def) nameHits.push({ i, def })
+  // ── Find stop boundary ───────────────────────────────────────────────────
+  let stopIdx = allLines.length
+  for (let i = searchFrom; i < Math.min(searchFrom + 300, allLines.length); i++) {
+    if (SCHEDULE_STOP_RE.test(allLines[i])) { stopIdx = i; break }
   }
 
-  for (let ni = 0; ni < nameHits.length; ni++) {
-    const { i: startI, def } = nameHits[ni]
-    const endI = ni < nameHits.length - 1
-      ? nameHits[ni + 1].i
-      : Math.min(startI + 25, workLines.length)
+  // Work window: between header and stop boundary, max 200 lines
+  const workLines = allLines.slice(searchFrom, stopIdx).slice(0, 200)
+  if (!workLines.length) return { stages: [], rawScheduleFound: schedIdx >= 0 }
 
-    const blockLines = workLines.slice(startI + 1, endI)
-    const stage = extractStageFromBlock(def.name, def.wl, blockLines)
+  // ── Identify block header lines ──────────────────────────────────────────
+  // A line is a block header if:
+  //   1. Not a data line
+  //   2. ≤ 80 chars (excludes description paragraphs)
+  //   3. Within the next 4 lines, at least one data signal exists
+  const blockStarts = []
+  for (let i = 0; i < workLines.length; i++) {
+    const t = workLines[i]
+    if (!t || t.length > 80 || isScheduleDataLine(t)) continue
 
-    // Only accept stage if it has at least one real data point
+    const horizon = Math.min(i + 5, workLines.length)
+    let hasSignal = false
+    for (let j = i + 1; j < horizon; j++) {
+      if (isScheduleDataLine(workLines[j])) { hasSignal = true; break }
+    }
+    if (hasSignal) blockStarts.push(i)
+  }
+
+  // ── Parse each block ─────────────────────────────────────────────────────
+  const stages = []
+
+  for (let bi = 0; bi < blockStarts.length; bi++) {
+    const startI      = blockStarts[bi]
+    const endI        = bi < blockStarts.length - 1 ? blockStarts[bi + 1] : workLines.length
+    const rawName     = workLines[startI]
+    const blockLines  = workLines.slice(startI + 1, endI)
+
+    // Map raw name to known STAGE_DEFS if possible; keep original name otherwise
+    const def       = matchStageDef(rawName)
+    const stageName = def ? def.name : rawName
+    const wlType    = def ? def.wl    : guessWlType(rawName)
+
+    const stage = extractStageFromBlock(stageName, wlType, blockLines)
     if (stage.price !== null || stage.start_time || stage.max_per_wallet) {
       stages.push(stage)
-      for (let j = startI; j < endI; j++) usedIdxs.add(j)
     }
   }
 
-  // ── Pass 2: Price anchors (finds stages when name isn't a known label) ──
-  if (stages.length === 0) {
+  // ── Fallback: price-anchor pass (no headers detected) ───────────────────
+  if (!stages.length) {
+    const used = new Set()
     for (let i = 0; i < workLines.length; i++) {
-      if (usedIdxs.has(i)) continue
+      if (used.has(i)) continue
       const price = parsePriceFromLine(workLines[i])
       if (price === null) continue
 
       // Look back up to 5 lines for a stage name
       let stageName = 'Unknown'
-      let wlType    = 'UNKNOWN'
+      let wlType    = 'GTD'
       for (let j = i - 1; j >= Math.max(0, i - 5); j--) {
-        if (usedIdxs.has(j)) break
-        const def = matchStageDef(workLines[j])
-        if (def) { stageName = def.name; wlType = def.wl; break }
-        // Short non-price/non-date/non-status line → treat as stage name
-        const l = workLines[j].trim()
-        if (
-          l.length > 0 && l.length <= 50 &&
-          parsePriceFromLine(l) === null &&
-          parseDateText(l) === null &&
-          !/\b(upcoming|live|ended|sold\s+out|minting)\b/i.test(l) &&
-          !/^\d+$/.test(l)
-        ) {
-          stageName = l
-          wlType    = guessWlType(l)
-          break
-        }
+        const l = workLines[j]
+        if (!l || isScheduleDataLine(l)) continue
+        const def = matchStageDef(l)
+        if (def) { stageName = def.name; wlType = def.wl }
+        else     { stageName = l;        wlType = guessWlType(l) }
+        break
       }
 
-      // Forward extent: until next price line or max 12 lines
+      // Forward extent: up to next price line or 12 lines
       let endI = Math.min(i + 12, workLines.length)
       for (let j = i + 1; j < endI; j++) {
-        if (!usedIdxs.has(j) && parsePriceFromLine(workLines[j]) !== null) {
-          endI = j; break
-        }
+        if (!used.has(j) && parsePriceFromLine(workLines[j]) !== null) { endI = j; break }
       }
 
       const blockLines = workLines.slice(i, endI)
-      const stage = extractStageFromBlock(stageName, wlType, blockLines)
-      stage.price = stage.price ?? price // anchor price if block parse missed it
+      const stage      = extractStageFromBlock(stageName, wlType, blockLines)
+      stage.price      = stage.price ?? price
 
       if (stage.price !== null || stage.start_time) {
         stages.push(stage)
-        for (let j = i; j < endI; j++) usedIdxs.add(j)
+        for (let j = i; j < endI; j++) used.add(j)
       }
     }
   }
