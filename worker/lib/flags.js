@@ -48,6 +48,24 @@ export const FLAGS = {
 
   /** Emit execution profiling telemetry events */
   EXECUTION_TELEMETRY_ENABLED: parseBool('EXECUTION_TELEMETRY_ENABLED', true),
+
+  /** Prevent double-submission by checking for existing tx_hash / confirmed attempts */
+  DUPLICATE_PREVENTION_ENABLED: parseBool('DUPLICATE_PREVENTION_ENABLED', true),
+
+  /** Enforce CONTRACT_ALLOWLIST env var — reject executions for non-listed contracts */
+  CONTRACT_ALLOWLIST_ENABLED: parseBool('CONTRACT_ALLOWLIST_ENABLED', false),
+
+  /** Run eth_call simulation before every broadcast */
+  PRE_BROADCAST_SIMULATION_ENABLED: parseBool('PRE_BROADCAST_SIMULATION_ENABLED', false),
+
+  /** Periodically sweep and recover orphaned executing intents */
+  ORPHAN_RECOVERY_ENABLED: parseBool('ORPHAN_RECOVERY_ENABLED', true),
+
+  /** Advisory single-worker coordination via DB heartbeat leases */
+  LEASE_ENABLED: parseBool('LEASE_ENABLED', false),
+
+  /** Enforce max_total_spend cap on each transaction value */
+  SPEND_CAP_ENABLED: parseBool('SPEND_CAP_ENABLED', true),
 }
 
 /**

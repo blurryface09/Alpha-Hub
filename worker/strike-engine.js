@@ -60,6 +60,20 @@ try {
   getSessionTelemetry = profilerMod.getSessionTelemetry
 } catch { /* lib not available */ }
 
+let acquireLease = null
+let renewLease = null
+try {
+  const leaseMod = await import('./lib/lease.js')
+  acquireLease = leaseMod.acquireLease
+  renewLease   = leaseMod.renewLease
+} catch { /* lib not available */ }
+
+let reconcileQueue = null
+try {
+  const recoveryMod = await import('./lib/recovery.js')
+  reconcileQueue = recoveryMod.reconcileQueue
+} catch { /* lib not available */ }
+
 let getRpcHealth = null
 let persistRpcHealth = null
 let loadPersistedRpcHealth = null
@@ -369,6 +383,12 @@ async function tick(supabase) {
     if (persistRpcHealth && supabase) {
       await persistRpcHealth(supabase).catch(() => null)
     }
+    if (renewLease && supabase && (FLAGS?.LEASE_ENABLED ?? false)) {
+      await renewLease(supabase).catch(() => null)
+    }
+    if (reconcileQueue && supabase && (FLAGS?.ORPHAN_RECOVERY_ENABLED ?? true)) {
+      await reconcileQueue(supabase).catch(() => null)
+    }
   }
 
   // ── Central LIVE_EXECUTION_ENABLED enforcement ──────────────────────────────
@@ -529,6 +549,15 @@ async function main() {
 
   if (supabase && loadPersistedRpcHealth) {
     await loadPersistedRpcHealth(supabase).catch(() => null)
+  }
+
+  if (supabase && acquireLease && (FLAGS?.LEASE_ENABLED ?? false)) {
+    const leaseResult = await acquireLease(supabase).catch(() => ({ acquired: true, workerId: 'unknown' }))
+    if (!leaseResult.acquired) {
+      workerWarn('boot', 'Worker lease conflict — another worker may be running', {
+        conflicting_worker: leaseResult.conflictingWorker,
+      })
+    }
   }
 
   workerLog('boot', 'Strike worker started', {

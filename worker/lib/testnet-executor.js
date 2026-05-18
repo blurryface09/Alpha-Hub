@@ -31,6 +31,14 @@ import {
   transitionIntent,
   fetchTestnetReadyIntents,
 } from './queue.js'
+import {
+  validateTransaction,
+  enforceSpendCap,
+  validateContractAllowlist,
+  preventDuplicateTx,
+  preBroadcastSimulate,
+} from './security.js'
+import { logSigningEvent } from './audit.js'
 
 export { fetchTestnetReadyIntents }
 
@@ -196,6 +204,11 @@ export async function executeTestnetIntent(supabase, queuedIntent) {
     throw new Error('LIVE_EXECUTION_ENABLED must be false during testnet execution')
   }
 
+  // ── Duplicate prevention (before claim to avoid unnecessary state transitions) ─
+  if (flagEnabled('DUPLICATE_PREVENTION_ENABLED')) {
+    await preventDuplicateTx(supabase, queuedIntent.id)
+  }
+
   // ── Atomic claim: simulated_success → executing_testnet ───────────────────
   profiler.phase('claim')
   const intent = await claimForTestnet(supabase, queuedIntent.id)
@@ -279,6 +292,15 @@ export async function executeTestnetIntent(supabase, queuedIntent) {
       value: valueWei,
     }
 
+    // ── Security checks ───────────────────────────────────────────────────
+    validateTransaction(baseTx, { allowedChainId: chainDescriptor.id })
+    if (flagEnabled('SPEND_CAP_ENABLED')) {
+      enforceSpendCap(intent, valueWei)
+    }
+    if (flagEnabled('CONTRACT_ALLOWLIST_ENABLED')) {
+      validateContractAllowlist(contractAddress, testnetKey)
+    }
+
     await insertEvent(supabase, intent, 'prepare', 'Transaction prepared.', {
       to:           contractAddress,
       value_wei:    valueWei.toString(),
@@ -297,6 +319,28 @@ export async function executeTestnetIntent(supabase, queuedIntent) {
     }
 
     await insertEvent(supabase, intent, 'nonce', 'Nonce resolved.', { address, nonce })
+
+    // ── Pre-broadcast simulation ──────────────────────────────────────────
+    if (flagEnabled('PRE_BROADCAST_SIMULATION_ENABLED')) {
+      profiler.phase('pre_sim')
+      const simResult = await preBroadcastSimulate(publicClient, { ...baseTx, from: address })
+      if (!simResult.success) {
+        if (simResult.isRevert) {
+          throw new Error(`Pre-broadcast simulation reverted: ${simResult.revertReason}`)
+        }
+        log.warn('testnet_presim', 'Pre-broadcast simulation failed (non-revert) — proceeding', {
+          reason: simResult.revertReason,
+        })
+      }
+    }
+
+    await logSigningEvent(supabase, {
+      intentId: intent.id,
+      userId:   intent.user_id,
+      address,
+      action:   'prepare',
+      chain:    testnetKey,
+    })
 
     // ── Send + confirm ────────────────────────────────────────────────────
     profiler.phase('execute')
@@ -319,6 +363,14 @@ export async function executeTestnetIntent(supabase, queuedIntent) {
             attempt,
             intent_id: intent.id,
             explorer:  getExplorerTxLink(testnetKey, hash),
+          })
+          await logSigningEvent(supabase, {
+            intentId: intent.id,
+            userId:   intent.user_id,
+            address,
+            action:   'broadcast',
+            chain:    testnetKey,
+            txHash:   hash,
           })
           await insertEvent(supabase, intent, 'testnet_pending', 'Waiting for testnet confirmation.', {
             tx_hash:      hash,
@@ -350,6 +402,16 @@ export async function executeTestnetIntent(supabase, queuedIntent) {
     if (receipt.status === 'reverted') {
       throw new Error(`Transaction reverted on-chain in block ${blockNumber}`)
     }
+
+    await logSigningEvent(supabase, {
+      intentId:    intent.id,
+      userId:      intent.user_id,
+      address,
+      action:      'confirmed',
+      chain:       testnetKey,
+      txHash,
+      blockNumber,
+    })
 
     await transitionIntent(supabase, intent.id, INTENT_STATES.EXECUTING_TESTNET, INTENT_STATES.TESTNET_SUCCESS, {
       tx_hash:        txHash,
