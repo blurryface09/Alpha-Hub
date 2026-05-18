@@ -60,6 +60,7 @@ export default function MintGuardPage() {
   const [upgradeRequired, setUpgradeRequired] = useState(null)
   const [strikeReviewProject, setStrikeReviewProject] = useState(null) // project pending Strike Review
   const [vaultWallet, setVaultWallet] = useState(null) // cached vault for review modal
+  const [deletingId, setDeletingId] = useState(null)
   const autoFired = React.useRef(new Set())
   const tgNotified = React.useRef(new Set()) // prevent duplicate Telegram notifications
 
@@ -307,15 +308,25 @@ export default function MintGuardPage() {
   }
 
   const handleDelete = async (id) => {
+    if (deletingId) return
+    setDeletingId(id)
     const snapshot = projects.find(p => p.id === id)
     setProjects(prev => prev.filter(p => p.id !== id))
-    const { error } = await supabase.from('wl_projects').delete().eq('id', id)
-    if (error) {
-      if (snapshot) setProjects(prev => [snapshot, ...prev.filter(p => p.id !== id)])
-      toast.error(friendlyError(error, 'Could not delete this project. Please try again.'))
-      return
+    try {
+      const { error } = await supabase
+        .from('wl_projects')
+        .delete()
+        .eq('id', id)
+        .eq('user_id', user.id)
+      if (error) {
+        if (snapshot) setProjects(prev => [snapshot, ...prev.filter(p => p.id !== id)])
+        toast.error(friendlyError(error, 'Could not delete this project. Please try again.'))
+        return
+      }
+      toast.success('Project removed')
+    } finally {
+      setDeletingId(null)
     }
-    toast.success('Project removed')
   }
 
   const handleStatusUpdate = async (id, status) => {
@@ -401,26 +412,38 @@ export default function MintGuardPage() {
   const handleStrikeArm = async (project, opts = {}) => {
     const token = await getAuthToken()
     if (!token) throw new Error('Sign in again before enabling Strike Mode.')
-    const res = await fetch('/api/mint/enable-strike', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-      body: JSON.stringify({
-        wlProjectId: project.id,
-        name: project.name,
-        contractAddress: project.contract_address,
-        chain: project.chain,
-        chainId: project.chain_id,
-        quantity: project.max_mint || 1,
-        mintPrice: project.mint_price || '0',
-        maxTotalSpend: project.max_total_spend || '0.05',
-        maxGasFee: project.max_gas_fee || null,
-        mintDate: project.mint_date || new Date().toISOString(),
-        strikeExecuteAt: project.mint_date || new Date().toISOString(),
-        acknowledgeRisk: true,
-        simulationOnly: opts.simulationOnly ?? true,
-      }),
-    })
-    const data = await res.json().catch(() => ({}))
+
+    const controller = new AbortController()
+    const timeout = setTimeout(() => controller.abort(), 15_000)
+    let res, data
+    try {
+      res = await fetch('/api/mint/enable-strike', {
+        method: 'POST',
+        signal: controller.signal,
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({
+          wlProjectId: project.id,
+          name: project.name,
+          contractAddress: project.contract_address,
+          chain: project.chain,
+          chainId: project.chain_id,
+          quantity: project.max_mint || 1,
+          mintPrice: project.mint_price || '0',
+          maxTotalSpend: project.max_total_spend || '0.05',
+          maxGasFee: project.max_gas_fee || null,
+          mintDate: project.mint_date || new Date().toISOString(),
+          strikeExecuteAt: project.mint_date || new Date().toISOString(),
+          acknowledgeRisk: true,
+          simulationOnly: opts.simulationOnly ?? true,
+        }),
+      })
+      data = await res.json().catch(() => ({}))
+    } catch (err) {
+      throw new Error(err.name === 'AbortError' ? 'Strike arm timed out — try again.' : err.message)
+    } finally {
+      clearTimeout(timeout)
+    }
+
     if (!res.ok || data?.ok === false) throw new Error(data.error || 'Could not arm Strike Mode.')
 
     // Update wl_projects mode in DB
@@ -429,14 +452,20 @@ export default function MintGuardPage() {
       .update({ mint_mode: 'auto', automint_enabled: true })
       .eq('id', project.id)
     if (error && String(error.message || '').includes('schema cache')) {
-      await supabase.from('wl_projects').update({ mint_mode: 'auto' }).eq('id', project.id)
+      const fallback = await supabase.from('wl_projects').update({ mint_mode: 'auto' }).eq('id', project.id)
+      if (fallback.error) throw new Error(friendlyError(fallback.error, 'Could not save Strike Mode setting.'))
+    } else if (error) {
+      throw new Error(friendlyError(error, 'Could not save Strike Mode setting.'))
     }
 
     setProjects(prev => prev.map(p =>
       p.id === project.id ? { ...p, mint_mode: 'auto', automint_enabled: true } : p,
     ))
     setStrikeReviewProject(null)
-    toast.success(data.message || (opts.simulationOnly ? 'Strike armed in simulation mode.' : 'Strike armed. Worker is watching.'))
+    const msg = data.dryRun
+      ? (data.message || 'Strike armed (dry run — LIVE_EXECUTION_ENABLED is off).')
+      : (data.message || (opts.simulationOnly ? 'Strike armed in simulation mode.' : 'Strike armed. Worker is watching.'))
+    toast.success(msg)
   }
 
   const executeMint = async (project) => {
@@ -605,6 +634,7 @@ export default function MintGuardPage() {
                 key={project.id}
                 project={project}
                 isMinting={mintingId === project.id}
+                isDeleting={deletingId === project.id}
                 onMint={(isAuto) => handleMint(project, isAuto)}
                 onDelete={() => handleDelete(project.id)}
                 onStatusUpdate={(s) => handleStatusUpdate(project.id, s)}

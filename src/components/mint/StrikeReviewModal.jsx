@@ -232,6 +232,7 @@ export default function StrikeReviewModal({ project, vault, onConfirmArm, onClos
     setArmError(null)
     try {
       await onConfirmArm(project, { simulationOnly: true })
+      onClose()
     } catch (err) {
       setArmError(err.message)
     } finally {

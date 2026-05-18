@@ -110,7 +110,7 @@ function Countdown({ mintDate, onLive, isAuto }) {
   }, timeLeft)
 }
 
-export default function ProjectCard({ project, isMinting, onMint, onDelete, onStatusUpdate, onMintModeToggle, onEdit }) {
+export default function ProjectCard({ project, isMinting, isDeleting, onMint, onDelete, onStatusUpdate, onMintModeToggle, onEdit }) {
   const [expanded, setExpanded] = useState(false)
   const [showEdit, setShowEdit] = useState(false)
   const [intel, setIntel] = useState(null)
@@ -352,8 +352,12 @@ export default function ProjectCard({ project, isMinting, onMint, onDelete, onSt
               <button onClick={() => setShowEdit(true)} className="btn-ghost text-xs px-2 py-0.5" style={{borderColor:'rgba(0,255,136,0.4)',color:'var(--accent)'}}>
                 Edit
               </button>
-              <button onClick={onDelete} className="btn-danger text-xs px-2 py-0.5">
-                {React.createElement(Trash2, { size: 11 })}
+              <button
+                onClick={onDelete}
+                disabled={isDeleting}
+                className={`btn-danger text-xs px-2 py-0.5 ${isDeleting ? 'opacity-50 cursor-not-allowed' : ''}`}
+              >
+                {isDeleting ? '…' : React.createElement(Trash2, { size: 11 })}
               </button>
             </div>
           </div>
