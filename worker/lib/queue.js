@@ -1,0 +1,228 @@
+/**
+ * Intent queue state machine.
+ * Manages state transitions, atomic claims, and DB persistence.
+ */
+
+import { createLogger } from './logger.js'
+import { PREWARM_WINDOW_MS } from './timing.js'
+
+const log = createLogger(null, null)
+
+// ─── State constants ──────────────────────────────────────────────────────────
+
+export const INTENT_STATES = {
+  PENDING: 'pending',
+  ARMED: 'armed',
+  QUEUED: 'queued',
+  EXECUTING: 'executing',
+  RETRYING: 'retrying',
+  SUCCESS: 'success',
+  FAILED: 'failed',
+  EXPIRED: 'expired',
+  CANCELLED: 'cancelled',
+}
+
+// ─── Valid transitions ────────────────────────────────────────────────────────
+
+/**
+ * Allowed state transitions.
+ * Key: from-state, Value: Set of valid to-states.
+ * @type {Map<string, Set<string>>}
+ */
+const TRANSITIONS = new Map([
+  [INTENT_STATES.PENDING, new Set([INTENT_STATES.ARMED, INTENT_STATES.CANCELLED, INTENT_STATES.EXPIRED])],
+  [INTENT_STATES.ARMED, new Set([INTENT_STATES.QUEUED, INTENT_STATES.CANCELLED, INTENT_STATES.EXPIRED])],
+  [INTENT_STATES.QUEUED, new Set([INTENT_STATES.EXECUTING, INTENT_STATES.CANCELLED, INTENT_STATES.EXPIRED])],
+  [INTENT_STATES.EXECUTING, new Set([INTENT_STATES.SUCCESS, INTENT_STATES.FAILED, INTENT_STATES.RETRYING])],
+  [INTENT_STATES.RETRYING, new Set([INTENT_STATES.EXECUTING, INTENT_STATES.FAILED])],
+  [INTENT_STATES.FAILED, new Set([INTENT_STATES.CANCELLED])],
+])
+
+/** States that the worker can atomically claim for execution */
+const CLAIMABLE_STATES = [
+  INTENT_STATES.ARMED,
+  // Legacy statuses that existed before this state machine was introduced
+  'watching',
+  'prepared',
+]
+
+// ─── Helpers ──────────────────────────────────────────────────────────────────
+
+function now() {
+  return new Date().toISOString()
+}
+
+async function insertEvent(supabase, intent, state, message, metadata = {}) {
+  await supabase
+    .from('mint_execution_events')
+    .insert({
+      intent_id: intent.id,
+      user_id: intent.user_id,
+      state,
+      message,
+      metadata,
+    })
+    .throwOnError()
+}
+
+// ─── Exports ──────────────────────────────────────────────────────────────────
+
+/**
+ * Atomically claim an intent for execution.
+ * Updates status to 'executing' only if the intent is currently in a claimable
+ * state AND strike_enabled=true. Returns the updated row, or null if the claim
+ * raced with another worker.
+ *
+ * @param {import('@supabase/supabase-js').SupabaseClient} supabase
+ * @param {string} intentId
+ * @returns {Promise<object|null>}
+ */
+export async function claimIntent(supabase, intentId) {
+  const intentLog = createLogger(intentId, null)
+  const { data, error } = await supabase
+    .from('mint_intents')
+    .update({
+      status: INTENT_STATES.EXECUTING,
+      last_state: 'Strike worker: preparing execution',
+      updated_at: now(),
+    })
+    .eq('id', intentId)
+    .eq('strike_enabled', true)
+    .in('status', CLAIMABLE_STATES)
+    .select()
+    .single()
+
+  if (error || !data) {
+    intentLog.warn('claim', 'Failed to claim intent (already claimed or wrong state)', {
+      intent_id: intentId,
+      error: error?.message,
+    })
+    return null
+  }
+
+  intentLog.info('claim', 'Intent claimed for execution', { status: data.status })
+  return data
+}
+
+/**
+ * Transition an intent to a new state, validating the transition first.
+ *
+ * @param {import('@supabase/supabase-js').SupabaseClient} supabase
+ * @param {string} intentId
+ * @param {string} fromState  — current state (used for validation only)
+ * @param {string} toState
+ * @param {Record<string,unknown>} [patch]  — additional fields to update
+ * @returns {Promise<object>}
+ */
+export async function transitionIntent(supabase, intentId, fromState, toState, patch = {}) {
+  const intentLog = createLogger(intentId, null)
+
+  const allowed = TRANSITIONS.get(fromState)
+  if (allowed && !allowed.has(toState)) {
+    throw new Error(
+      `Invalid intent state transition: ${fromState} → ${toState} (intent: ${intentId})`,
+    )
+  }
+
+  const { data, error } = await supabase
+    .from('mint_intents')
+    .update({
+      status: toState,
+      updated_at: now(),
+      ...patch,
+    })
+    .eq('id', intentId)
+    .select()
+    .single()
+
+  if (error) throw error
+
+  intentLog.info('tick', `Intent transitioned: ${fromState} → ${toState}`, {
+    from_state: fromState,
+    to_state: toState,
+  })
+  return data
+}
+
+/**
+ * Mark an intent as expired, inserting an execution event.
+ *
+ * @param {import('@supabase/supabase-js').SupabaseClient} supabase
+ * @param {object} intent
+ */
+export async function markExpired(supabase, intent) {
+  const intentLog = createLogger(intent.id, intent.user_id)
+  try {
+    await supabase
+      .from('mint_intents')
+      .update({
+        status: INTENT_STATES.EXPIRED,
+        strike_enabled: false,
+        last_state: 'Intent expired without execution',
+        updated_at: now(),
+      })
+      .eq('id', intent.id)
+      .throwOnError()
+
+    await insertEvent(
+      supabase,
+      intent,
+      INTENT_STATES.EXPIRED,
+      'Intent passed expiry window without being executed.',
+      { expire_time: now() },
+    )
+    intentLog.info('expired', 'Intent marked as expired')
+  } catch (err) {
+    intentLog.error('expired', 'Failed to mark intent as expired', { error: err.message })
+  }
+}
+
+/**
+ * Fetch intents that are ready to execute right now.
+ *
+ * @param {import('@supabase/supabase-js').SupabaseClient} supabase
+ * @param {number} batchSize
+ * @param {number} nowMs
+ * @returns {Promise<object[]>}
+ */
+export async function fetchReadyIntents(supabase, batchSize, nowMs) {
+  const nowIso = new Date(nowMs).toISOString()
+  const { data, error } = await supabase
+    .from('mint_intents')
+    .select('*')
+    .eq('strike_enabled', true)
+    .in('status', CLAIMABLE_STATES)
+    .or(`strike_execute_at.is.null,strike_execute_at.lte.${nowIso}`)
+    .order('updated_at', { ascending: true })
+    .limit(batchSize)
+
+  if (error) throw error
+  return data ?? []
+}
+
+/**
+ * Fetch intents that are approaching their execution time (prewarm phase).
+ * These intents have a strike_execute_at set within the next prewarmWindowMs.
+ *
+ * @param {import('@supabase/supabase-js').SupabaseClient} supabase
+ * @param {number} prewarmWindowMs
+ * @param {number} nowMs
+ * @returns {Promise<object[]>}
+ */
+export async function fetchPrewarmIntents(supabase, prewarmWindowMs, nowMs) {
+  const nowIso = new Date(nowMs).toISOString()
+  const prewarmCutoff = new Date(nowMs + prewarmWindowMs).toISOString()
+
+  const { data, error } = await supabase
+    .from('mint_intents')
+    .select('*')
+    .eq('strike_enabled', true)
+    .in('status', CLAIMABLE_STATES)
+    .gt('strike_execute_at', nowIso)
+    .lte('strike_execute_at', prewarmCutoff)
+    .order('strike_execute_at', { ascending: true })
+    .limit(20)
+
+  if (error) throw error
+  return data ?? []
+}

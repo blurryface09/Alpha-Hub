@@ -4,9 +4,53 @@ import { createWalletClient, http } from 'viem'
 import { privateKeyToAccount } from 'viem/accounts'
 import { prepareMintTransaction } from '../api/_lib/mint-engine.js'
 
+// ── New lib modules (loaded dynamically so engine still starts if files are missing) ──
+let FLAGS = null
+let flagEnabled = null
+let log = null
+let fetchReadyIntents = null
+let fetchPrewarmIntents = null
+let markExpired = null
+let executeIntent = null
+let isExpired = null
+let PREWARM_WINDOW_MS = 30_000
+
+try {
+  const flagsMod = await import('./lib/flags.js')
+  FLAGS = flagsMod.FLAGS
+  flagEnabled = flagsMod.flagEnabled
+} catch { /* lib not available */ }
+
+try {
+  const logMod = await import('./lib/logger.js')
+  log = logMod.log
+} catch { /* lib not available */ }
+
+try {
+  const queueMod = await import('./lib/queue.js')
+  fetchReadyIntents = queueMod.fetchReadyIntents
+  fetchPrewarmIntents = queueMod.fetchPrewarmIntents
+  markExpired = queueMod.markExpired
+} catch { /* lib not available */ }
+
+try {
+  const execMod = await import('./lib/executor.js')
+  executeIntent = execMod.executeIntent
+} catch { /* lib not available */ }
+
+try {
+  const timingMod = await import('./lib/timing.js')
+  isExpired = timingMod.isExpired
+  PREWARM_WINDOW_MS = timingMod.PREWARM_WINDOW_MS
+} catch { /* lib not available */ }
+
+// ── Config ────────────────────────────────────────────────────────────────────
+
 const LOOP_MS = Number(process.env.STRIKE_WORKER_INTERVAL_MS || 15000)
 const BATCH_SIZE = Number(process.env.STRIKE_WORKER_BATCH_SIZE || 3)
 const RUN_ONCE = String(process.env.STRIKE_WORKER_RUN_ONCE || '').toLowerCase() === 'true'
+
+// Original safety flags — kept for backward compatibility
 const AUTO_STRIKE_ENABLED = String(process.env.AUTO_STRIKE_ENABLED || '').toLowerCase() === 'true'
 const ALPHA_VAULT_ENABLED = String(process.env.ALPHA_VAULT_ENABLED || '').toLowerCase() === 'true'
 
@@ -24,13 +68,41 @@ const CHAIN_IDS = {
 
 let stopping = false
 
-function log(...args) {
+// ── Logging (falls back to plain console if lib not loaded) ───────────────────
+
+function legacyLog(...args) {
   console.log(new Date().toISOString(), '[strike-worker]', ...args)
+}
+
+function workerLog(phase, message, fields = {}) {
+  if (log) {
+    log.info(phase, message, fields)
+  } else {
+    legacyLog(message, fields)
+  }
+}
+
+function workerWarn(phase, message, fields = {}) {
+  if (log) {
+    log.warn(phase, message, fields)
+  } else {
+    legacyLog('[WARN]', message, fields)
+  }
+}
+
+function workerError(phase, message, fields = {}) {
+  if (log) {
+    log.error(phase, message, fields)
+  } else {
+    console.error(new Date().toISOString(), '[strike-worker] [ERROR]', message, fields)
+  }
 }
 
 function sleep(ms) {
   return new Promise(resolve => setTimeout(resolve, ms))
 }
+
+// ── Environment validation ────────────────────────────────────────────────────
 
 function envReady() {
   const missing = []
@@ -47,6 +119,8 @@ function supabaseClient() {
     { auth: { persistSession: false, autoRefreshToken: false } },
   )
 }
+
+// ── Legacy helpers (kept for backward compat when lib is missing) ─────────────
 
 function normalizeChain(chain = 'eth') {
   const text = String(chain || '').toLowerCase()
@@ -97,18 +171,6 @@ async function recordAttempt(supabase, intent, status, patch = {}) {
   }).throwOnError()
 }
 
-async function loadVault(supabase, userId) {
-  const { data, error } = await supabase
-    .from('alpha_vault_wallets')
-    .select('id,address,wallet_address,encrypted_private_key,status')
-    .eq('user_id', userId)
-    .eq('status', 'active')
-    .order('created_at', { ascending: false })
-    .limit(1)
-  if (error) throw error
-  return data?.[0] || null
-}
-
 async function loadIntentVault(supabase, intent) {
   if (intent.vault_wallet_id) {
     const { data, error } = await supabase
@@ -120,10 +182,20 @@ async function loadIntentVault(supabase, intent) {
       .maybeSingle()
     if (!error && data) return data
   }
-  return loadVault(supabase, intent.user_id)
+  const { data, error } = await supabase
+    .from('alpha_vault_wallets')
+    .select('id,address,wallet_address,encrypted_private_key,status')
+    .eq('user_id', intent.user_id)
+    .eq('status', 'active')
+    .order('created_at', { ascending: false })
+    .limit(1)
+  if (error) throw error
+  return data?.[0] || null
 }
 
-async function claimIntent(supabase, intent) {
+// ── Legacy execution path (used when lib/executor.js is not available) ────────
+
+async function legacyClaimIntent(supabase, intent) {
   const { data, error } = await supabase
     .from('mint_intents')
     .update({
@@ -140,8 +212,8 @@ async function claimIntent(supabase, intent) {
   return data
 }
 
-async function processIntent(supabase, queuedIntent) {
-  const intent = await claimIntent(supabase, queuedIntent)
+async function legacyProcessIntent(supabase, queuedIntent) {
+  const intent = await legacyClaimIntent(supabase, queuedIntent)
   if (!intent) return
 
   try {
@@ -187,7 +259,7 @@ async function processIntent(supabase, queuedIntent) {
       updated_at: new Date().toISOString(),
     }).eq('id', intent.id).throwOnError()
     await insertEvent(supabase, intent, 'submitted', 'Strike transaction submitted.', { txHash })
-    log('submitted', intent.id, txHash)
+    legacyLog('submitted', intent.id, txHash)
   } catch (error) {
     const message = String(error?.shortMessage || error?.message || 'Strike execution failed.').slice(0, 240)
     await recordAttempt(supabase, intent, 'failed', { error_message: message }).catch(() => null)
@@ -200,59 +272,162 @@ async function processIntent(supabase, queuedIntent) {
       updated_at: new Date().toISOString(),
     }).eq('id', intent.id).catch(() => null)
     await insertEvent(supabase, intent, 'failed', 'Strike failed safely. No duplicate transaction will be sent.', { error: message }).catch(() => null)
-    log('failed', intent.id, message)
+    legacyLog('failed', intent.id, message)
   }
 }
 
-async function tick(supabase) {
-  if (!AUTO_STRIKE_ENABLED || !ALPHA_VAULT_ENABLED) {
-    log('disabled by safety switches')
+// ── Expiration sweep ──────────────────────────────────────────────────────────
+
+async function sweepExpiredIntents(supabase) {
+  // Only sweep if timing and queue libs are loaded
+  if (!isExpired || !markExpired) return
+
+  const nowMs = Date.now()
+  const { data, error } = await supabase
+    .from('mint_intents')
+    .select('id,user_id,strike_execute_at,status')
+    .eq('strike_enabled', true)
+    .in('status', ['armed', 'watching', 'prepared'])
+    .not('strike_execute_at', 'is', null)
+    .limit(20)
+
+  if (error) {
+    workerWarn('tick', 'Failed to query for expired intents', { error: error.message })
     return
   }
 
-  const { data, error } = await supabase
-    .from('mint_intents')
-    .select('*')
-    .eq('strike_enabled', true)
-    .in('status', ['armed', 'watching', 'prepared'])
-    .order('updated_at', { ascending: true })
-    .limit(BATCH_SIZE)
+  const expiredIntents = (data || []).filter(intent =>
+    isExpired(new Date(intent.strike_execute_at).getTime(), nowMs),
+  )
 
-  if (error) throw error
-  const now = Date.now()
-  const ready = (data || []).filter(intent => {
-    if (!intent.strike_execute_at) return true
-    const executeAt = new Date(intent.strike_execute_at).getTime()
-    return Number.isNaN(executeAt) || executeAt <= now
-  })
-  for (const intent of ready) {
-    await processIntent(supabase, intent)
+  for (const intent of expiredIntents) {
+    workerLog('expired', 'Sweeping expired intent', { intent_id: intent.id })
+    await markExpired(supabase, intent).catch(err =>
+      workerError('expired', 'Failed to mark intent expired', { intent_id: intent.id, error: err.message }),
+    )
   }
-  if (!data?.length) log('idle')
-  else if (!ready.length) log('armed intents waiting for mint time', data.length)
 }
+
+// ── Main tick ─────────────────────────────────────────────────────────────────
+
+async function tick(supabase) {
+  if (!AUTO_STRIKE_ENABLED || !ALPHA_VAULT_ENABLED) {
+    workerLog('tick', 'disabled by safety switches', {
+      auto_strike: AUTO_STRIKE_ENABLED,
+      alpha_vault: ALPHA_VAULT_ENABLED,
+    })
+    return
+  }
+
+  const nowMs = Date.now()
+
+  // Expiration sweep first
+  await sweepExpiredIntents(supabase)
+
+  // ── Prewarm phase (new lib path) ──────────────────────────────────────────
+  if (fetchPrewarmIntents && flagEnabled) {
+    try {
+      const prewarmIntents = await fetchPrewarmIntents(supabase, PREWARM_WINDOW_MS, nowMs)
+      if (prewarmIntents.length) {
+        workerLog('prewarm', 'Intents in prewarm window', {
+          count: prewarmIntents.length,
+          prewarm_window_ms: PREWARM_WINDOW_MS,
+        })
+        for (const intent of prewarmIntents) {
+          const msUntil = new Date(intent.strike_execute_at).getTime() - nowMs
+          workerLog('prewarm', 'Intent approaching execution window', {
+            intent_id: intent.id,
+            ms_until_execute: msUntil,
+            execute_at: intent.strike_execute_at,
+          })
+        }
+      }
+    } catch (err) {
+      workerWarn('tick', 'Prewarm query failed', { error: err.message })
+    }
+  }
+
+  // ── Fetch and process ready intents ──────────────────────────────────────
+  let readyIntents = []
+  let usedLibPath = false
+
+  if (fetchReadyIntents) {
+    try {
+      readyIntents = await fetchReadyIntents(supabase, BATCH_SIZE, nowMs)
+      usedLibPath = true
+    } catch (err) {
+      workerWarn('tick', 'fetchReadyIntents failed, falling back to legacy query', { error: err.message })
+    }
+  }
+
+  if (!usedLibPath) {
+    // Legacy fallback query
+    const { data, error } = await supabase
+      .from('mint_intents')
+      .select('*')
+      .eq('strike_enabled', true)
+      .in('status', ['armed', 'watching', 'prepared'])
+      .order('updated_at', { ascending: true })
+      .limit(BATCH_SIZE)
+
+    if (error) throw error
+    const now = Date.now()
+    readyIntents = (data || []).filter(intent => {
+      if (!intent.strike_execute_at) return true
+      const executeAt = new Date(intent.strike_execute_at).getTime()
+      return Number.isNaN(executeAt) || executeAt <= now
+    })
+    if (!data?.length) workerLog('tick', 'idle')
+    else if (!readyIntents.length) workerLog('tick', 'armed intents waiting for mint time', { count: data.length })
+  }
+
+  // ── Execute ───────────────────────────────────────────────────────────────
+  for (const intent of readyIntents) {
+    if (executeIntent) {
+      // New execution path
+      await executeIntent(supabase, intent)
+    } else {
+      // Legacy fallback
+      await legacyProcessIntent(supabase, intent)
+    }
+  }
+
+  if (readyIntents.length === 0 && usedLibPath) {
+    workerLog('tick', 'idle')
+  }
+}
+
+// ── Entry point ───────────────────────────────────────────────────────────────
 
 async function main() {
   const missing = envReady()
   if (missing.length) {
-    log(`missing env: ${missing.join(', ')}. Worker booted safely but will not execute.`)
+    workerWarn('boot', `Missing env: ${missing.join(', ')}. Worker booted safely but will not execute.`)
     if (RUN_ONCE) return
   }
 
   const supabase = missing.length ? null : supabaseClient()
-  log('started', { autoStrike: AUTO_STRIKE_ENABLED, alphaVault: ALPHA_VAULT_ENABLED, intervalMs: LOOP_MS })
+  workerLog('boot', 'Strike worker started', {
+    auto_strike: AUTO_STRIKE_ENABLED,
+    alpha_vault: ALPHA_VAULT_ENABLED,
+    live_execution: FLAGS?.LIVE_EXECUTION_ENABLED ?? false,
+    retry_enabled: FLAGS?.RETRY_ENABLED ?? false,
+    prewarm_enabled: FLAGS?.PREWARM_ENABLED ?? false,
+    interval_ms: LOOP_MS,
+    lib_loaded: Boolean(executeIntent),
+  })
 
   while (!stopping) {
     try {
       if (supabase) await tick(supabase)
     } catch (error) {
-      log('tick error', String(error?.message || error))
+      workerError('tick', 'Tick error', { error: String(error?.message || error) })
     }
     if (RUN_ONCE) break
     await sleep(LOOP_MS)
   }
 
-  log('stopped')
+  workerLog('boot', 'Strike worker stopped')
 }
 
 process.on('SIGTERM', () => { stopping = true })

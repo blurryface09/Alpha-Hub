@@ -1,0 +1,237 @@
+/**
+ * Retry engine with exponential backoff, nonce management, and tx replacement.
+ */
+
+import { createLogger } from './logger.js'
+
+const log = createLogger(null, null)
+
+// ─── Error classification ─────────────────────────────────────────────────────
+
+const ERROR_TYPE_CAPS = {
+  revert: 0,
+  nonce_too_low: 2,
+  gas_too_low: 3,
+  timeout: 4,
+  network: 4,
+  default: 3,
+}
+
+/**
+ * Classify a viem / JSON-RPC error into a retry category.
+ *
+ * @param {unknown} error
+ * @returns {{ type: string, retryable: boolean, maxRetries: number }}
+ */
+export function classifyError(error) {
+  const msg = String(
+    error?.shortMessage || error?.message || error || '',
+  ).toLowerCase()
+  const data = String(error?.details || error?.data || '').toLowerCase()
+  const combined = `${msg} ${data}`
+
+  if (
+    combined.includes('revert') ||
+    combined.includes('execution reverted') ||
+    combined.includes('invalid opcode') ||
+    combined.includes('out of gas') // contract-level OOG is a revert
+  ) {
+    return { type: 'revert', retryable: false, maxRetries: ERROR_TYPE_CAPS.revert }
+  }
+
+  if (
+    combined.includes('nonce too low') ||
+    combined.includes('already known') ||
+    combined.includes('replacement transaction underpriced') && combined.includes('nonce')
+  ) {
+    return { type: 'nonce_too_low', retryable: true, maxRetries: ERROR_TYPE_CAPS.nonce_too_low }
+  }
+
+  if (
+    combined.includes('gas too low') ||
+    combined.includes('max fee per gas less than block base fee') ||
+    combined.includes('transaction underpriced') ||
+    combined.includes('replacement transaction underpriced')
+  ) {
+    return { type: 'gas_too_low', retryable: true, maxRetries: ERROR_TYPE_CAPS.gas_too_low }
+  }
+
+  if (
+    combined.includes('timeout') ||
+    combined.includes('timed out') ||
+    combined.includes('aborted') ||
+    error?.name === 'AbortError'
+  ) {
+    return { type: 'timeout', retryable: true, maxRetries: ERROR_TYPE_CAPS.timeout }
+  }
+
+  if (
+    combined.includes('network') ||
+    combined.includes('fetch failed') ||
+    combined.includes('econnreset') ||
+    combined.includes('econnrefused') ||
+    combined.includes('socket hang up') ||
+    combined.includes('failed to fetch')
+  ) {
+    return { type: 'network', retryable: true, maxRetries: ERROR_TYPE_CAPS.network }
+  }
+
+  return { type: 'default', retryable: true, maxRetries: ERROR_TYPE_CAPS.default }
+}
+
+// ─── Backoff ──────────────────────────────────────────────────────────────────
+
+const BACKOFF_BASE_MS = 500
+const BACKOFF_MAX_MS = 15_000
+
+/**
+ * Calculate how long to wait before a retry.
+ * Uses exponential backoff with random jitter.
+ *
+ * @param {number} attempt  — 0-indexed attempt number
+ * @param {string} [errorType]
+ * @returns {number} milliseconds
+ */
+export function backoffMs(attempt, errorType = 'default') {
+  const base = BACKOFF_BASE_MS * Math.pow(2, attempt)
+  const jitter = Math.random() * 200
+  return Math.min(base + jitter, BACKOFF_MAX_MS)
+}
+
+// ─── Nonce tracker ────────────────────────────────────────────────────────────
+
+/** In-memory nonce tracking keyed by lowercase address */
+const _nonceStore = new Map()
+
+export const nonceTracker = {
+  /**
+   * Get cached nonce for address, or undefined if not tracked.
+   * @param {string} address
+   * @returns {number|undefined}
+   */
+  get(address) {
+    return _nonceStore.get(address.toLowerCase())
+  },
+
+  /**
+   * Set nonce for address.
+   * @param {string} address
+   * @param {number} nonce
+   */
+  set(address, nonce) {
+    _nonceStore.set(address.toLowerCase(), nonce)
+  },
+
+  /**
+   * Increment the tracked nonce by 1 (call after successful tx submission).
+   * @param {string} address
+   */
+  increment(address) {
+    const key = address.toLowerCase()
+    const current = _nonceStore.get(key)
+    if (current !== undefined) {
+      _nonceStore.set(key, current + 1)
+    }
+  },
+
+  /**
+   * Remove tracked nonce for address.
+   * @param {string} address
+   */
+  clear(address) {
+    _nonceStore.delete(address.toLowerCase())
+  },
+}
+
+// ─── withRetry ────────────────────────────────────────────────────────────────
+
+/**
+ * Execute `fn` with automatic retry according to error type.
+ *
+ * @param {() => Promise<unknown>} fn
+ * @param {{
+ *   intentId?: string,
+ *   userId?: string,
+ *   enabled?: boolean,
+ *   onRetry?: (attempt: number, error: unknown, classification: object) => void | Promise<void>,
+ *   gasParams?: object,
+ *   address?: string,
+ *   publicClient?: import('viem').PublicClient,
+ * }} options
+ * @returns {Promise<unknown>}
+ */
+export async function withRetry(fn, options = {}) {
+  const {
+    intentId = null,
+    userId = null,
+    enabled = true,
+    onRetry = null,
+    address = null,
+    publicClient = null,
+  } = options
+
+  const retryLog = createLogger(intentId, userId)
+  let attempt = 0
+  let lastError
+
+  while (true) {
+    try {
+      const result = await fn(attempt)
+      // Success — bump tracked nonce if we know the address
+      if (address) nonceTracker.increment(address)
+      return result
+    } catch (err) {
+      lastError = err
+      const classification = classifyError(err)
+
+      retryLog.warn('retry', 'Execution attempt failed', {
+        attempt,
+        error_type: classification.type,
+        retryable: classification.retryable,
+        max_retries: classification.maxRetries,
+        error: String(err?.shortMessage || err?.message || err),
+      })
+
+      // Never retry non-retryable errors
+      if (!classification.retryable) {
+        throw err
+      }
+
+      // Retry limit reached
+      if (!enabled || attempt >= classification.maxRetries) {
+        throw err
+      }
+
+      // Handle nonce_too_low: refresh nonce from chain
+      if (classification.type === 'nonce_too_low' && address && publicClient) {
+        try {
+          const freshNonce = await publicClient.getTransactionCount({
+            address,
+            blockTag: 'pending',
+          })
+          nonceTracker.set(address, freshNonce)
+          retryLog.info('retry', 'Refreshed nonce from chain', {
+            address,
+            nonce: freshNonce,
+          })
+        } catch (nonceErr) {
+          retryLog.warn('retry', 'Failed to refresh nonce', { error: nonceErr.message })
+        }
+      }
+
+      const delay = backoffMs(attempt, classification.type)
+      retryLog.info('retry', 'Waiting before retry', {
+        attempt,
+        delay_ms: Math.round(delay),
+        next_attempt: attempt + 1,
+      })
+
+      if (onRetry) {
+        await onRetry(attempt, err, classification)
+      }
+
+      await new Promise(resolve => setTimeout(resolve, delay))
+      attempt += 1
+    }
+  }
+}
