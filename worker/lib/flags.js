@@ -66,6 +66,9 @@ export const FLAGS = {
 
   /** Enforce max_total_spend cap on each transaction value */
   SPEND_CAP_ENABLED: parseBool('SPEND_CAP_ENABLED', true),
+
+  /** Enable background project revalidation and alert engine */
+  MONITORING_ENABLED: parseBool('MONITORING_ENABLED', true),
 }
 
 /**

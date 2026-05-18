@@ -1,6 +1,7 @@
 import React, { useState } from 'react'
 import LiveMintFeed from './LiveMintFeed'
 import EditProjectModal from './EditProjectModal'
+import MonitoringBadge from '../alerts/MonitoringBadge'
 import { motion } from 'framer-motion'
 import { Zap, Trash2, Clock, ChevronDown, ChevronUp, ToggleLeft, ToggleRight, ExternalLink, RefreshCw, Twitter, AlertCircle, Gift, Bell, Lock } from 'lucide-react'
 import toast from 'react-hot-toast'
@@ -194,6 +195,9 @@ export default function ProjectCard({ project, isMinting, isDeleting, onMint, on
               </div>
             </div>
             <div className="flex items-center gap-2 flex-shrink-0">
+              {project.calendar_project_id && (
+                <MonitoringBadge projectId={project.calendar_project_id} />
+              )}
               <button
                 onClick={onMintModeToggle}
                 className={"flex items-center gap-1.5 text-xs px-2 py-1 rounded-md border transition-all " + (project.mint_mode === "auto" ? "border-green/40 text-green bg-green/8" : "border-border2 text-muted hover:border-accent hover:text-accent")}

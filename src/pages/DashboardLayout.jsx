@@ -6,11 +6,11 @@ import {
   User, Bell, LogOut, Menu, X, Zap, Compass
 } from 'lucide-react'
 import { useAccount } from 'wagmi'
-import { useAuthStore, useNotificationStore } from '../store'
+import { useAuthStore, useNotificationStore, useMonitorStore } from '../store'
 import { useSubscription } from '../hooks/useSubscription'
 import { planLabel } from '../lib/access'
 import ConnectWallet from '../components/shared/ConnectWallet'
-import NotificationPanel from '../components/shared/NotificationPanel'
+import AlertCenter from '../components/alerts/AlertCenter'
 
 const ADMIN_WALLET = import.meta.env.VITE_ADMIN_WALLET?.toLowerCase()
 
@@ -28,6 +28,7 @@ export default function DashboardLayout() {
   const { address, isConnected } = useAccount()
   const { subscription, plan, isActive, isPending, isFree } = useSubscription()
   const { notifications, unreadCount, fetch: fetchNotifs, subscribe, markAllRead } = useNotificationStore()
+  const { fetchWatched } = useMonitorStore()
   const [sidebarOpen, setSidebarOpen] = useState(false)
   const [notifOpen, setNotifOpen] = useState(false)
   const navigate = useNavigate()
@@ -37,6 +38,7 @@ export default function DashboardLayout() {
   useEffect(() => {
     if (user) {
       fetchNotifs(user.id)
+      fetchWatched(user.id)
       const unsub = subscribe(user.id)
       return unsub
     }
@@ -198,7 +200,7 @@ export default function DashboardLayout() {
 
             <AnimatePresence>
               {notifOpen && (
-                <NotificationPanel
+                <AlertCenter
                   notifications={notifications}
                   unreadCount={unreadCount}
                   onMarkAllRead={() => markAllRead(user.id)}
