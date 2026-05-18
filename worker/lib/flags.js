@@ -34,6 +34,9 @@ export const FLAGS = {
   /** Run full execution path against the mint adapter without touching the blockchain */
   SIMULATION_MODE: parseBool('SIMULATION_MODE', false),
 
+  /** Enable real transaction broadcasting on Sepolia / Base Sepolia ONLY */
+  TESTNET_EXECUTION_ENABLED: parseBool('TESTNET_EXECUTION_ENABLED', false),
+
   /** Run preflight contract risk checks before simulation */
   PREFLIGHT_ENABLED: parseBool('PREFLIGHT_ENABLED', true),
 

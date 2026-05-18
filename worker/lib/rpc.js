@@ -9,10 +9,12 @@ import { log as globalLog } from './logger.js'
 // ─── Chain configuration ──────────────────────────────────────────────────────
 
 const CHAIN_RPC_ENV = {
-  eth: ['ETH_RPC_URL', 'ETH_RPC_URL_FALLBACK_1', 'ETH_RPC_URL_FALLBACK_2'],
-  base: ['BASE_RPC_URL', 'BASE_RPC_URL_FALLBACK_1', 'BASE_RPC_URL_FALLBACK_2'],
-  bnb: ['BNB_RPC_URL', 'BNB_RPC_URL_FALLBACK_1', 'BNB_RPC_URL_FALLBACK_2'],
-  apechain: ['APECHAIN_RPC_URL'],
+  eth:            ['ETH_RPC_URL', 'ETH_RPC_URL_FALLBACK_1', 'ETH_RPC_URL_FALLBACK_2'],
+  base:           ['BASE_RPC_URL', 'BASE_RPC_URL_FALLBACK_1', 'BASE_RPC_URL_FALLBACK_2'],
+  bnb:            ['BNB_RPC_URL', 'BNB_RPC_URL_FALLBACK_1', 'BNB_RPC_URL_FALLBACK_2'],
+  apechain:       ['APECHAIN_RPC_URL'],
+  sepolia:        ['SEPOLIA_RPC_URL', 'SEPOLIA_RPC_URL_FALLBACK_1'],
+  'base-sepolia': ['BASE_SEPOLIA_RPC_URL', 'BASE_SEPOLIA_RPC_URL_FALLBACK_1'],
 }
 
 const PUBLIC_FALLBACKS = {
@@ -29,6 +31,15 @@ const PUBLIC_FALLBACKS = {
     'https://bsc-dataseed.binance.org',
   ],
   apechain: [],
+  sepolia: [
+    'https://rpc.sepolia.org',
+    'https://ethereum-sepolia-rpc.publicnode.com',
+    'https://rpc2.sepolia.org',
+  ],
+  'base-sepolia': [
+    'https://sepolia.base.org',
+    'https://base-sepolia-rpc.publicnode.com',
+  ],
 }
 
 // ─── Health scoring ───────────────────────────────────────────────────────────

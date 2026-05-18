@@ -46,6 +46,14 @@ try {
   runSimulationRequeueSweep = simMod.runSimulationRequeueSweep
 } catch { /* lib not available */ }
 
+let executeTestnetIntent = null
+let fetchTestnetReadyIntents = null
+try {
+  const testnetMod = await import('./lib/testnet-executor.js')
+  executeTestnetIntent     = testnetMod.executeTestnetIntent
+  fetchTestnetReadyIntents = testnetMod.fetchTestnetReadyIntents
+} catch { /* lib not available */ }
+
 let getSessionTelemetry = null
 try {
   const profilerMod = await import('./lib/profiler.js')
@@ -339,19 +347,22 @@ async function sweepExpiredIntents(supabase) {
 async function tick(supabase) {
   tickCount++
 
-  const liveEnabled = FLAGS?.LIVE_EXECUTION_ENABLED ?? false
-  const simMode = FLAGS?.SIMULATION_MODE ?? false
+  const liveEnabled     = FLAGS?.LIVE_EXECUTION_ENABLED     ?? false
+  const simMode         = FLAGS?.SIMULATION_MODE             ?? false
+  const testnetEnabled  = FLAGS?.TESTNET_EXECUTION_ENABLED   ?? false
 
   // ── Heartbeat ───────────────────────────────────────────────────────────────
   if (tickCount === 1 || tickCount % HEARTBEAT_INTERVAL === 0) {
     workerLog('tick', 'Worker heartbeat', {
-      tick:                 tickCount,
-      live_execution:       liveEnabled,
-      simulation_mode:      simMode,
-      auto_strike:          AUTO_STRIKE_ENABLED,
-      alpha_vault:          ALPHA_VAULT_ENABLED,
-      sim_executor_loaded:  Boolean(simulateArmedIntent),
-      executor_loaded:      Boolean(executeIntent),
+      tick:                    tickCount,
+      live_execution:          liveEnabled,
+      simulation_mode:         simMode,
+      testnet_execution:       testnetEnabled,
+      auto_strike:             AUTO_STRIKE_ENABLED,
+      alpha_vault:             ALPHA_VAULT_ENABLED,
+      sim_executor_loaded:     Boolean(simulateArmedIntent),
+      testnet_executor_loaded: Boolean(executeTestnetIntent),
+      executor_loaded:         Boolean(executeIntent),
       telemetry:            getSessionTelemetry ? getSessionTelemetry() : null,
       rpc_health:           getRpcHealth ? getRpcHealth().slice(0, 5) : null,
     })
@@ -370,9 +381,9 @@ async function tick(supabase) {
     return
   }
 
-  // If neither live nor simulation is enabled, idle.
-  if (!liveEnabled && !simMode) {
-    workerLog('tick', 'idle: LIVE_EXECUTION_ENABLED=false and SIMULATION_MODE=false')
+  // If nothing is enabled, idle.
+  if (!liveEnabled && !simMode && !testnetEnabled) {
+    workerLog('tick', 'idle: LIVE_EXECUTION_ENABLED=false and SIMULATION_MODE=false and TESTNET_EXECUTION_ENABLED=false')
     return
   }
 
@@ -390,6 +401,26 @@ async function tick(supabase) {
       }
     } catch (err) {
       workerWarn('tick', 'Simulation requeue sweep failed', { error: err.message })
+    }
+  }
+
+  // ── Testnet execution sweep ─────────────────────────────────────────────────
+  if (testnetEnabled && !liveEnabled && executeTestnetIntent && fetchTestnetReadyIntents) {
+    try {
+      const testnetIntents = await fetchTestnetReadyIntents(supabase, BATCH_SIZE)
+      if (testnetIntents.length) {
+        workerLog('tick', 'Processing testnet intents', { count: testnetIntents.length })
+        for (const intent of testnetIntents) {
+          await executeTestnetIntent(supabase, intent).catch(err =>
+            workerError('testnet', 'Testnet execution error', {
+              intent_id: intent.id,
+              error:     String(err?.message || err),
+            }),
+          )
+        }
+      }
+    } catch (err) {
+      workerWarn('tick', 'Testnet sweep failed', { error: err.message })
     }
   }
 
@@ -503,8 +534,9 @@ async function main() {
   workerLog('boot', 'Strike worker started', {
     auto_strike: AUTO_STRIKE_ENABLED,
     alpha_vault: ALPHA_VAULT_ENABLED,
-    live_execution: FLAGS?.LIVE_EXECUTION_ENABLED ?? false,
-    simulation_mode: FLAGS?.SIMULATION_MODE ?? false,
+    live_execution:     FLAGS?.LIVE_EXECUTION_ENABLED     ?? false,
+    simulation_mode:    FLAGS?.SIMULATION_MODE             ?? false,
+    testnet_execution:  FLAGS?.TESTNET_EXECUTION_ENABLED   ?? false,
     retry_enabled: FLAGS?.RETRY_ENABLED ?? false,
     prewarm_enabled: FLAGS?.PREWARM_ENABLED ?? false,
     interval_ms: LOOP_MS,

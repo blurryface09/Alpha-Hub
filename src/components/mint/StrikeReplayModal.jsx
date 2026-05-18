@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react'
 import { AnimatePresence, motion } from 'framer-motion'
-import { X, RefreshCw, CheckCircle, XCircle, Clock, Zap, AlertTriangle, Cpu } from 'lucide-react'
+import { X, RefreshCw, CheckCircle, XCircle, Clock, Zap, AlertTriangle, Cpu, ExternalLink } from 'lucide-react'
 import { getAuthToken } from '../../lib/supabase'
 
 // ─── Phase display config ─────────────────────────────────────────────────────
@@ -9,6 +9,7 @@ const PHASE_CONFIG = {
   sim_start:            { icon: Zap,           color: 'text-cyan-300' },
   start:                { icon: Zap,           color: 'text-cyan-300' },
   wallet:               { icon: Cpu,           color: 'text-blue-300' },
+  nonce:                { icon: RefreshCw,     color: 'text-blue-300' },
   gas:                  { icon: Cpu,           color: 'text-purple-300' },
   gas_failed:           { icon: XCircle,       color: 'text-red-400' },
   gas_escalation:       { icon: AlertTriangle, color: 'text-amber-400' },
@@ -19,6 +20,10 @@ const PHASE_CONFIG = {
   nonce_refresh:        { icon: RefreshCw,     color: 'text-amber-300' },
   success:              { icon: CheckCircle,   color: 'text-green-400' },
   simulated_success:    { icon: CheckCircle,   color: 'text-green-400' },
+  testnet_start:        { icon: Zap,           color: 'text-violet-400' },
+  testnet_pending:      { icon: Clock,         color: 'text-violet-300' },
+  testnet_success:      { icon: CheckCircle,   color: 'text-violet-400' },
+  testnet_failed:       { icon: XCircle,       color: 'text-red-400' },
   failed:               { icon: XCircle,       color: 'text-red-400' },
   simulated_failure:    { icon: XCircle,       color: 'text-red-400' },
   error:                { icon: XCircle,       color: 'text-red-400' },
@@ -40,11 +45,35 @@ function fmtTime(iso) {
 
 // ─── Event row ────────────────────────────────────────────────────────────────
 
+function TxHashLink({ txHash, explorerUrl }) {
+  if (!txHash) return null
+  const short = `${txHash.slice(0, 8)}…${txHash.slice(-6)}`
+  return explorerUrl ? (
+    <a
+      href={explorerUrl}
+      target="_blank"
+      rel="noopener noreferrer"
+      className="inline-flex items-center gap-1 text-[10px] font-mono text-violet-400 hover:text-violet-300 transition-colors"
+    >
+      {short}
+      <ExternalLink size={9} />
+    </a>
+  ) : (
+    <span className="text-[10px] font-mono text-violet-400">{short}</span>
+  )
+}
+
 function EventRow({ event, isLast }) {
   const { icon: Icon, color } = phaseConfig(event.state)
   const meta = event.metadata || {}
+
+  const txHash     = meta.tx_hash
+  const explorerUrl = meta.explorer_url
+  const blockNumber = meta.block_number
+  const gasUsed    = meta.gas_used
+
   const metaEntries = Object.entries(meta)
-    .filter(([k]) => !['sim', 'ts', 'elapsed_ms'].includes(k))
+    .filter(([k]) => !['sim', 'ts', 'elapsed_ms', 'tx_hash', 'explorer_url', 'block_number', 'gas_used'].includes(k))
     .slice(0, 5)
 
   return (
@@ -61,6 +90,21 @@ function EventRow({ event, isLast }) {
           )}
         </div>
         <p className="text-xs text-text mt-0.5 leading-relaxed">{event.message}</p>
+        {(txHash || blockNumber) && (
+          <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-0.5">
+            {txHash && <TxHashLink txHash={txHash} explorerUrl={explorerUrl} />}
+            {blockNumber && (
+              <span className="text-[10px] font-mono text-muted/80">
+                block <span className="text-text/60">{blockNumber}</span>
+              </span>
+            )}
+            {gasUsed && (
+              <span className="text-[10px] font-mono text-muted/80">
+                gas <span className="text-text/60">{Number(gasUsed).toLocaleString()}</span>
+              </span>
+            )}
+          </div>
+        )}
         {metaEntries.length > 0 && (
           <div className="mt-1 space-y-0.5">
             {metaEntries.map(([k, v]) => (
@@ -134,9 +178,17 @@ export default function StrikeReplayModal({ project, intentId, onClose, onRerun 
     }
   }
 
-  const lastEvent = events[events.length - 1]
-  const simFailed = lastEvent?.state === 'simulated_failure' || lastEvent?.state === 'failed'
-  const simPassed = lastEvent?.state === 'simulated_success' || lastEvent?.state === 'success'
+  const lastEvent      = events[events.length - 1]
+  const simFailed      = lastEvent?.state === 'simulated_failure' || lastEvent?.state === 'sim_error'
+  const simPassed      = lastEvent?.state === 'simulated_success'
+  const testnetPending = lastEvent?.state === 'testnet_pending'
+  const testnetPassed  = lastEvent?.state === 'testnet_success'
+  const testnetFailed  = lastEvent?.state === 'testnet_failed' || lastEvent?.state === 'failed'
+
+  // Find the last testnet_success event's tx hash for the header explorer link
+  const testnetSuccessEvent = [...events].reverse().find(e => e.state === 'testnet_success')
+  const headerTxHash   = testnetSuccessEvent?.metadata?.tx_hash
+  const headerExplorer = testnetSuccessEvent?.metadata?.explorer_url
 
   return (
     <AnimatePresence>
@@ -169,7 +221,7 @@ export default function StrikeReplayModal({ project, intentId, onClose, onRerun 
               )}
             </div>
             <div className="flex items-center gap-2">
-              {simPassed && (
+              {simPassed && !testnetPassed && !testnetFailed && !testnetPending && (
                 <span className="text-[10px] font-mono px-1.5 py-0.5 rounded border border-green-500/30 text-green-400">
                   Sim passed
                 </span>
@@ -177,6 +229,32 @@ export default function StrikeReplayModal({ project, intentId, onClose, onRerun 
               {simFailed && (
                 <span className="text-[10px] font-mono px-1.5 py-0.5 rounded border border-red-500/30 text-red-400">
                   Sim failed
+                </span>
+              )}
+              {testnetPending && (
+                <span className="text-[10px] font-mono px-1.5 py-0.5 rounded border border-violet-500/30 text-violet-400 flex items-center gap-1">
+                  <RefreshCw size={8} className="animate-spin" /> Confirming
+                </span>
+              )}
+              {testnetPassed && (
+                headerTxHash ? (
+                  <a
+                    href={headerExplorer}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-[10px] font-mono px-1.5 py-0.5 rounded border border-violet-500/30 text-violet-400 hover:border-violet-400/60 transition-colors flex items-center gap-1"
+                  >
+                    Testnet confirmed <ExternalLink size={9} />
+                  </a>
+                ) : (
+                  <span className="text-[10px] font-mono px-1.5 py-0.5 rounded border border-violet-500/30 text-violet-400">
+                    Testnet confirmed
+                  </span>
+                )
+              )}
+              {testnetFailed && (
+                <span className="text-[10px] font-mono px-1.5 py-0.5 rounded border border-red-500/30 text-red-400">
+                  Testnet failed
                 </span>
               )}
               <button onClick={onClose} className="text-muted hover:text-text transition-colors">
@@ -208,7 +286,7 @@ export default function StrikeReplayModal({ project, intentId, onClose, onRerun 
           </div>
 
           {/* Footer */}
-          {!loading && simFailed && (
+          {!loading && (simFailed || testnetFailed) && (
             <div className="px-4 py-3 border-t border-border shrink-0">
               <button
                 onClick={handleRerun}
@@ -219,7 +297,7 @@ export default function StrikeReplayModal({ project, intentId, onClose, onRerun 
                     : 'border-amber-500/40 text-amber-400 hover:border-amber-500/70 hover:bg-amber-500/5'
                 }`}
               >
-                {rerunning ? 'Requeueing…' : 'Rerun Simulation'}
+                {rerunning ? 'Requeueing…' : testnetFailed ? 'Retry Testnet' : 'Rerun Simulation'}
               </button>
             </div>
           )}
