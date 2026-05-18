@@ -219,11 +219,12 @@ export default function AddProjectModal({ onAdd, onClose }) {
     const notesValue = asNeedsReview
       ? [form.notes?.trim(), 'Needs review — mint time not confirmed'].filter(Boolean).join(' | ')
       : form.notes?.trim() || null
-    // Derive mint_date from countdown if not set but API returned an approximate date
+    // Best mint_date: user-entered > stage-derived > live fallback (current time)
+    // derivedMintDate is computed in the outer scope from stages / meta
     const mintDateFinal =
-      form.mint_date                          ? form.mint_date
-      : meta?.mint_date                       ? meta.mint_date   // API-derived approx from countdown
-      : meta?.mint_status === 'live_now'      ? new Date().toISOString() // live now — use current time
+      form.mint_date    ? form.mint_date
+      : derivedMintDate ? derivedMintDate
+      : isLiveNow       ? new Date().toISOString()
       : null
 
     const cleanForm = {
@@ -235,9 +236,9 @@ export default function AddProjectModal({ onAdd, onClose }) {
       mint_price:       form.mint_price?.trim()       || null,
       mint_phase:       form.mint_phase               || null,
       notes:            notesValue,
-      // Pass through OpenSea-detected state so handleAddProject can set correct DB status
-      mint_status:      meta?.mint_status             || null,
-      countdown_text:   meta?.countdown_text          || null,
+      // Pass through resolved state so handleAddProject sets correct DB status
+      mint_status:      isLiveNow ? 'live_now' : isUpcoming ? 'upcoming' : isEnded ? 'ended' : (meta?.mint_status || null),
+      countdown_text:   countdownText || null,
     }
     setSaving(true)
     try {
@@ -250,11 +251,44 @@ export default function AddProjectModal({ onAdd, onClose }) {
   }, [form, onAdd, meta])
 
   // ── Derived state (memoised) ──────────────────────────────────────────────
-  const conf            = meta?.confidence || {}
-  const isLiveNow       = meta?.mint_status === 'live_now'
-  const isUpcoming      = meta?.mint_status === 'upcoming'
-  const isEnded         = meta?.mint_status === 'ended'
-  const countdownText   = meta?.countdown_text || null
+  const conf = meta?.confidence || {}
+
+  // Derive status / date from stages when top-level mint_status not set.
+  // This guarantees "Mint State" is never "Not detected" when stages were parsed.
+  const stagesArr      = Array.isArray(meta?.stages) ? meta.stages : []
+  const stageLive      = stagesArr.find(s => s.status === 'live_now')
+  const stageUpcoming  = stagesArr
+    .filter(s => s.status === 'upcoming')
+    .sort((a, b) => (a.start_time && b.start_time ? new Date(a.start_time) - new Date(b.start_time) : 0))[0] || null
+  const stagesDerived  =
+    stageLive     ? 'live_now'
+    : stageUpcoming ? 'upcoming'
+    : stagesArr.length && stagesArr.every(s => s.status === 'ended') ? 'ended'
+    : stagesArr.length ? 'needs_review'
+    : null
+
+  const isLiveNow  = (meta?.mint_status || stagesDerived) === 'live_now'
+  const isUpcoming = !isLiveNow && (meta?.mint_status || stagesDerived) === 'upcoming'
+  const isEnded    = !isLiveNow && !isUpcoming && (meta?.mint_status || stagesDerived) === 'ended'
+
+  // Best known start time: API top-level > live stage start > upcoming stage start
+  const derivedMintDate =
+    meta?.mint_date ||
+    stageLive?.start_time ||
+    stageUpcoming?.start_time ||
+    null
+
+  // Countdown text: API-provided > computed from derivedMintDate
+  const countdownText = meta?.countdown_text || (() => {
+    if (!derivedMintDate || !isUpcoming) return null
+    const ms = new Date(derivedMintDate).getTime() - Date.now()
+    if (ms <= 0 || ms > 30 * 24 * 3600_000) return null
+    const d = Math.floor(ms / 86400000), h = Math.floor((ms % 86400000) / 3600000)
+    const m = Math.floor((ms % 3600000) / 60000)
+    const p = []; if (d) p.push(d+'d'); if (h) p.push(h+'h'); if (m && !d) p.push(m+'m')
+    return p.join(' ') || '< 1m'
+  })()
+
   const priceNote           = meta?.price_note              || null
   const hasWlPhase          = meta?.has_wl_phase            || false
   const scheduleExposed     = meta?.schedule_exposed        ?? true   // default true for non-OpenSea
@@ -264,13 +298,13 @@ export default function AddProjectModal({ onAdd, onClose }) {
   const missingChips = useMemo(() => {
     const chips = []
     // Don't show "Needs time" when live or when countdown detected (upcoming is fine)
-    if (!isLiveNow && !form.mint_date && !countdownText) chips.push('mint_date')
+    if (!isLiveNow && !form.mint_date && !countdownText && !derivedMintDate) chips.push('mint_date')
     if (!form.contract_address)                          chips.push('contract_address')
     // Suppress "Optional price" when OpenSea gave a note OR we already have per-stage prices
     const hasStagePrice = Array.isArray(meta?.stages) && meta.stages.some(s => s.price != null)
     if (!form.mint_price && !priceNote && !hasStagePrice) chips.push('mint_price')
     return chips
-  }, [isLiveNow, form.mint_date, countdownText, form.contract_address, form.mint_price, priceNote, meta?.stages])
+  }, [isLiveNow, form.mint_date, countdownText, derivedMintDate, form.contract_address, form.mint_price, priceNote, stagesArr])
 
   const strikeBlockers = useMemo(() =>
     form.mint_mode === 'auto' ? getStrikeBlockers(form) : [],
@@ -398,13 +432,15 @@ export default function AddProjectModal({ onAdd, onClose }) {
                       value={
                         isLiveNow     ? '🟢 Minting Now'
                       : countdownText ? `⏳ Starts in ${countdownText}`
-                      : isUpcoming && meta.mint_date
-                        ? `⏳ ${new Date(meta.mint_date).toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}`
+                      : isUpcoming && derivedMintDate
+                        ? `⏳ ${new Date(derivedMintDate).toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}`
                       : isUpcoming    ? '⏳ Upcoming'
                       : isEnded       ? '⚫ Ended'
-                      : meta.mint_date
-                        ? new Date(meta.mint_date).toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })
-                        : null
+                      : derivedMintDate
+                        ? new Date(derivedMintDate).toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })
+                      : stagesArr.length > 0
+                        ? `📋 ${stagesArr.length} stage${stagesArr.length > 1 ? 's' : ''} detected — no dates`
+                      : null
                       }
                       conf={
                         isLiveNow ? 'api_verified'

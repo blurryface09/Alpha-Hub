@@ -242,6 +242,101 @@ function parseDateText(text) {
 }
 
 // ────────────────────────────────────────────────────────────────────────────
+// TIMEZONE OFFSET MAP  (hours from UTC, may be fractional e.g. IST = 5.5)
+// ────────────────────────────────────────────────────────────────────────────
+
+const TZ_OFFSETS = {
+  utc:0, gmt:0,
+  est:-5, edt:-4, cst:-6, cdt:-5, mst:-7, mdt:-6, pst:-8, pdt:-7,
+  ast:-4, akst:-9, akdt:-8, hst:-10, hadt:-9,
+  aest:10, aedt:11, bst:1, cet:1, cest:2, eet:2, eest:3,
+  ist:5.5, jst:9, kst:9, sgt:8, hkt:8, nzst:12, nzdt:13,
+}
+
+/**
+ * Enhanced date parser — covers all OpenSea date formats.
+ *
+ * Handles:
+ *   "May 18 at 11:00 AM EDT"         no-year, TZ-aware
+ *   "May 18, 2026 · 11:00 AM UTC"    with year, middle-dot separator
+ *   "Jun 1 at 5:00 PM UTC"           short month, no year
+ *   "May 18, 2026 11:00 AM"          with year, space separator
+ *   "Starts in 2d 4h"                countdown → absolute (referenceNow + ms)
+ *   "Starts: May 18 at 11:00 AM EDT" label prefix stripped automatically
+ *   ISO 8601 / Unix 10-digit passthrough
+ *   Year inference: if year omitted and result is >24h in past, try next year
+ *
+ * @param {string}  text          Raw date string
+ * @param {number}  [refNow]      Reference epoch ms for countdowns + year inference
+ * @returns {string|null}  ISO 8601 string or null
+ */
+function parseStageDate(text, refNow = Date.now()) {
+  if (!text) return null
+  let t = String(text).trim()
+
+  // Strip label prefix: "Starts:", "Ended:", "Ends:", "Started:", "Start:", "End:"
+  t = t.replace(/^(?:start(?:s|ed)?|end(?:s|ed)?)\s*:\s*/i, '')
+
+  // ── ISO 8601 ──────────────────────────────────────────────────────────────
+  const iso = t.match(/\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/)
+  if (iso) { const d = new Date(iso[0]); if (!isNaN(d)) return d.toISOString() }
+
+  // ── Unix 10-digit ─────────────────────────────────────────────────────────
+  if (/^\d{10}$/.test(t)) { const d = new Date(Number(t) * 1000); if (!isNaN(d)) return d.toISOString() }
+
+  // ── Countdown → absolute  "Starts in 2d 4h" / "Ends in 3h 30m" ──────────
+  const cdM = t.match(/^(?:starts?\s+in|ends?\s+in|minting\s+in)\s+(.+)/i)
+  if (cdM) { const ms = parseCountdownMs(cdM[1]); if (ms > 0) return new Date(refNow + ms).toISOString() }
+
+  // ── Human datetime  "May 18 at 11:00 AM EDT"  /  "May 18, 2026 · 11:00 AM" ─
+  // Separator between date and time: " at ", " · ", " @ ", or plain " "
+  const dtM = t.match(
+    /(\w{3,9})\s+(\d{1,2})(?:,?\s*(\d{4}))?\s+(?:at\s+|·\s*|@\s*)?(\d{1,2}):(\d{2})(?::(\d{2}))?\s*([AP]M)?\s*([A-Za-z]{2,5})?\b/i
+  )
+  if (dtM) {
+    const mon = MONTH_MAP[dtM[1].slice(0, 3).toLowerCase()]
+    if (mon) {
+      const day   = parseInt(dtM[2])
+      const refD  = new Date(refNow)
+      let   year  = dtM[3] ? parseInt(dtM[3]) : refD.getUTCFullYear()
+      let   hh    = parseInt(dtM[4])
+      const mm    = parseInt(dtM[5])
+      const ss    = dtM[6] ? parseInt(dtM[6]) : 0
+      const ampm  = (dtM[7] || '').toUpperCase()
+      const tzKey = (dtM[8] || 'utc').toLowerCase()
+
+      if (ampm === 'PM' && hh !== 12) hh += 12
+      if (ampm === 'AM' && hh === 12) hh  = 0
+
+      const tzOff = (TZ_OFFSETS[tzKey] ?? 0) * 3_600_000   // ms
+      // Interpret the given h:m:s as local time in that timezone, convert to UTC
+      let utcMs = Date.UTC(year, mon - 1, day, hh, mm, ss) - tzOff
+
+      // Year inference: if no year given and result is >24h in the past, try next year
+      if (!dtM[3] && utcMs < refNow - 86_400_000) {
+        const nextMs = Date.UTC(year + 1, mon - 1, day, hh, mm, ss) - tzOff
+        if (nextMs >= refNow - 86_400_000) utcMs = nextMs
+      }
+
+      const d = new Date(utcMs)
+      if (!isNaN(d)) return d.toISOString()
+    }
+  }
+
+  // ── Date-only  "May 18, 2026"  /  "May 18 2026" ─────────────────────────
+  const doM = t.match(/(\w{3,9})\s+(\d{1,2}),?\s+(\d{4})/)
+  if (doM) {
+    const mon = MONTH_MAP[doM[1].slice(0, 3).toLowerCase()]
+    if (mon) {
+      const d = new Date(Date.UTC(parseInt(doM[3]), mon - 1, parseInt(doM[2])))
+      if (!isNaN(d)) return d.toISOString()
+    }
+  }
+
+  return null
+}
+
+// ────────────────────────────────────────────────────────────────────────────
 // COUNTDOWN HELPER
 // Converts "2d · 3h · 45m", "2 days 3 hours", "1d 5h", etc. → milliseconds.
 // Returns 0 if nothing parseable found.
@@ -299,27 +394,30 @@ function extractStageFromBlock(stageName, wlType, blockLines) {
       if (lm) { const p2 = parsePriceFromLine(lm[1]); if (p2 !== null) price = p2 }
     }
 
-    // ── Date range "May 20 – May 21, 2025" (em dash / en dash / hyphen) ──
+    // ── Date range "May 20 – May 21, 2026" (em dash / en dash) ───────────
     if (!startTime) {
       const rangeParts = t.split(/\s*[–—]\s*/)
       if (rangeParts.length >= 2) {
-        const d1 = parseDateText(rangeParts[0])
-        const d2 = parseDateText(rangeParts[1])
+        const d1 = parseStageDate(rangeParts[0], now)
+        const d2 = parseStageDate(rangeParts[1], now)
         if (d1) startTime = d1
         if (d2) endTime   = d2
         if (d1 || d2) continue
       }
     }
 
-    // ── "Started:" / "Starts:" / "Ended:" / "Ends:" lines ───────────────────
-    const startM = t.match(/^start(?:s|ed)?[:\s]+(.+)/i)
-    if (startM && !startTime) { const d = parseDateText(startM[1]); if (d) startTime = d }
-    const endM = t.match(/^end(?:s|ed)?[:\s]+(.+)/i)
-    if (endM && !endTime) { const d = parseDateText(endM[1]); if (d) endTime = d }
+    // ── "Starts: May 18 at 11:00 AM EDT" / "Ended: Jun 1 at 5 PM UTC" ────
+    // parseStageDate strips the label prefix internally, so pass the full line.
+    if (!startTime && /^start(?:s|ed)?\s*[:\s]/i.test(t)) {
+      const d = parseStageDate(t, now); if (d) startTime = d
+    }
+    if (!endTime && /^end(?:s|ed)?\s*[:\s]/i.test(t)) {
+      const d = parseStageDate(t, now); if (d) endTime = d
+    }
 
-    // ── Solo date (only if no other date yet) ─────────────────────────────
-    if (!startTime && !startM && !endM) {
-      const d = parseDateText(t)
+    // ── Solo date line (no prefix) ────────────────────────────────────────
+    if (!startTime && !/^end(?:s|ed)?\s*[:\s]/i.test(t)) {
+      const d = parseStageDate(t, now)
       if (d) startTime = d
     }
 
@@ -452,7 +550,7 @@ function isScheduleDataLine(t) {
     /^\d+\s*h\b(?!\w)/i.test(t)                      ||  // "3h" countdown fragment
     /^\d+\s*m\b(?!o)(?!\w)/i.test(t)                 ||  // "45m" countdown fragment (not "mo")
     /^[·•]\s*\d/i.test(t)                            ||  // "· 3h" separator+fragment
-    parseDateText(t) !== null                         ||  // any parseable date
+    parseStageDate(t) !== null                         ||  // any parseable date
     /^\d+\s+per\s+wallet/i.test(t)                   ||  // "2 per wallet"
     /^(live|upcoming|ended|sold\s*out|active|minting\s*now|scheduled|not\s+started)$/i.test(t)
     // ↑ status badge — exact-line match only so "Live Art" won't be caught
@@ -1101,8 +1199,61 @@ async function extractFromBrowser(pageUrl, debugMode = false) {
 }
 
 // ────────────────────────────────────────────────────────────────────────────
+// STAGE STATE RESOLVER
+// Determines live/next stage and top-level mint_status from a normalised list.
+// Handles: all-unknown, mixed status, no-dates, badge-only live stages.
+// ────────────────────────────────────────────────────────────────────────────
+
+function resolveStageState(stages, now = Date.now()) {
+  if (!stages || !stages.length) {
+    return { current: null, next: null, mint_status: null, mint_date: null, end_date: null }
+  }
+
+  const live     = stages.filter(s => s.status === 'live_now')
+  const upcoming = stages.filter(s => s.status === 'upcoming')
+    .sort((a, b) => {
+      if (!a.start_time && !b.start_time) return 0
+      if (!a.start_time) return 1
+      if (!b.start_time) return -1
+      return new Date(a.start_time) - new Date(b.start_time)
+    })
+  const ended    = stages.filter(s => s.status === 'ended')
+
+  const current = live[0]     || null
+  const next    = upcoming[0] || null
+
+  // Status: fallback 'needs_review' when stages exist but nothing classified
+  const allEnded = stages.length > 0 && stages.every(s => s.status === 'ended')
+  const mintStatus =
+    current                  ? 'live_now'
+    : next                   ? 'upcoming'
+    : allEnded               ? 'ended'
+    : stages.length > 0      ? 'needs_review'
+    : null
+
+  // mint_date: prefer next stage start (for countdown); fall back to current stage start
+  const mintDate = next?.start_time || current?.start_time || null
+  // end_date: prefer current live stage end (for auto-mint window); fall back to next
+  const endDate  = current?.end_time || next?.end_time || null
+
+  return { current, next, mint_status: mintStatus, mint_date: mintDate, end_date: endDate }
+}
+
+// ────────────────────────────────────────────────────────────────────────────
 // MERGE AND COMPUTE FINAL RESULT
 // ────────────────────────────────────────────────────────────────────────────
+
+function fmtMs(ms) {
+  if (!ms || ms <= 0) return null
+  const d = Math.floor(ms / 86400000)
+  const h = Math.floor((ms % 86400000) / 3600000)
+  const m = Math.floor((ms % 3600000) / 60000)
+  const parts = []
+  if (d) parts.push(`${d}d`)
+  if (h) parts.push(`${h}h`)
+  if (m && !d) parts.push(`${m}m`)
+  return parts.join(' ') || '< 1m'
+}
 
 function buildResult(stages) {
   if (!stages.length) {
@@ -1114,6 +1265,7 @@ function buildResult(stages) {
       end_date:                  null,
       mint_price:                null,
       countdown_text:            null,
+      ends_in:                   null,
       has_wl_phase:              false,
       max_per_wallet:            null,
       current_stage:             null,
@@ -1122,8 +1274,8 @@ function buildResult(stages) {
     }
   }
 
-  const ORDER   = { live_now: 0, upcoming: 1, ended: 2, unknown: 3 }
-  const sorted  = [...stages].sort((a, b) => {
+  const ORDER  = { live_now: 0, upcoming: 1, ended: 2, unknown: 3 }
+  const sorted = [...stages].sort((a, b) => {
     const od = (ORDER[a.status] ?? 3) - (ORDER[b.status] ?? 3)
     if (od !== 0) return od
     if (!a.start_time && !b.start_time) return 0
@@ -1132,56 +1284,31 @@ function buildResult(stages) {
     return new Date(a.start_time) - new Date(b.start_time)
   })
 
-  const live     = sorted.filter(s => s.status === 'live_now')
-  const upcoming = sorted.filter(s => s.status === 'upcoming')
-  const ended    = sorted.filter(s => s.status === 'ended')
-  const current  = live[0]     || null
-  const next     = upcoming[0] || null
-  const primary  = current || next || sorted[0]
+  const { current, next, mint_status: mintStatus,
+          mint_date: mintDate, end_date: endDate } = resolveStageState(sorted)
 
-  const mintStatus =
-    current                          ? 'live_now'
-    : next                           ? 'upcoming'
-    : ended.length === sorted.length ? 'ended'
-    : 'needs_review'
+  const primary = current || next || sorted[0]
+  const hasWl   = sorted.some(s => ['GTD','FCFS','RAFFLE'].includes(s.wl_type))
+  const now     = Date.now()
 
-  const hasWl = sorted.some(s => ['GTD','FCFS','RAFFLE'].includes(s.wl_type))
+  // Countdown to next upcoming stage (live-updating clock in the frontend)
+  const cdMs         = mintDate && mintStatus === 'upcoming'
+    ? new Date(mintDate).getTime() - now : 0
+  const countdownText = cdMs > 0 && cdMs < 30 * 24 * 3600_000 ? fmtMs(cdMs) : null
 
-  function formatMs(ms) {
-    if (ms <= 0) return null
-    const d = Math.floor(ms / 86400000)
-    const h = Math.floor((ms % 86400000) / 3600000)
-    const m = Math.floor((ms % 3600000) / 60000)
-    const parts = []
-    if (d) parts.push(`${d}d`)
-    if (h) parts.push(`${h}h`)
-    if (m && !d) parts.push(`${m}m`)
-    return parts.join(' ') || '< 1m'
-  }
-
-  // Countdown to next upcoming stage start
-  let countdownText = null
-  if (next?.start_time) {
-    const ms = new Date(next.start_time).getTime() - Date.now()
-    if (ms > 0 && ms < 30 * 24 * 3600 * 1000) countdownText = formatMs(ms)
-  }
-
-  // Time remaining in current live stage (for auto-mint: know when window closes)
-  let endsInText = null
-  if (current?.end_time) {
-    const ms = new Date(current.end_time).getTime() - Date.now()
-    if (ms > 0 && ms < 30 * 24 * 3600 * 1000) endsInText = formatMs(ms)
-  }
+  // Remaining time in current live stage (auto-mint window awareness)
+  const eiMs      = endDate ? new Date(endDate).getTime() - now : 0
+  const endsInText = eiMs > 0 && eiMs < 30 * 24 * 3600_000 ? fmtMs(eiMs) : null
 
   return {
     schedule_exposed:          true,
     stages:                    sorted,
     mint_status:               mintStatus,
-    mint_date:                 primary?.start_time || null,
-    end_date:                  primary?.end_time   || null,
+    mint_date:                 mintDate,
+    end_date:                  endDate,
     mint_price:                primary?.price      || null,
     countdown_text:            countdownText,
-    ends_in:                   endsInText,       // non-null when a stage is live_now
+    ends_in:                   endsInText,
     has_wl_phase:              hasWl,
     max_per_wallet:            primary?.max_per_wallet || null,
     current_stage:             current?.name || null,
