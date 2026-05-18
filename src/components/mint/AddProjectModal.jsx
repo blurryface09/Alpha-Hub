@@ -219,15 +219,25 @@ export default function AddProjectModal({ onAdd, onClose }) {
     const notesValue = asNeedsReview
       ? [form.notes?.trim(), 'Needs review — mint time not confirmed'].filter(Boolean).join(' | ')
       : form.notes?.trim() || null
+    // Derive mint_date from countdown if not set but API returned an approximate date
+    const mintDateFinal =
+      form.mint_date                          ? form.mint_date
+      : meta?.mint_date                       ? meta.mint_date   // API-derived approx from countdown
+      : meta?.mint_status === 'live_now'      ? new Date().toISOString() // live now — use current time
+      : null
+
     const cleanForm = {
       ...form,
       gas_limit:        parseInt(form.gas_limit)      || 200000,
       max_mint:         parseInt(form.max_mint)       || 1,
       contract_address: form.contract_address?.trim() || null,
-      mint_date:        form.mint_date                || null,
+      mint_date:        mintDateFinal,
       mint_price:       form.mint_price?.trim()       || null,
       mint_phase:       form.mint_phase               || null,
       notes:            notesValue,
+      // Pass through OpenSea-detected state so handleAddProject can set correct DB status
+      mint_status:      meta?.mint_status             || null,
+      countdown_text:   meta?.countdown_text          || null,
     }
     setSaving(true)
     try {
@@ -237,7 +247,7 @@ export default function AddProjectModal({ onAdd, onClose }) {
     } finally {
       setSaving(false)
     }
-  }, [form, onAdd])
+  }, [form, onAdd, meta])
 
   // ── Derived state (memoised) ──────────────────────────────────────────────
   const conf            = meta?.confidence || {}
@@ -386,10 +396,12 @@ export default function AddProjectModal({ onAdd, onClose }) {
                     <ReviewRow
                       label="Mint State"
                       value={
-                        isLiveNow     ? 'Minting Now'
-                      : countdownText ? `Upcoming · in ${countdownText}`
-                      : isUpcoming    ? 'Upcoming'
-                      : isEnded       ? 'Ended'
+                        isLiveNow     ? '🟢 Minting Now'
+                      : countdownText ? `⏳ Starts in ${countdownText}`
+                      : isUpcoming && meta.mint_date
+                        ? `⏳ ${new Date(meta.mint_date).toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}`
+                      : isUpcoming    ? '⏳ Upcoming'
+                      : isEnded       ? '⚫ Ended'
                       : meta.mint_date
                         ? new Date(meta.mint_date).toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })
                         : null

@@ -243,13 +243,26 @@ export default function MintGuardPage() {
       toast.error(`Your ${plan || 'Free'} plan tracks ${limits.mintProjects} mint project${limits.mintProjects === 1 ? '' : 's'}. Upgrade to add more.`)
       throw new Error('Plan limit reached')
     }
+    // Map OpenSea-detected mint_status → DB status enum
+    // DB uses: upcoming | live | minted | missed | cancelled
+    const mintStatusDetected = projectData.mint_status || null
+    const dbStatus =
+      mintStatusDetected === 'live_now' ? 'live'
+      : mintStatusDetected === 'ended'  ? 'missed'
+      : 'upcoming'
+
+    // Ensure mint_date is set for live mints — use current time so countdown shows LIVE NOW
+    const mintDate =
+      projectData.mint_date ||
+      (mintStatusDetected === 'live_now' ? new Date().toISOString() : null)
+
     const insertData = {
       name: projectData.name || 'Unnamed',
       source_url: projectData.source_url || null,
       source_type: projectData.source_type || 'website',
       chain: projectData.chain || 'eth',
       contract_address: projectData.contract_address || null,
-      mint_date: projectData.mint_date || null,
+      mint_date: mintDate,
       mint_price: projectData.mint_price || null,
       wl_type: projectData.wl_type || 'UNKNOWN',
       mint_mode: projectData.mint_mode || 'confirm',
@@ -261,12 +274,12 @@ export default function MintGuardPage() {
       max_total_spend: projectData.max_total_spend || null,
       mint_time_source: projectData.mint_time_source || null,
       mint_time_confidence: projectData.mint_time_confidence || null,
-      mint_time_confirmed: projectData.mint_time_confirmed ?? Boolean(projectData.mint_date),
+      mint_time_confirmed: projectData.mint_time_confirmed ?? Boolean(mintDate),
       mint_time_confirmed_at: projectData.mint_time_confirmed_at || null,
       execution_status: 'queued',
       notes: projectData.notes || null,
       user_id: user.id,
-      status: 'upcoming',
+      status: dbStatus,
     }
     toast.loading('Saving...', { id: 'save-project' })
     try {
