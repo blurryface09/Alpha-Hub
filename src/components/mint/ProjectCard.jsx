@@ -1,11 +1,11 @@
 import React, { useState } from 'react'
 import LiveMintFeed from './LiveMintFeed'
 import EditProjectModal from './EditProjectModal'
-import MonitoringBadge from '../alerts/MonitoringBadge'
 import { motion } from 'framer-motion'
-import { Zap, Trash2, Clock, ChevronDown, ChevronUp, ToggleLeft, ToggleRight, ExternalLink, RefreshCw, Twitter, AlertCircle, Gift, Bell, Lock } from 'lucide-react'
+import { Zap, Trash2, Clock, ChevronDown, ChevronUp, ToggleLeft, ToggleRight, ExternalLink, RefreshCw, Twitter, AlertCircle, Gift, Bell, BellOff, Lock } from 'lucide-react'
 import toast from 'react-hot-toast'
 import { fetchProjectIntel } from '../../lib/ai'
+import { useAuthStore, useMonitorStore } from '../../store/index.js'
 
 // ── Strike state badge ────────────────────────────────────────────────────────
 
@@ -118,6 +118,9 @@ export default function ProjectCard({ project, isMinting, isDeleting, onMint, on
   const [intelLoading, setIntelLoading] = useState(false)
   const status = STATUS_STYLES[project.status] || STATUS_STYLES.upcoming
   const mintPrice = displayMintPrice(project.mint_price)
+  const { user } = useAuthStore()
+  const { watchedProjects, follow, unfollow, loading: watchLoading } = useMonitorStore()
+  const isWatching = project.calendar_project_id ? watchedProjects.has(project.calendar_project_id) : false
 
   const handleFetchIntel = async function() {
     setIntelLoading(true)
@@ -195,8 +198,15 @@ export default function ProjectCard({ project, isMinting, isDeleting, onMint, on
               </div>
             </div>
             <div className="flex items-center gap-2 flex-shrink-0">
-              {project.calendar_project_id && (
-                <MonitoringBadge projectId={project.calendar_project_id} />
+              {project.calendar_project_id && user && (
+                <button
+                  onClick={() => isWatching ? unfollow(user.id, project.calendar_project_id) : follow(user.id, project.calendar_project_id)}
+                  disabled={watchLoading}
+                  title={isWatching ? 'Unwatch project' : 'Watch project'}
+                  className={`p-1.5 rounded-md border transition-all ${isWatching ? 'border-accent/40 text-accent bg-accent/8 hover:bg-accent/15' : 'border-border2 text-muted hover:border-accent hover:text-accent'} ${watchLoading ? 'opacity-50 cursor-not-allowed' : ''}`}
+                >
+                  {isWatching ? <Bell size={12} className="fill-current" /> : <BellOff size={12} />}
+                </button>
               )}
               <button
                 onClick={onMintModeToggle}
