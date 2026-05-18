@@ -46,6 +46,22 @@ try {
   runSimulationRequeueSweep = simMod.runSimulationRequeueSweep
 } catch { /* lib not available */ }
 
+let getSessionTelemetry = null
+try {
+  const profilerMod = await import('./lib/profiler.js')
+  getSessionTelemetry = profilerMod.getSessionTelemetry
+} catch { /* lib not available */ }
+
+let getRpcHealth = null
+let persistRpcHealth = null
+let loadPersistedRpcHealth = null
+try {
+  const rpcMod = await import('./lib/rpc.js')
+  getRpcHealth = rpcMod.getRpcHealth
+  persistRpcHealth = rpcMod.persistRpcHealth
+  loadPersistedRpcHealth = rpcMod.loadPersistedRpcHealth
+} catch { /* lib not available */ }
+
 try {
   const timingMod = await import('./lib/timing.js')
   isExpired = timingMod.isExpired
@@ -329,14 +345,19 @@ async function tick(supabase) {
   // ── Heartbeat ───────────────────────────────────────────────────────────────
   if (tickCount === 1 || tickCount % HEARTBEAT_INTERVAL === 0) {
     workerLog('tick', 'Worker heartbeat', {
-      tick: tickCount,
-      live_execution: liveEnabled,
-      simulation_mode: simMode,
-      auto_strike: AUTO_STRIKE_ENABLED,
-      alpha_vault: ALPHA_VAULT_ENABLED,
-      sim_executor_loaded: Boolean(simulateArmedIntent),
-      executor_loaded: Boolean(executeIntent),
+      tick:                 tickCount,
+      live_execution:       liveEnabled,
+      simulation_mode:      simMode,
+      auto_strike:          AUTO_STRIKE_ENABLED,
+      alpha_vault:          ALPHA_VAULT_ENABLED,
+      sim_executor_loaded:  Boolean(simulateArmedIntent),
+      executor_loaded:      Boolean(executeIntent),
+      telemetry:            getSessionTelemetry ? getSessionTelemetry() : null,
+      rpc_health:           getRpcHealth ? getRpcHealth().slice(0, 5) : null,
     })
+    if (persistRpcHealth && supabase) {
+      await persistRpcHealth(supabase).catch(() => null)
+    }
   }
 
   // ── Central LIVE_EXECUTION_ENABLED enforcement ──────────────────────────────
@@ -474,6 +495,11 @@ async function main() {
   }
 
   const supabase = missing.length ? null : supabaseClient()
+
+  if (supabase && loadPersistedRpcHealth) {
+    await loadPersistedRpcHealth(supabase).catch(() => null)
+  }
+
   workerLog('boot', 'Strike worker started', {
     auto_strike: AUTO_STRIKE_ENABLED,
     alpha_vault: ALPHA_VAULT_ENABLED,

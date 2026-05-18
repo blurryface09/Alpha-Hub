@@ -169,14 +169,92 @@ export function createViemTransport(chain) {
 
 /**
  * Return the current health snapshot for all known RPC providers.
- * @returns {Array<{ url: string, latencyEma: number, failCount: number, lastCheck: number }>}
+ * @returns {Array<{ url: string, latency_ema_ms: number, fail_count: number, last_check: string|null, degraded: boolean }>}
  */
 export function getRpcHealth() {
   return Array.from(healthMap.entries()).map(([url, h]) => ({
     url,
     latency_ema_ms: Math.round(h.latencyEma),
-    fail_count: h.failCount,
-    last_check: h.lastCheck ? new Date(h.lastCheck).toISOString() : null,
-    degraded: h.failCount >= FAIL_DEPRIORITISE_THRESHOLD,
+    fail_count:     h.failCount,
+    last_check:     h.lastCheck ? new Date(h.lastCheck).toISOString() : null,
+    degraded:       h.failCount >= FAIL_DEPRIORITISE_THRESHOLD,
   }))
+}
+
+/**
+ * Export the health map as a plain JSON-serializable object for persistence.
+ * @returns {Record<string, { latencyEma: number, failCount: number, lastCheck: number }>}
+ */
+export function exportHealthSnapshot() {
+  const out = {}
+  for (const [url, h] of healthMap.entries()) {
+    out[url] = { latencyEma: h.latencyEma, failCount: h.failCount, lastCheck: h.lastCheck }
+  }
+  return out
+}
+
+/**
+ * Restore the health map from a previously exported snapshot.
+ * Only restores entries whose lastCheck is within 1 hour (stale snapshots are ignored).
+ *
+ * @param {Record<string, { latencyEma: number, failCount: number, lastCheck: number }>} snapshot
+ */
+export function importHealthSnapshot(snapshot) {
+  if (!snapshot || typeof snapshot !== 'object') return
+  const cutoff = Date.now() - 3_600_000 // ignore entries older than 1h
+  for (const [url, h] of Object.entries(snapshot)) {
+    if (h.lastCheck && h.lastCheck < cutoff) continue
+    healthMap.set(url, {
+      latencyEma: Number(h.latencyEma) || 500,
+      failCount:  Number(h.failCount)  || 0,
+      lastCheck:  Number(h.lastCheck)  || 0,
+    })
+  }
+}
+
+/**
+ * Persist current RPC health to the DB as an execution event.
+ * Uses a fixed sentinel intent_id so it can be queried later.
+ * Silently no-ops if the DB call fails (health data is advisory).
+ *
+ * @param {import('@supabase/supabase-js').SupabaseClient} supabase
+ */
+export async function persistRpcHealth(supabase) {
+  if (!supabase) return
+  const snapshot = exportHealthSnapshot()
+  const entries  = Object.keys(snapshot).length
+  if (!entries) return
+
+  await supabase.from('mint_execution_events').insert({
+    intent_id: null,
+    user_id:   null,
+    state:     'rpc_health_snapshot',
+    message:   `RPC health snapshot: ${entries} providers`,
+    metadata:  snapshot,
+  }).catch(() => null) // always advisory
+}
+
+/**
+ * Load the most recent RPC health snapshot from the DB and restore it.
+ *
+ * @param {import('@supabase/supabase-js').SupabaseClient} supabase
+ */
+export async function loadPersistedRpcHealth(supabase) {
+  if (!supabase) return
+  try {
+    const { data } = await supabase
+      .from('mint_execution_events')
+      .select('metadata, created_at')
+      .eq('state', 'rpc_health_snapshot')
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .single()
+    if (data?.metadata) {
+      importHealthSnapshot(data.metadata)
+      globalLog.info('tick', 'Restored RPC health snapshot from DB', {
+        providers: Object.keys(data.metadata).length,
+        snapshot_age_s: Math.round((Date.now() - new Date(data.created_at).getTime()) / 1000),
+      })
+    }
+  } catch { /* table may not have null intent_id rows — ignore */ }
 }

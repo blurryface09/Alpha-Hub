@@ -9,12 +9,14 @@ const log = createLogger(null, null)
 // ─── Error classification ─────────────────────────────────────────────────────
 
 const ERROR_TYPE_CAPS = {
-  revert: 0,
+  revert:       0,
   nonce_too_low: 2,
-  gas_too_low: 3,
-  timeout: 4,
-  network: 4,
-  default: 3,
+  gas_too_low:  3,
+  timeout:      4,
+  network:      4,
+  rate_limited: 3,
+  dropped:      2,
+  default:      3,
 }
 
 /**
@@ -76,6 +78,22 @@ export function classifyError(error) {
     return { type: 'network', retryable: true, maxRetries: ERROR_TYPE_CAPS.network }
   }
 
+  if (
+    combined.includes('rate limit') ||
+    combined.includes('too many requests') ||
+    combined.includes('429')
+  ) {
+    return { type: 'rate_limited', retryable: true, maxRetries: ERROR_TYPE_CAPS.rate_limited }
+  }
+
+  if (
+    combined.includes('dropped') ||
+    combined.includes('underpriced') ||
+    combined.includes('mempool')
+  ) {
+    return { type: 'dropped', retryable: true, maxRetries: ERROR_TYPE_CAPS.dropped }
+  }
+
   return { type: 'default', retryable: true, maxRetries: ERROR_TYPE_CAPS.default }
 }
 
@@ -96,6 +114,39 @@ export function backoffMs(attempt, errorType = 'default') {
   const base = BACKOFF_BASE_MS * Math.pow(2, attempt)
   const jitter = Math.random() * 200
   return Math.min(base + jitter, BACKOFF_MAX_MS)
+}
+
+/**
+ * Congestion-aware backoff: adjusts delay based on network state.
+ * Under high congestion conditions change fast → shorter waits.
+ * For rate-limits or dropped tx → longer waits.
+ *
+ * @param {number} attempt
+ * @param {string} [errorType]
+ * @param {'low'|'medium'|'high'|'extreme'} [congestionLevel]
+ * @returns {number} milliseconds
+ */
+export function congestionAwareBackoffMs(attempt, errorType = 'default', congestionLevel = 'medium') {
+  let base = backoffMs(attempt, errorType)
+
+  // Rate limits: always back off hard regardless of congestion
+  if (errorType === 'rate_limited') {
+    return Math.min(base * 2, BACKOFF_MAX_MS)
+  }
+
+  // High congestion: shorten wait — conditions are changing fast
+  if (congestionLevel === 'high' || congestionLevel === 'extreme') {
+    if (errorType === 'gas_too_low') {
+      // Gas is spiking — re-estimate quickly
+      base = Math.min(base * 0.5, 2_000)
+    } else if (errorType === 'timeout' || errorType === 'network') {
+      // RPC under load — try next provider sooner
+      base = Math.min(base * 0.7, 3_000)
+    }
+  }
+
+  // Low congestion: standard backoff is fine
+  return base
 }
 
 // ─── Nonce tracker ────────────────────────────────────────────────────────────

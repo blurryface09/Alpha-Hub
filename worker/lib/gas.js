@@ -30,8 +30,26 @@ const STRATEGY_GAS_PRICE_MULTIPLIER = {
   aggressive: 1.6,
 }
 
-/** Escalation multiplier applied per retry attempt (must be >= 1.10 per EIP-1559 replacement rules) */
+/** Fixed escalation multiplier (must be >= 1.10 per EIP-1559 replacement rules) */
 const ESCALATION_MULTIPLIER = 1.25
+
+// ─── Congestion levels ────────────────────────────────────────────────────────
+
+/** Base-fee thresholds in gwei for congestion classification */
+const CONGESTION_THRESHOLDS = {
+  low:     15,  // < 15 gwei → low
+  medium:  40,  // 15–40 gwei → medium
+  high:   100,  // 40–100 gwei → high
+  // > 100 gwei → extreme
+}
+
+/** Adaptive escalation multipliers per congestion level */
+const CONGESTION_ESCALATION = {
+  low:     1.15,
+  medium:  1.25,
+  high:    1.40,
+  extreme: 1.60,
+}
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -145,8 +163,23 @@ export async function estimateGas(publicClient, strategy = 'balanced', retryAtte
 }
 
 /**
- * Escalate gas params for a replacement transaction.
- * Applies ESCALATION_MULTIPLIER once per additional retry.
+ * Classify network congestion from the current base fee.
+ *
+ * @param {number|null} baseFeeGwei
+ * @returns {'low'|'medium'|'high'|'extreme'}
+ */
+export function getCongestionLevel(baseFeeGwei) {
+  if (baseFeeGwei === null || baseFeeGwei === undefined || Number.isNaN(baseFeeGwei)) return 'medium'
+  const g = Number(baseFeeGwei)
+  if (g < CONGESTION_THRESHOLDS.low)    return 'low'
+  if (g < CONGESTION_THRESHOLDS.medium) return 'medium'
+  if (g < CONGESTION_THRESHOLDS.high)   return 'high'
+  return 'extreme'
+}
+
+/**
+ * Fixed escalation: apply ESCALATION_MULTIPLIER (1.25×) once per retry.
+ * Kept for backward compatibility with executor.js / simulator.js.
  *
  * @param {{ maxFeePerGas?: bigint, maxPriorityFeePerGas?: bigint, gasPrice?: bigint, isEip1559: boolean }} prevGasParams
  * @param {number} retryAttempt  — current attempt index (1-based)
@@ -156,12 +189,56 @@ export function escalateGas(prevGasParams, retryAttempt) {
   if (prevGasParams.isEip1559) {
     return {
       ...prevGasParams,
-      maxFeePerGas: applyEscalation(prevGasParams.maxFeePerGas, 1),
+      maxFeePerGas:         applyEscalation(prevGasParams.maxFeePerGas, 1),
       maxPriorityFeePerGas: applyEscalation(prevGasParams.maxPriorityFeePerGas, 1),
     }
   }
   return {
     ...prevGasParams,
     gasPrice: applyEscalation(prevGasParams.gasPrice, 1),
+  }
+}
+
+/**
+ * Adaptive escalation: multiplier scales with congestion level.
+ * Applies a cap so gas never exceeds maxCapGwei (if provided).
+ *
+ * @param {{ maxFeePerGas?: bigint, maxPriorityFeePerGas?: bigint, gasPrice?: bigint, isEip1559: boolean, baseFeeGwei?: number }} prevGasParams
+ * @param {number} retryAttempt
+ * @param {string} [congestionLevel]  — 'low'|'medium'|'high'|'extreme'; derived from baseFeeGwei if omitted
+ * @param {number|null} [maxCapGwei]  — hard cap; null = no cap
+ * @returns {typeof prevGasParams}
+ */
+export function adaptiveEscalateGas(prevGasParams, retryAttempt, congestionLevel, maxCapGwei = null) {
+  const level = congestionLevel ?? getCongestionLevel(prevGasParams.baseFeeGwei ?? null)
+  const mult  = CONGESTION_ESCALATION[level] ?? ESCALATION_MULTIPLIER
+
+  function escalate(value) {
+    if (!value) return value
+    let scaled = BigInt(Math.ceil(Number(value) * mult))
+    if (maxCapGwei !== null) {
+      const cap = BigInt(Math.round(maxCapGwei * 1e9))
+      if (scaled > cap) scaled = cap
+    }
+    return scaled
+  }
+
+  globalLog.debug('gas', 'Adaptive gas escalation', {
+    retry_attempt: retryAttempt,
+    congestion_level: level,
+    multiplier: mult,
+    max_cap_gwei: maxCapGwei,
+  })
+
+  if (prevGasParams.isEip1559) {
+    return {
+      ...prevGasParams,
+      maxFeePerGas:         escalate(prevGasParams.maxFeePerGas),
+      maxPriorityFeePerGas: escalate(prevGasParams.maxPriorityFeePerGas),
+    }
+  }
+  return {
+    ...prevGasParams,
+    gasPrice: escalate(prevGasParams.gasPrice),
   }
 }

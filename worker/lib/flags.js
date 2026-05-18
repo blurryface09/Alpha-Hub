@@ -33,6 +33,18 @@ export const FLAGS = {
 
   /** Run full execution path against the mint adapter without touching the blockchain */
   SIMULATION_MODE: parseBool('SIMULATION_MODE', false),
+
+  /** Run preflight contract risk checks before simulation */
+  PREFLIGHT_ENABLED: parseBool('PREFLIGHT_ENABLED', true),
+
+  /** Classify mint patterns and auto-select execution strategy */
+  PATTERN_CLASSIFICATION_ENABLED: parseBool('PATTERN_CLASSIFICATION_ENABLED', true),
+
+  /** Use congestion-adaptive gas escalation multipliers */
+  ADAPTIVE_GAS_ENABLED: parseBool('ADAPTIVE_GAS_ENABLED', true),
+
+  /** Emit execution profiling telemetry events */
+  EXECUTION_TELEMETRY_ENABLED: parseBool('EXECUTION_TELEMETRY_ENABLED', true),
 }
 
 /**
