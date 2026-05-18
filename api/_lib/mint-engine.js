@@ -401,7 +401,7 @@ async function loadVault(supabase, userId) {
 }
 
 export async function handleMintAction(req, res, action) {
-  const allowed = new Set(['prepare', 'enable-strike', 'stop', 'execute', 'confirm', 'status'])
+  const allowed = new Set(['prepare', 'enable-strike', 'stop', 'execute', 'confirm', 'status', 'strike-simulate'])
   if (!allowed.has(action)) return res.status(404).json(safeError('Unknown mint action.'))
 
   const user = await requireUser(req, res)
@@ -559,6 +559,91 @@ export async function handleMintAction(req, res, action) {
       await logEvent(supabase, intentId, user.id, 'stopped')
       await recordAttempt(supabase, intentId, user.id, 'stopped')
       return res.status(200).json({ ok: true, message: 'Mint stopped.' })
+    }
+
+    if (action === 'strike-simulate') {
+      if (req.method !== 'POST') return res.status(405).json(safeError('Method not allowed.'))
+      const body = req.body || {}
+      const chain = normalizeChain(body.chain || 'eth')
+      const contract = normalizeOptionalText(body.contractAddress || body.contract_address)
+      const blockers = []
+      const warnings = []
+
+      // Vault readiness
+      const vault = await loadVault(supabase, user.id)
+      const walletReady = Boolean(vault)
+      const walletAddress = vault?.address || vault?.wallet_address || null
+      if (!walletReady) blockers.push('Alpha Vault not created — visit Settings to create one')
+
+      // Contract + ABI validation
+      let contractValid = false
+      let functionName = null
+      let estimatedGas = null
+      if (!contract) {
+        blockers.push('No contract address — add it in project settings')
+      } else if (!isAddress(contract)) {
+        blockers.push('Contract address format is invalid')
+      } else if (!SUPPORTED_EXECUTION_CHAINS.has(chain)) {
+        blockers.push(`Chain "${chain}" is not supported for Strike Mode`)
+      } else {
+        try {
+          const prepared = await prepareMintTransaction({
+            ...body,
+            walletAddress: walletAddress || '0x0000000000000000000000000000000000000001',
+            mintPrice: body.mintPrice || body.mint_price || '0',
+          })
+          contractValid = true
+          functionName = prepared.functionName
+          estimatedGas = prepared.gas ? String(prepared.gas) : null
+        } catch (err) {
+          const msg = safeMessage(err)
+          // Insufficient funds is a wallet issue, not a contract issue
+          if (msg.toLowerCase().includes('insufficient funds')) {
+            warnings.push('Vault balance may not cover this mint — top up before arming')
+            contractValid = true
+          } else {
+            blockers.push(msg)
+          }
+        }
+      }
+
+      // Chain RPC check
+      const rpcUrl = RPC_URLS[chain] || null
+      if (!rpcUrl) warnings.push(`No RPC URL configured for "${chain}" — add ${chain.toUpperCase()}_RPC_URL to env`)
+
+      // Mint time
+      const mintDate = body.mintDate || body.mint_date || null
+      const projectStatus = body.projectStatus || body.project_status || null
+      if (!mintDate && projectStatus === 'upcoming') {
+        warnings.push('No confirmed mint time — Strike will fire when worker detects live state')
+      }
+
+      // Price
+      const mintPrice = body.mintPrice || body.mint_price
+      if (!mintPrice && mintPrice !== '0' && mintPrice !== 0) {
+        warnings.push('Mint price unconfirmed — max spend limit will be used as a cap')
+      }
+
+      const liveExecutionEnabled = String(process.env.LIVE_EXECUTION_ENABLED || '').toLowerCase() === 'true'
+
+      return res.status(200).json({
+        ok: true,
+        simulation: {
+          wallet_ready: walletReady,
+          wallet_address: walletAddress,
+          contract_valid: contractValid,
+          function_name: functionName,
+          estimated_gas: estimatedGas,
+          gas_strategy: 'balanced',
+          rpc_available: Boolean(rpcUrl),
+          rpc_url: rpcUrl,
+          chain,
+          execution_timing: mintDate || 'immediate',
+          blockers,
+          warnings,
+          live_execution_enabled: liveExecutionEnabled,
+        },
+      })
     }
 
     if (action === 'execute' || action === 'confirm') {

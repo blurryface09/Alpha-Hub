@@ -11,6 +11,7 @@ import Paywall from '../components/Paywall'
 import AddProjectModal from '../components/mint/AddProjectModal'
 import MintConfirmModal from '../components/mint/MintConfirmModal'
 import ProjectCard from '../components/mint/ProjectCard'
+import StrikeReviewModal from '../components/mint/StrikeReviewModal'
 
 const STATUS_TABS = ['all', 'upcoming', 'live', 'minted', 'missed']
 const OPTIONAL_PROJECT_FIELDS = [
@@ -57,6 +58,8 @@ export default function MintGuardPage() {
   const [telegramChatId, setTelegramChatId] = useState(null)
   const [userToken, setUserToken] = useState(null)
   const [upgradeRequired, setUpgradeRequired] = useState(null)
+  const [strikeReviewProject, setStrikeReviewProject] = useState(null) // project pending Strike Review
+  const [vaultWallet, setVaultWallet] = useState(null) // cached vault for review modal
   const autoFired = React.useRef(new Set())
   const tgNotified = React.useRef(new Set()) // prevent duplicate Telegram notifications
 
@@ -342,40 +345,20 @@ export default function MintGuardPage() {
     const currentMode = project.mint_mode
     const newMode = currentMode === 'confirm' ? 'auto' : 'confirm'
     if (newMode === 'auto') {
-      const accepted = window.confirm('Strike Mode can execute real blockchain transactions through Alpha Vault. Use an isolated burner wallet and set max spend limits. Continue?')
-      if (!accepted) return
-      try {
-        const token = await getAuthToken()
-        if (!token) throw new Error('Sign in again before enabling Strike Mode.')
-        const res = await fetch('/api/mint/enable-strike', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-          body: JSON.stringify({
-            wlProjectId: project.id,
-            name: project.name,
-            contractAddress: project.contract_address,
-            chain: project.chain,
-            chainId: project.chain_id,
-            quantity: project.max_mint || 1,
-            mintPrice: project.mint_price || '0',
-            maxTotalSpend: project.max_total_spend || '0.05',
-            maxGasFee: project.max_gas_fee || null,
-            mintDate: project.mint_date || new Date().toISOString(),
-            strikeExecuteAt: project.mint_date || new Date().toISOString(),
-            acknowledgeRisk: true,
-          }),
-        })
-        const data = await res.json().catch(() => ({}))
-        if (!res.ok || data?.ok === false) throw new Error(data.error || 'Could not arm Strike Mode.')
-        toast.success(data.message || 'Strike armed. Worker is watching.')
-      } catch (error) {
-        toast.error(error?.message || friendlyError(error, 'Could not arm Strike Mode.'))
-        return
-      }
+      // Open Strike Review modal instead of window.confirm
+      // Load vault silently for the modal
+      getAuthToken().then(token => {
+        if (!token) return
+        fetch('/api/vault/list', { headers: { Authorization: `Bearer ${token}` } })
+          .then(r => r.json()).then(d => setVaultWallet(d?.wallets?.[0] ?? null)).catch(() => {})
+      })
+      setStrikeReviewProject(project)
+      return
     }
+    // Disarming: flip back to confirm mode
     let { error } = await supabase
       .from('wl_projects')
-      .update({ mint_mode: newMode, automint_enabled: newMode === 'auto' })
+      .update({ mint_mode: newMode, automint_enabled: false })
       .eq('id', id)
     if (error && String(error.message || '').includes('schema cache')) {
       const fallback = await supabase.from('wl_projects').update({ mint_mode: newMode }).eq('id', id)
@@ -385,8 +368,8 @@ export default function MintGuardPage() {
       toast.error(friendlyError(error, 'Could not update mint mode.'))
       return
     }
-    setProjects(prev => prev.map(p => p.id === id ? { ...p, mint_mode: newMode, automint_enabled: newMode === 'auto' } : p))
-    toast.success(newMode === 'auto' ? 'Strike armed. Worker is watching.' : 'Switched to Fast Mint')
+    setProjects(prev => prev.map(p => p.id === id ? { ...p, mint_mode: 'confirm', automint_enabled: false } : p))
+    toast.success('Switched to Fast Mint')
   }
 
   const handleMint = async (project, isAuto = false) => {
@@ -412,6 +395,48 @@ export default function MintGuardPage() {
       return
     }
     executeMint(project)
+  }
+
+  // Called by StrikeReviewModal when user confirms arm
+  const handleStrikeArm = async (project, opts = {}) => {
+    const token = await getAuthToken()
+    if (!token) throw new Error('Sign in again before enabling Strike Mode.')
+    const res = await fetch('/api/mint/enable-strike', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+      body: JSON.stringify({
+        wlProjectId: project.id,
+        name: project.name,
+        contractAddress: project.contract_address,
+        chain: project.chain,
+        chainId: project.chain_id,
+        quantity: project.max_mint || 1,
+        mintPrice: project.mint_price || '0',
+        maxTotalSpend: project.max_total_spend || '0.05',
+        maxGasFee: project.max_gas_fee || null,
+        mintDate: project.mint_date || new Date().toISOString(),
+        strikeExecuteAt: project.mint_date || new Date().toISOString(),
+        acknowledgeRisk: true,
+        simulationOnly: opts.simulationOnly ?? true,
+      }),
+    })
+    const data = await res.json().catch(() => ({}))
+    if (!res.ok || data?.ok === false) throw new Error(data.error || 'Could not arm Strike Mode.')
+
+    // Update wl_projects mode in DB
+    let { error } = await supabase
+      .from('wl_projects')
+      .update({ mint_mode: 'auto', automint_enabled: true })
+      .eq('id', project.id)
+    if (error && String(error.message || '').includes('schema cache')) {
+      await supabase.from('wl_projects').update({ mint_mode: 'auto' }).eq('id', project.id)
+    }
+
+    setProjects(prev => prev.map(p =>
+      p.id === project.id ? { ...p, mint_mode: 'auto', automint_enabled: true } : p,
+    ))
+    setStrikeReviewProject(null)
+    toast.success(data.message || (opts.simulationOnly ? 'Strike armed in simulation mode.' : 'Strike armed. Worker is watching.'))
   }
 
   const executeMint = async (project) => {
@@ -603,6 +628,14 @@ export default function MintGuardPage() {
           project={confirmMint}
           onConfirm={(gasOverride) => executeMint({ ...confirmMint, gas_limit: gasOverride })}
           onCancel={() => setConfirmMint(null)}
+        />
+      )}
+      {strikeReviewProject && (
+        <StrikeReviewModal
+          project={strikeReviewProject}
+          vault={vaultWallet}
+          onConfirmArm={handleStrikeArm}
+          onClose={() => setStrikeReviewProject(null)}
         />
       )}
     </div>

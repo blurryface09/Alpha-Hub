@@ -2,9 +2,52 @@ import React, { useState } from 'react'
 import LiveMintFeed from './LiveMintFeed'
 import EditProjectModal from './EditProjectModal'
 import { motion } from 'framer-motion'
-import { Zap, Trash2, Clock, ChevronDown, ChevronUp, ToggleLeft, ToggleRight, ExternalLink, RefreshCw, Twitter, AlertCircle, Gift, Bell } from 'lucide-react'
+import { Zap, Trash2, Clock, ChevronDown, ChevronUp, ToggleLeft, ToggleRight, ExternalLink, RefreshCw, Twitter, AlertCircle, Gift, Bell, Lock } from 'lucide-react'
 import toast from 'react-hot-toast'
 import { fetchProjectIntel } from '../../lib/ai'
+
+// ── Strike state badge ────────────────────────────────────────────────────────
+
+function strikeStateFor(project) {
+  const execStatus = project.execution_status || project.strike_status || null
+  if (execStatus === 'executing') return 'executing'
+  if (execStatus === 'failed')    return 'failed'
+  if (execStatus === 'success' || execStatus === 'submitted') return 'success'
+  if (!project.contract_address) return 'blocked'
+  if (project.mint_status === 'needs_review' || project.status === 'needs_review') return 'needs_review'
+  if (project.mint_mode === 'auto' && project.contract_address) return 'armed'
+  return 'ready'
+}
+
+const STRIKE_BADGE = {
+  armed:        { label: 'Armed',          cls: 'border-amber-500/25 text-amber-300 bg-amber-500/10' },
+  ready:        { label: 'Ready',          cls: 'border-green/30 text-green bg-green/8' },
+  blocked:      { label: 'Blocked',        cls: 'border-red-500/25 text-red-400 bg-red-500/8' },
+  needs_review: { label: 'Needs review',   cls: 'border-amber-500/25 text-amber-400 bg-amber-500/8' },
+  executing:    { label: 'Executing…',     cls: 'border-cyan-500/25 text-cyan-300 bg-cyan-500/8 animate-pulse' },
+  failed:       { label: 'Failed',         cls: 'border-red-500/25 text-red-400 bg-red-500/8' },
+  success:      { label: 'Submitted',      cls: 'border-green/30 text-green bg-green/8' },
+  sim_armed:    { label: 'Sim armed',      cls: 'border-purple-500/25 text-purple-300 bg-purple-500/8' },
+}
+
+function StrikeStateBadge({ project }) {
+  const state = strikeStateFor(project)
+  const { label, cls } = STRIKE_BADGE[state] || STRIKE_BADGE.armed
+  const title = state === 'blocked'
+    ? 'Add a contract address to enable Strike Mode'
+    : state === 'needs_review'
+      ? 'Verify project details before Strike fires'
+      : 'Strike Mode — Alpha Vault safety checks run before any transaction'
+  return (
+    <span
+      title={title}
+      className={`text-xs px-2 py-1.5 rounded-md border flex items-center gap-1 ${cls}`}
+    >
+      {React.createElement(state === 'blocked' ? Lock : Zap, { size: 11 })}
+      {label}
+    </span>
+  )
+}
 
 const STATUS_STYLES = {
   upcoming:  { dot: "dot-warning", badge: "badge-yellow", label: "UPCOMING" },
@@ -158,14 +201,8 @@ export default function ProjectCard({ project, isMinting, onMint, onDelete, onSt
                 {project.mint_mode === "auto" ? React.createElement(ToggleRight, { size: 12 }) : React.createElement(ToggleLeft, { size: 12 })}
                 {project.mint_mode === "auto" ? "Strike" : "Fast"}
               </button>
-              {project.contract_address && project.mint_mode === 'auto' && project.status !== 'minted' && (
-                <span
-                  title="Strike Mode runs Alpha Vault safety checks before sending any transaction"
-                  className="text-xs px-2 py-1.5 rounded-md border border-amber-500/25 text-amber-300 bg-amber-500/10 flex items-center gap-1"
-                >
-                  {React.createElement(Zap, { size: 11 })}
-                  Queued
-                </span>
+              {project.mint_mode === 'auto' && project.status !== 'minted' && (
+                <StrikeStateBadge project={project} />
               )}
               {(project.status === "live" || project.status === "upcoming") && project.contract_address && (
                 <button onClick={() => onMint(false)} disabled={isMinting} className="btn-primary text-xs px-3 py-1.5 flex items-center gap-1.5">
