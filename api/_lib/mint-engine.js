@@ -401,7 +401,7 @@ async function loadVault(supabase, userId) {
 }
 
 export async function handleMintAction(req, res, action) {
-  const allowed = new Set(['prepare', 'enable-strike', 'stop', 'execute', 'confirm', 'status', 'strike-simulate'])
+  const allowed = new Set(['prepare', 'enable-strike', 'stop', 'execute', 'confirm', 'status', 'strike-simulate', 'strike-replay', 'strike-rerun'])
   if (!allowed.has(action)) return res.status(404).json(safeError('Unknown mint action.'))
 
   const user = await requireUser(req, res)
@@ -644,6 +644,59 @@ export async function handleMintAction(req, res, action) {
           live_execution_enabled: liveExecutionEnabled,
         },
       })
+    }
+
+    if (action === 'strike-replay') {
+      const intentId = normalizeOptionalUuid(req.query?.intentId || req.body?.intentId)
+      if (!intentId) return res.status(400).json(safeError('intentId is required.'))
+      const { data, error } = await supabase
+        .from('mint_execution_events')
+        .select('id, state, message, metadata, created_at')
+        .eq('intent_id', intentId)
+        .eq('user_id', user.id)
+        .order('created_at', { ascending: true })
+        .limit(200)
+      if (error) return res.status(500).json(safeError(error.message))
+      return res.status(200).json({ ok: true, events: data ?? [] })
+    }
+
+    if (action === 'strike-rerun') {
+      if (req.method !== 'POST') return res.status(405).json(safeError('Method not allowed.'))
+      const { intentId } = req.body || {}
+      const normalizedId = normalizeOptionalUuid(intentId)
+      if (!normalizedId) return res.status(400).json(safeError('intentId is required.'))
+      const { data: intent, error: loadErr } = await supabase
+        .from('mint_intents')
+        .select('id, status, strike_enabled')
+        .eq('id', normalizedId)
+        .eq('user_id', user.id)
+        .single()
+      if (loadErr || !intent) return res.status(404).json(safeError('Mint session not found.'))
+      const RERUNNABLE = ['simulated_failure', 'simulated_success', 'failed']
+      if (!RERUNNABLE.includes(intent.status)) {
+        return res.status(400).json(safeError(`Intent status "${intent.status}" is not eligible for re-simulation.`))
+      }
+      const { error: updateErr } = await supabase
+        .from('mint_intents')
+        .update({
+          status: 'armed',
+          strike_enabled: true,
+          simulation_status: null,
+          simulation_error: null,
+          last_state: 'Requeued for re-simulation',
+          updated_at: new Date().toISOString(),
+        })
+        .eq('id', normalizedId)
+        .eq('user_id', user.id)
+      if (updateErr) return res.status(500).json(safeError(updateErr.message))
+      await supabase.from('mint_execution_events').insert({
+        intent_id: normalizedId,
+        user_id: user.id,
+        state: 'armed',
+        message: 'Re-queued for simulation by user.',
+        metadata: {},
+      }).catch(() => null)
+      return res.status(200).json({ ok: true, message: 'Simulation re-queued.' })
     }
 
     if (action === 'execute' || action === 'confirm') {

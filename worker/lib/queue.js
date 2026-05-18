@@ -15,9 +15,12 @@ export const INTENT_STATES = {
   ARMED: 'armed',
   QUEUED: 'queued',
   EXECUTING: 'executing',
+  EXECUTING_SIM: 'executing_simulation',
   RETRYING: 'retrying',
   SUCCESS: 'success',
   FAILED: 'failed',
+  SIM_SUCCESS: 'simulated_success',
+  SIM_FAILED: 'simulated_failure',
   EXPIRED: 'expired',
   CANCELLED: 'cancelled',
 }
@@ -30,12 +33,15 @@ export const INTENT_STATES = {
  * @type {Map<string, Set<string>>}
  */
 const TRANSITIONS = new Map([
-  [INTENT_STATES.PENDING, new Set([INTENT_STATES.ARMED, INTENT_STATES.CANCELLED, INTENT_STATES.EXPIRED])],
-  [INTENT_STATES.ARMED, new Set([INTENT_STATES.QUEUED, INTENT_STATES.CANCELLED, INTENT_STATES.EXPIRED])],
-  [INTENT_STATES.QUEUED, new Set([INTENT_STATES.EXECUTING, INTENT_STATES.CANCELLED, INTENT_STATES.EXPIRED])],
-  [INTENT_STATES.EXECUTING, new Set([INTENT_STATES.SUCCESS, INTENT_STATES.FAILED, INTENT_STATES.RETRYING])],
-  [INTENT_STATES.RETRYING, new Set([INTENT_STATES.EXECUTING, INTENT_STATES.FAILED])],
-  [INTENT_STATES.FAILED, new Set([INTENT_STATES.CANCELLED])],
+  [INTENT_STATES.PENDING,       new Set([INTENT_STATES.ARMED, INTENT_STATES.CANCELLED, INTENT_STATES.EXPIRED])],
+  [INTENT_STATES.ARMED,         new Set([INTENT_STATES.QUEUED, INTENT_STATES.EXECUTING_SIM, INTENT_STATES.CANCELLED, INTENT_STATES.EXPIRED])],
+  [INTENT_STATES.QUEUED,        new Set([INTENT_STATES.EXECUTING, INTENT_STATES.CANCELLED, INTENT_STATES.EXPIRED])],
+  [INTENT_STATES.EXECUTING,     new Set([INTENT_STATES.SUCCESS, INTENT_STATES.FAILED, INTENT_STATES.RETRYING, INTENT_STATES.ARMED])],
+  [INTENT_STATES.EXECUTING_SIM, new Set([INTENT_STATES.SIM_SUCCESS, INTENT_STATES.SIM_FAILED])],
+  [INTENT_STATES.RETRYING,      new Set([INTENT_STATES.EXECUTING, INTENT_STATES.FAILED])],
+  [INTENT_STATES.FAILED,        new Set([INTENT_STATES.CANCELLED, INTENT_STATES.ARMED])],
+  [INTENT_STATES.SIM_FAILED,    new Set([INTENT_STATES.ARMED, INTENT_STATES.CANCELLED])],
+  [INTENT_STATES.SIM_SUCCESS,   new Set([INTENT_STATES.ARMED, INTENT_STATES.CANCELLED])],
 ])
 
 /** States that the worker can atomically claim for execution */
@@ -225,4 +231,80 @@ export async function fetchPrewarmIntents(supabase, prewarmWindowMs, nowMs) {
 
   if (error) throw error
   return data ?? []
+}
+
+/**
+ * Atomically claim an intent for simulation execution.
+ * Transitions armed → executing_simulation only when strike_enabled=true.
+ *
+ * @param {import('@supabase/supabase-js').SupabaseClient} supabase
+ * @param {string} intentId
+ * @returns {Promise<object|null>}
+ */
+export async function claimForSimulation(supabase, intentId) {
+  const intentLog = createLogger(intentId, null)
+  const { data, error } = await supabase
+    .from('mint_intents')
+    .update({
+      status: INTENT_STATES.EXECUTING_SIM,
+      last_state: 'Strike worker: running simulation',
+      updated_at: now(),
+    })
+    .eq('id', intentId)
+    .eq('strike_enabled', true)
+    .in('status', CLAIMABLE_STATES)
+    .select()
+    .single()
+
+  if (error || !data) {
+    intentLog.warn('sim_claim', 'Failed to claim intent for simulation', {
+      intent_id: intentId,
+      error: error?.message,
+    })
+    return null
+  }
+
+  intentLog.info('sim_claim', 'Intent claimed for simulation', { status: data.status })
+  return data
+}
+
+/**
+ * Fetch intents in simulated_failure state that are eligible for requeue.
+ *
+ * @param {import('@supabase/supabase-js').SupabaseClient} supabase
+ * @param {number} batchSize
+ * @returns {Promise<object[]>}
+ */
+export async function fetchSimFailedIntents(supabase, batchSize = 5) {
+  const { data, error } = await supabase
+    .from('mint_intents')
+    .select('*')
+    .eq('strike_enabled', true)
+    .eq('status', INTENT_STATES.SIM_FAILED)
+    .order('updated_at', { ascending: true })
+    .limit(batchSize)
+
+  if (error) throw error
+  return data ?? []
+}
+
+/**
+ * Requeue a simulated_failure intent back to armed for re-simulation.
+ *
+ * @param {import('@supabase/supabase-js').SupabaseClient} supabase
+ * @param {object} intent
+ */
+export async function requeueForSimulation(supabase, intent) {
+  const attemptCount = (intent.sim_requeue_count ?? 0) + 1
+  await transitionIntent(supabase, intent.id, INTENT_STATES.SIM_FAILED, INTENT_STATES.ARMED, {
+    last_state: `Requeued for re-simulation (attempt ${attemptCount})`,
+  })
+
+  await insertEvent(
+    supabase,
+    intent,
+    INTENT_STATES.ARMED,
+    `Re-queued for simulation. Attempt ${attemptCount}.`,
+    { requeue_count: attemptCount },
+  )
 }

@@ -12,6 +12,7 @@ import AddProjectModal from '../components/mint/AddProjectModal'
 import MintConfirmModal from '../components/mint/MintConfirmModal'
 import ProjectCard from '../components/mint/ProjectCard'
 import StrikeReviewModal from '../components/mint/StrikeReviewModal'
+import StrikeReplayModal from '../components/mint/StrikeReplayModal'
 
 const STATUS_TABS = ['all', 'upcoming', 'live', 'minted', 'missed']
 const OPTIONAL_PROJECT_FIELDS = [
@@ -61,6 +62,8 @@ export default function MintGuardPage() {
   const [strikeReviewProject, setStrikeReviewProject] = useState(null) // project pending Strike Review
   const [vaultWallet, setVaultWallet] = useState(null) // cached vault for review modal
   const [deletingId, setDeletingId] = useState(null)
+  const [replayProject, setReplayProject] = useState(null)
+  const [replayIntentId, setReplayIntentId] = useState(null)
   const autoFired = React.useRef(new Set())
   const tgNotified = React.useRef(new Set()) // prevent duplicate Telegram notifications
 
@@ -468,6 +471,20 @@ export default function MintGuardPage() {
     toast.success(msg)
   }
 
+  const handleOpenReplay = async (project) => {
+    setReplayProject(project)
+    setReplayIntentId(null)
+    // Fetch latest intent for this project
+    const { data } = await supabase
+      .from('mint_intents')
+      .select('id, status')
+      .eq('user_id', user.id)
+      .eq('wl_project_id', project.id)
+      .order('updated_at', { ascending: false })
+      .limit(1)
+    setReplayIntentId(data?.[0]?.id ?? null)
+  }
+
   const executeMint = async (project) => {
     setMintingId(project.id)
     // Snapshot token/chatId at execution time — avoids stale closure issues
@@ -640,6 +657,7 @@ export default function MintGuardPage() {
                 onStatusUpdate={(s) => handleStatusUpdate(project.id, s)}
                 onMintModeToggle={() => handleMintModeToggle(project)}
                 onEdit={(updates) => handleEditProject(project.id, updates)}
+                onReplay={() => handleOpenReplay(project)}
               />
             ))}
           </AnimatePresence>
@@ -666,6 +684,18 @@ export default function MintGuardPage() {
           vault={vaultWallet}
           onConfirmArm={handleStrikeArm}
           onClose={() => setStrikeReviewProject(null)}
+        />
+      )}
+      {replayProject && (
+        <StrikeReplayModal
+          project={replayProject}
+          intentId={replayIntentId}
+          onClose={() => { setReplayProject(null); setReplayIntentId(null) }}
+          onRerun={() => {
+            setProjects(prev => prev.map(p =>
+              p.id === replayProject.id ? { ...p, mint_mode: 'auto', automint_enabled: true } : p,
+            ))
+          }}
         />
       )}
     </div>

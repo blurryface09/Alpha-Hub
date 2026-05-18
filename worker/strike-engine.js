@@ -12,6 +12,8 @@ let fetchReadyIntents = null
 let fetchPrewarmIntents = null
 let markExpired = null
 let executeIntent = null
+let simulateArmedIntent = null
+let runSimulationRequeueSweep = null
 let isExpired = null
 let PREWARM_WINDOW_MS = 30_000
 
@@ -36,6 +38,12 @@ try {
 try {
   const execMod = await import('./lib/executor.js')
   executeIntent = execMod.executeIntent
+} catch { /* lib not available */ }
+
+try {
+  const simMod = await import('./lib/sim-executor.js')
+  simulateArmedIntent = simMod.simulateArmedIntent
+  runSimulationRequeueSweep = simMod.runSimulationRequeueSweep
 } catch { /* lib not available */ }
 
 try {
@@ -67,6 +75,8 @@ const CHAIN_IDS = {
 }
 
 let stopping = false
+let tickCount = 0
+const HEARTBEAT_INTERVAL = Number(process.env.STRIKE_WORKER_HEARTBEAT_INTERVAL || 10)
 
 // ── Logging (falls back to plain console if lib not loaded) ───────────────────
 
@@ -311,20 +321,58 @@ async function sweepExpiredIntents(supabase) {
 // ── Main tick ─────────────────────────────────────────────────────────────────
 
 async function tick(supabase) {
-  if (!AUTO_STRIKE_ENABLED || !ALPHA_VAULT_ENABLED) {
-    workerLog('tick', 'disabled by safety switches', {
+  tickCount++
+
+  const liveEnabled = FLAGS?.LIVE_EXECUTION_ENABLED ?? false
+  const simMode = FLAGS?.SIMULATION_MODE ?? false
+
+  // ── Heartbeat ───────────────────────────────────────────────────────────────
+  if (tickCount === 1 || tickCount % HEARTBEAT_INTERVAL === 0) {
+    workerLog('tick', 'Worker heartbeat', {
+      tick: tickCount,
+      live_execution: liveEnabled,
+      simulation_mode: simMode,
+      auto_strike: AUTO_STRIKE_ENABLED,
+      alpha_vault: ALPHA_VAULT_ENABLED,
+      sim_executor_loaded: Boolean(simulateArmedIntent),
+      executor_loaded: Boolean(executeIntent),
+    })
+  }
+
+  // ── Central LIVE_EXECUTION_ENABLED enforcement ──────────────────────────────
+  // If live execution is requested, require both legacy safety switches to be on.
+  if (liveEnabled && (!AUTO_STRIKE_ENABLED || !ALPHA_VAULT_ENABLED)) {
+    workerWarn('tick', 'LIVE_EXECUTION_ENABLED=true but safety switches are off — refusing live execution', {
       auto_strike: AUTO_STRIKE_ENABLED,
       alpha_vault: ALPHA_VAULT_ENABLED,
     })
     return
   }
 
+  // If neither live nor simulation is enabled, idle.
+  if (!liveEnabled && !simMode) {
+    workerLog('tick', 'idle: LIVE_EXECUTION_ENABLED=false and SIMULATION_MODE=false')
+    return
+  }
+
   const nowMs = Date.now()
 
-  // Expiration sweep first
+  // ── Expiration sweep ────────────────────────────────────────────────────────
   await sweepExpiredIntents(supabase)
 
-  // ── Prewarm phase (new lib path) ──────────────────────────────────────────
+  // ── Simulation requeue sweep ────────────────────────────────────────────────
+  if (simMode && runSimulationRequeueSweep) {
+    try {
+      const requeued = await runSimulationRequeueSweep(supabase, BATCH_SIZE)
+      if (requeued > 0) {
+        workerLog('tick', 'Requeued failed simulation intents', { count: requeued })
+      }
+    } catch (err) {
+      workerWarn('tick', 'Simulation requeue sweep failed', { error: err.message })
+    }
+  }
+
+  // ── Prewarm phase ───────────────────────────────────────────────────────────
   if (fetchPrewarmIntents && flagEnabled) {
     try {
       const prewarmIntents = await fetchPrewarmIntents(supabase, PREWARM_WINDOW_MS, nowMs)
@@ -347,7 +395,7 @@ async function tick(supabase) {
     }
   }
 
-  // ── Fetch and process ready intents ──────────────────────────────────────
+  // ── Fetch ready intents ─────────────────────────────────────────────────────
   let readyIntents = []
   let usedLibPath = false
 
@@ -361,7 +409,6 @@ async function tick(supabase) {
   }
 
   if (!usedLibPath) {
-    // Legacy fallback query
     const { data, error } = await supabase
       .from('mint_intents')
       .select('*')
@@ -377,23 +424,43 @@ async function tick(supabase) {
       const executeAt = new Date(intent.strike_execute_at).getTime()
       return Number.isNaN(executeAt) || executeAt <= now
     })
-    if (!data?.length) workerLog('tick', 'idle')
-    else if (!readyIntents.length) workerLog('tick', 'armed intents waiting for mint time', { count: data.length })
   }
 
-  // ── Execute ───────────────────────────────────────────────────────────────
+  if (readyIntents.length === 0) {
+    workerLog('tick', 'idle', { live: liveEnabled, sim: simMode })
+    return
+  }
+
+  workerLog('tick', 'Processing intents', {
+    count: readyIntents.length,
+    live_enabled: liveEnabled,
+    sim_mode: simMode,
+  })
+
+  // ── Dispatch: simulation or live ────────────────────────────────────────────
   for (const intent of readyIntents) {
-    if (executeIntent) {
-      // New execution path
+    if (simMode && !liveEnabled && simulateArmedIntent) {
+      // Simulation path — no blockchain broadcast
+      await simulateArmedIntent(supabase, intent).catch(err =>
+        workerError('sim', 'Simulation error', {
+          intent_id: intent.id,
+          error: String(err?.message || err),
+        }),
+      )
+    } else if (liveEnabled && executeIntent) {
+      // Live execution path (LIVE_EXECUTION_ENABLED=true, safety switches on)
       await executeIntent(supabase, intent)
-    } else {
-      // Legacy fallback
+    } else if (liveEnabled) {
+      // Legacy live fallback (lib not loaded)
       await legacyProcessIntent(supabase, intent)
+    } else {
+      // simMode=false, liveEnabled=false — should not reach here after early-return above
+      workerLog('tick', 'Intent skipped: no execution path active', {
+        intent_id: intent.id,
+        live_enabled: liveEnabled,
+        sim_mode: simMode,
+      })
     }
-  }
-
-  if (readyIntents.length === 0 && usedLibPath) {
-    workerLog('tick', 'idle')
   }
 }
 
@@ -411,10 +478,13 @@ async function main() {
     auto_strike: AUTO_STRIKE_ENABLED,
     alpha_vault: ALPHA_VAULT_ENABLED,
     live_execution: FLAGS?.LIVE_EXECUTION_ENABLED ?? false,
+    simulation_mode: FLAGS?.SIMULATION_MODE ?? false,
     retry_enabled: FLAGS?.RETRY_ENABLED ?? false,
     prewarm_enabled: FLAGS?.PREWARM_ENABLED ?? false,
     interval_ms: LOOP_MS,
     lib_loaded: Boolean(executeIntent),
+    sim_executor_loaded: Boolean(simulateArmedIntent),
+    heartbeat_interval: HEARTBEAT_INTERVAL,
   })
 
   while (!stopping) {

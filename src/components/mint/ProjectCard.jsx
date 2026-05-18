@@ -110,7 +110,7 @@ function Countdown({ mintDate, onLive, isAuto }) {
   }, timeLeft)
 }
 
-export default function ProjectCard({ project, isMinting, isDeleting, onMint, onDelete, onStatusUpdate, onMintModeToggle, onEdit }) {
+export default function ProjectCard({ project, isMinting, isDeleting, onMint, onDelete, onStatusUpdate, onMintModeToggle, onEdit, onReplay }) {
   const [expanded, setExpanded] = useState(false)
   const [showEdit, setShowEdit] = useState(false)
   const [intel, setIntel] = useState(null)
@@ -202,7 +202,13 @@ export default function ProjectCard({ project, isMinting, isDeleting, onMint, on
                 {project.mint_mode === "auto" ? "Strike" : "Fast"}
               </button>
               {project.mint_mode === 'auto' && project.status !== 'minted' && (
-                <StrikeStateBadge project={project} />
+                <button
+                  onClick={onReplay}
+                  className="flex items-center gap-1 cursor-pointer hover:opacity-80 transition-opacity"
+                  title="View simulation replay"
+                >
+                  <StrikeStateBadge project={project} />
+                </button>
               )}
               {(project.status === "live" || project.status === "upcoming") && project.contract_address && (
                 <button onClick={() => onMint(false)} disabled={isMinting} className="btn-primary text-xs px-3 py-1.5 flex items-center gap-1.5">
