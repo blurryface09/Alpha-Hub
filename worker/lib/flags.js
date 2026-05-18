@@ -30,6 +30,9 @@ export const FLAGS = {
 
   /** Log what would execute even when LIVE_EXECUTION_ENABLED=false */
   DRY_RUN_LOGGING: parseBool('DRY_RUN_LOGGING', true),
+
+  /** Run full execution path against the mint adapter without touching the blockchain */
+  SIMULATION_MODE: parseBool('SIMULATION_MODE', false),
 }
 
 /**
