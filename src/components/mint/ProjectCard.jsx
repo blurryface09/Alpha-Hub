@@ -76,8 +76,9 @@ function displayMintPrice(value) {
   const clean = String(value || '').trim()
   if (!clean || looksLikeAddress(clean)) return null
   if (/free/i.test(clean)) return 'Free'
+  if (/tba|to be announced/i.test(clean)) return 'Price TBA'
   if (!/[0-9]/.test(clean)) return null
-  return clean.replace(/\s*(ETH|BNB)$/i, '')
+  return clean
 }
 
 function Countdown({ mintDate, onLive, isAuto }) {
@@ -187,7 +188,9 @@ export default function ProjectCard({ project, isMinting, isDeleting, onMint, on
                 )}
                 {mintPrice && (
                   <span className="text-xs font-mono font-semibold text-green bg-green/10 border border-green/20 px-1.5 py-0.5 rounded">
-                    {mintPrice === 'Free' ? 'Free' : `${mintPrice} ${project.chain === 'bnb' ? 'BNB' : 'ETH'}`}
+                    {mintPrice === 'Free' || /\b(ETH|WETH|SOL|MATIC|POL|BNB|APE|Ξ|TBA)\b/i.test(mintPrice)
+                      ? mintPrice
+                      : `${mintPrice} ${project.chain === 'bnb' ? 'BNB' : 'ETH'}`}
                   </span>
                 )}
                 {project.mint_mode === 'auto' && (

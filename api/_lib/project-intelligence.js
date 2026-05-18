@@ -1,8 +1,8 @@
-import { fetchOpenSeaDropBySlug } from '../../src/server/calendar/adapters/opensea.js'
+import { extractOpenSeaSchedule, fetchOpenSeaDropBySlug } from '../../src/server/calendar/adapters/opensea.js'
 
 const ADDRESS_RE = /^0x[a-fA-F0-9]{40}$/
 const URL_RE = /https?:\/\/[^\s<>"')]+/i
-const PRICE_RE = /\b(?:price|mint price|cost)[:\s-]*([0-9]*\.?[0-9]+)\s*(?:eth|Ξ)\b/i
+const PRICE_RE = /\b(?:price|mint price|cost)[:\s-]*(free|tba|to be announced|[0-9]*\.?[0-9]+\s*(?:eth|Ξ|sol|matic|bnb|ape))\b/i
 
 const CHAIN_IDS = {
   eth: 1,
@@ -99,13 +99,15 @@ async function fetchPageMetadata(url) {
     })
     if (!response.ok) return null
     const html = await response.text()
+    const schedule = extractOpenSeaSchedule({}, { html, url })
     return {
       title: textFromMeta(html, 'og:title') || html.match(/<title[^>]*>([^<]+)<\/title>/i)?.[1]?.trim() || null,
       description: textFromMeta(html, 'og:description') || textFromMeta(html, 'description'),
       imageUrl: textFromMeta(html, 'og:image') || textFromMeta(html, 'twitter:image'),
       contractAddress: firstAddress(html),
       time: detectTimeFromText(html),
-      price: html.match(PRICE_RE)?.[1] || null,
+      price: schedule.price_label || html.match(PRICE_RE)?.[1] || null,
+      schedule,
       html,
     }
   } catch {
@@ -207,9 +209,15 @@ export async function detectProject(input = {}) {
   const pageMeta = url ? await fetchPageMetadata(url) : null
   const contract = looksLikeAddress(raw) ? raw : (firstAddress(input.contractAddress) || firstAddress(raw) || openSeaDrop?.contract_address || pageMeta?.contractAddress || null)
   const chain = normalizeChain(input.chain || openSeaDrop?.chain || urlInfo?.chain || raw)
-  const time = openSeaDrop?.mint_date ? { mintDate: openSeaDrop.mint_date, source: 'opensea_drops', confidence: 'high' } : (pageMeta?.time || detectTimeFromText(raw))
+  const pageSchedule = pageMeta?.schedule
+  const time = openSeaDrop?.mint_date
+    ? { mintDate: openSeaDrop.mint_date, source: 'opensea_drops', confidence: 'high' }
+    : pageSchedule?.mint_date
+      ? { mintDate: pageSchedule.mint_date, source: 'opensea_page_schedule', confidence: pageSchedule.confidence || 'medium' }
+      : (pageMeta?.time || detectTimeFromText(raw))
   const phase = openSeaDrop?.mint_type ? normalizePhase(openSeaDrop.mint_type) : normalizePhase(raw)
-  const price = openSeaDrop?.mint_price || pageMeta?.price || raw.match(PRICE_RE)?.[1] || null
+  const schedule = openSeaDrop?.source_metadata?.schedule || pageSchedule || extractOpenSeaSchedule({}, { html: raw })
+  const price = schedule?.price_label || openSeaDrop?.price_label || openSeaDrop?.mint_price || pageMeta?.price || raw.match(PRICE_RE)?.[1] || null
   const name = input.projectName || openSeaDrop?.name || pageMeta?.title?.replace(/\s+-\s+OpenSea.*$/i, '').replace(/\|.*$/g, '').trim() || urlInfo?.name || (contract ? `Needs Review ${contract.slice(0, 6)}...${contract.slice(-4)}` : 'Untitled Alpha')
   const mintUrl = openSeaDrop?.mint_url || urlInfo?.mintUrl || url || null
   const hasMintSource = Boolean(mintUrl && !urlInfo?.xUrl)
@@ -236,6 +244,7 @@ export async function detectProject(input = {}) {
   if (!urlInfo && !contract) notes.push('Add an official link or contract for stronger detection.')
   if (contract && !urlInfo) notes.push('Raw contract detected. Confirm official links before Strike Mode.')
   if (openSeaDrop?.source_confidence === 'high') notes.push('Verified OpenSea Drop data found.')
+  if (schedule?.reason && schedule.missing_fields?.includes('mint_price')) notes.push(schedule.reason)
   if (!time) notes.push('Mint time was not confidently detected. Ask the user to confirm manually.')
   if (mintStatus === 'needs_review') notes.push('Needs review: missing contract, mint time, or official mint source.')
   if (chain === 'solana') notes.push('Solana is scaffolded for discovery only. Mint execution is not enabled yet.')
@@ -247,6 +256,13 @@ export async function detectProject(input = {}) {
     mintStatus,
     confidenceScore,
     missingFields,
+    price: {
+      rawDetected: schedule?.extracted_prices || [],
+      rejected: schedule?.rejected_price_candidates || [],
+      final: price || 'Price TBA',
+      confidence: schedule?.price_confidence || 'low',
+      reason: schedule?.price_note || schedule?.reason || null,
+    },
   })
 
   return {
@@ -272,6 +288,15 @@ export async function detectProject(input = {}) {
       mintStatus,
       recommendedMode: recommendMode(phase, riskScore),
       mintPrice: price,
+      priceValue: schedule?.price_value ?? null,
+      priceCurrency: schedule?.price_currency || null,
+      priceLabel: schedule?.price_label || price || null,
+      priceNote: schedule?.price_note || null,
+      priceConfidence: schedule?.price_confidence || null,
+      stagePrices: schedule?.stage_prices || [],
+      mintSchedule: schedule?.stages || [],
+      currentStage: schedule?.current_stage || null,
+      nextStage: schedule?.next_stage || null,
       supply: null,
       riskScore,
       confidence,

@@ -5,6 +5,16 @@ alter table if exists public.calendar_projects add column if not exists mint_pha
 alter table if exists public.calendar_projects add column if not exists source_timezone text;
 alter table if exists public.calendar_projects add column if not exists recommended_mode text default 'safe';
 alter table if exists public.calendar_projects add column if not exists supply text;
+alter table if exists public.calendar_projects add column if not exists price_value numeric;
+alter table if exists public.calendar_projects add column if not exists price_currency text;
+alter table if exists public.calendar_projects add column if not exists price_label text;
+alter table if exists public.calendar_projects add column if not exists price_note text;
+alter table if exists public.calendar_projects add column if not exists price_confidence text;
+alter table if exists public.calendar_projects add column if not exists stage_prices jsonb;
+alter table if exists public.calendar_projects add column if not exists mint_schedule jsonb;
+alter table if exists public.calendar_projects add column if not exists mint_status text;
+alter table if exists public.calendar_projects add column if not exists mint_end_date timestamptz;
+alter table if exists public.calendar_projects add column if not exists source_metadata jsonb;
 
 create table if not exists public.alpha_vault_wallets (
   id uuid primary key default gen_random_uuid(),

@@ -39,7 +39,7 @@ export function calendarQualityScore(project) {
   const base = Math.round((passed / checks.length) * 100)
   const sourceBonus = project.source === 'admin' || project.source === 'community'
     ? 12
-    : project.source === 'opensea' || project.source === 'alchemy'
+    : project.source === 'opensea_drops' || project.source === 'opensea' || project.source === 'alchemy'
     ? 8
     : project.source === 'zora'
     ? 6
@@ -69,7 +69,8 @@ export function isActiveMintCalendarProject(project) {
   if (!isLaunchReadyCalendarProject(project)) return false
   const quality = calendarQualityScore(project)
   const confidence = project.mint_date_confidence || project.source_confidence || 'low'
-  const trustedSource = ['opensea', 'alchemy', 'admin', 'community'].includes(project.source)
+  // Only trusted sources may use medium confidence as confirmed.
+  const trustedSource = ['opensea_drops', 'opensea', 'alchemy', 'admin', 'community'].includes(project.source)
   const highConf   = ['high', 'manual', 'confirmed'].includes(confidence)
   const medTrusted = confidence === 'medium' && trustedSource
   const confirmed  = highConf || medTrusted
@@ -93,7 +94,7 @@ export function computeDisplayStatus(project) {
   if (['hidden', 'rejected'].includes(project.status)) return 'hidden'
   if (project.mint_status === 'ended' || project.status === 'ended') return 'ended'
   const confidence = project.mint_date_confidence || project.source_confidence || 'low'
-  const trustedSource = ['opensea', 'alchemy', 'admin', 'community'].includes(project.source)
+  const trustedSource = ['opensea_drops', 'opensea', 'alchemy', 'admin', 'community'].includes(project.source)
   const confirmed = ['high', 'manual', 'confirmed'].includes(confidence) || (confidence === 'medium' && trustedSource)
   if (project.mint_status === 'live_now') return 'live_now'
   if (project.status === 'live' && confirmed) return 'live_now'
@@ -129,7 +130,7 @@ export function strikeBlockers(project) {
   if (!project?.contract_address) blockers.push('Contract address required')
   if (!project?.mint_date) blockers.push('Mint date/time required')
   const confidence = project?.mint_date_confidence || project?.source_confidence || 'low'
-  const trustedSource = ['opensea', 'alchemy', 'admin', 'community'].includes(project?.source)
+  const trustedSource = ['opensea_drops', 'opensea', 'alchemy', 'admin', 'community'].includes(project?.source)
   const confirmed = ['high', 'manual', 'confirmed'].includes(confidence) || (confidence === 'medium' && trustedSource)
   if (!confirmed) blockers.push('Mint time not verified — confirm before enabling Strike Mode')
   return blockers

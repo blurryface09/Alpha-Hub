@@ -35,6 +35,13 @@ alter table public.calendar_projects add column if not exists mint_date_source t
 alter table public.calendar_projects add column if not exists mint_date_confidence text default 'low';
 alter table public.calendar_projects add column if not exists mint_time_confirmed boolean default false;
 alter table public.calendar_projects add column if not exists mint_price text;
+alter table public.calendar_projects add column if not exists price_value numeric;
+alter table public.calendar_projects add column if not exists price_currency text;
+alter table public.calendar_projects add column if not exists price_label text;
+alter table public.calendar_projects add column if not exists price_note text;
+alter table public.calendar_projects add column if not exists price_confidence text;
+alter table public.calendar_projects add column if not exists stage_prices jsonb;
+alter table public.calendar_projects add column if not exists mint_schedule jsonb;
 alter table public.calendar_projects add column if not exists mint_type text default 'unknown';
 alter table public.calendar_projects add column if not exists status text default 'pending_review';
 alter table public.calendar_projects add column if not exists source text default 'community';
@@ -61,6 +68,9 @@ alter table public.calendar_projects add column if not exists submitted_by_label
 alter table public.calendar_projects add column if not exists first_seen_at timestamptz default now();
 alter table public.calendar_projects add column if not exists last_seen_at timestamptz default now();
 alter table public.calendar_projects add column if not exists last_synced_at timestamptz;
+alter table public.calendar_projects add column if not exists mint_status text;
+alter table public.calendar_projects add column if not exists mint_end_date timestamptz;
+alter table public.calendar_projects add column if not exists source_metadata jsonb;
 alter table public.calendar_projects add column if not exists created_by uuid;
 alter table public.calendar_projects add column if not exists created_by_wallet text;
 alter table public.calendar_projects add column if not exists approved_by uuid;
@@ -281,6 +291,7 @@ begin
   alter table public.wl_projects add column if not exists mint_time_confirmed_at timestamptz;
   alter table public.wl_projects add column if not exists execution_status text;
   alter table public.wl_projects add column if not exists notes text;
+  alter table public.wl_projects add column if not exists deleted_at timestamptz;
   alter table public.wl_projects add column if not exists automint_enabled boolean default false;
   alter table public.wl_projects add column if not exists max_mint_price numeric;
   alter table public.wl_projects add column if not exists max_gas_fee numeric;

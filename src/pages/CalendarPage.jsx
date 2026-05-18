@@ -48,7 +48,7 @@ function chainIdFor(chain) {
 }
 
 function scoreFor(project, tab) {
-  const sourcePriority = { admin: 500, community: 450, opensea: 350, alchemy: 330, zora: 300, onchain: 0 }[project.source] || 100
+  const sourcePriority = { admin: 500, community: 450, opensea_drops: 380, opensea: 350, alchemy: 330, zora: 300, onchain: 0 }[project.source] || 100
   const quality = Number(project.quality_score || calendarQualityScore(project))
   if (tab === 'hidden-gems') return project.hidden_gem_score || 0
   if (tab === 'new-contracts') return (project.first_seen_at ? new Date(project.first_seen_at).getTime() : 0) + quality
@@ -61,8 +61,8 @@ function isLive(project) {
   if (project.mint_status === 'live_now') return true
 
   if (!project.mint_date) return false
-  // Only trusted sources can use 'medium' confidence as confirmed
-  const trustedSource = ['opensea', 'alchemy', 'admin', 'community'].includes(project.source)
+  // Only trusted sources can use medium confidence as confirmed for Live Now.
+  const trustedSource = ['opensea_drops', 'opensea', 'alchemy', 'admin', 'community'].includes(project.source)
   const confidence = project.mint_date_confidence || project.source_confidence || 'low'
   const confirmed = ['high', 'manual', 'confirmed'].includes(confidence) ||
     (confidence === 'medium' && trustedSource)
@@ -109,6 +109,23 @@ function formatTime(project) {
   if (!project.mint_date) return 'Mint time not confirmed'
   const date = new Date(project.mint_date)
   return `${date.toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })} local / ${date.toISOString().slice(0, 16).replace('T', ' ')} UTC`
+}
+
+function projectSchedule(project) {
+  const schedule = project.mint_schedule || project.source_metadata?.schedule?.stages || project.source_metadata?.stages
+  return Array.isArray(schedule) ? schedule : []
+}
+
+function displayProjectPrice(project) {
+  const schedule = project.source_metadata?.schedule
+  const value = project.price_label || schedule?.price_label || project.mint_price
+  if (!value) return 'Price TBA'
+  const text = String(value).trim()
+  if (!text) return 'Price TBA'
+  if (/^tba$/i.test(text)) return 'Price TBA'
+  if (/free/i.test(text)) return 'Free mint'
+  if (/\b(ETH|WETH|SOL|MATIC|POL|BNB|APE|Ξ)\b/i.test(text)) return text
+  return text
 }
 
 function confidenceClass(confidence) {
@@ -392,7 +409,7 @@ export default function CalendarPage() {
         mint_date: project.mintDate ? project.mintDate.slice(0, 16) : prev.mint_date,
         mint_type: project.mintPhase || prev.mint_type,
         mint_phase: project.mintPhase || prev.mint_phase,
-        mint_price: project.mintPrice || prev.mint_price,
+        mint_price: project.priceLabel || project.mintPrice || prev.mint_price,
         notes: project.notes?.join(' ') || prev.notes,
       }))
       toast.success('Alpha detected. Confirm phase and mint mode.')
@@ -989,7 +1006,7 @@ const ProjectCard = memo(function ProjectCard({ project, tab, isAdmin, onOpen, o
         </div>
         <div className="text-right shrink-0">
           <div className={`font-mono font-bold ${live ? 'text-green' : 'text-accent3'}`}>{countdown(project)}</div>
-          <div className="text-[10px] text-muted uppercase tracking-widest mt-1">{project.mint_price || 'Price TBA'}</div>
+          <div className="text-[10px] text-muted uppercase tracking-widest mt-1">{displayProjectPrice(project)}</div>
         </div>
       </div>
 
@@ -1087,6 +1104,38 @@ function Metric({ label, value, tone = 'text-accent' }) {
       <div className={`text-lg font-bold ${tone}`}>{value}</div>
       <div className="section-label mt-1 mb-0 text-[10px]">{label}</div>
     </div>
+  )
+}
+
+function MintSchedule({ project }) {
+  const stages = projectSchedule(project)
+  if (!stages.length) return null
+  return (
+    <details className="mt-4 rounded-2xl border border-border bg-surface2/70 p-3" open>
+      <summary className="cursor-pointer font-semibold text-sm">Mint schedule</summary>
+      <div className="mt-3 space-y-2">
+        {stages.slice(0, 8).map((stage, index) => (
+          <div key={`${stage.stage_name || index}-${stage.start_time || index}`} className="rounded-xl border border-border bg-surface px-3 py-2">
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <div className="font-semibold">{stage.stage_name || `Stage ${index + 1}`}</div>
+                <div className="text-xs text-muted">{stage.access_type || 'Unknown access'} · {stage.status || 'needs review'}</div>
+              </div>
+              <div className="text-right text-sm font-mono text-accent">
+                {stage.price_label || 'Price TBA'}
+              </div>
+            </div>
+            <div className="mt-2 grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs text-muted">
+              <div>Starts: {stage.start_time ? formatTime({ mint_date: stage.start_time }) : 'OpenSea did not expose exact start time'}</div>
+              <div>Ends: {stage.end_time ? formatTime({ mint_date: stage.end_time }) : 'OpenSea did not expose exact end time'}</div>
+              <div>Limit: {stage.wallet_limit || 'Not exposed'}</div>
+              <div>Eligibility: {stage.eligibility || 'Not exposed'}</div>
+            </div>
+            {stage.price_note && <div className="mt-2 text-xs text-accent3">{stage.price_note}</div>}
+          </div>
+        ))}
+      </div>
+    </details>
   )
 }
 
@@ -1227,7 +1276,7 @@ function DetailDrawer({ project, isAdmin, onClose, onAdd, onSave, onStatus, onRa
             </div>
           )}
           <Info label="Mint time" value={formatTime(project)} />
-          <Info label="Mint price" value={project.mint_price || 'TBA'} />
+          <Info label="Mint price" value={displayProjectPrice(project)} />
           <Info label="Mint type" value={project.mint_type || 'unknown'} />
           <Info label="Contract" value={project.contract_address || 'Not detected yet'} mono />
           <Info label="Source" value={`${sourceLabel(project.source)} · ${project.source_confidence || 'low'} confidence`} />
@@ -1237,11 +1286,13 @@ function DetailDrawer({ project, isAdmin, onClose, onAdd, onSave, onStatus, onRa
           <Info label="What is missing" value={[
             !project.image_url ? 'project image' : null,
             !project.website_url && !project.mint_url && !project.source_url ? 'official link' : null,
-            !project.mint_price ? 'mint price' : null,
+            displayProjectPrice(project) === 'Price TBA' ? 'mint price' : null,
             !project.mint_time_confirmed ? 'confirmed mint time' : null,
           ].filter(Boolean).join(', ') || 'Core details available'} />
           <Info label="Strike Mode readiness" value={project.mint_time_confirmed ? 'Mint time confirmed. Still requires user opt-in and spend limits.' : 'Needs mint-time confirmation before Strike Mode.'} />
         </div>
+
+        <MintSchedule project={project} />
 
         <div className="flex flex-col sm:flex-row gap-2 mt-6">
           <button onClick={onAdd} className="btn-ghost flex-1">
