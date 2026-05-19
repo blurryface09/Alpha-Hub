@@ -1,6 +1,5 @@
 import React, { useEffect, useState } from 'react'
-import { useNavigate } from 'react-router-dom'
-import { Activity, Clock, ExternalLink, Zap } from 'lucide-react'
+import { Activity, Clock, ExternalLink } from 'lucide-react'
 
 const CHAIN_IDS = { eth: 1, base: 8453, bnb: 56 }
 const EXPLORER  = { eth: 'etherscan.io', base: 'basescan.org', bnb: 'bscscan.com' }
@@ -114,7 +113,6 @@ function analyzeTransactions(txs, address) {
 }
 
 export default function WalletIntelPanel({ address, chain = 'eth', label }) {
-  const navigate = useNavigate()
   const [data,    setData]    = useState(null)
   const [loading, setLoading] = useState(true)
   const [error,   setError]   = useState(null)
@@ -168,7 +166,7 @@ export default function WalletIntelPanel({ address, chain = 'eth', label }) {
       {loading ? (
         <div className="space-y-3 py-3">
           {[80, 60, 70].map((w, i) => (
-            <div key={i} className="h-3 bg-surface2 rounded-full animate-pulse"
+            <div key={i} className="h-3 bg-white/10 rounded-full animate-pulse"
               style={{ width: w + '%' }} />
           ))}
         </div>
@@ -264,15 +262,6 @@ export default function WalletIntelPanel({ address, chain = 'eth', label }) {
                         <span className="text-green font-mono">
                           {(parseFloat(tx.value) / 1e18).toFixed(3)} ETH
                         </span>
-                      )}
-                      {parseFloat(tx.value) > 0 && (
-                        <button
-                          onClick={() => navigate('/mintguard', { state: { openAdd: true, contract: tx.to, chain: chain } })}
-                          className="flex items-center gap-0.5 text-[10px] px-1.5 py-0.5 rounded border border-accent/30 text-accent hover:bg-accent/10 transition-colors"
-                        >
-                          <Zap size={9} />
-                          Copy Mint
-                        </button>
                       )}
                     </div>
                   </div>
