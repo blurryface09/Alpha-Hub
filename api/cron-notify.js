@@ -59,7 +59,7 @@ async function acquireLock(supabase) {
     return false  // another instance ran recently
   }
 
-  await supabase
+  const { error: lockError } = await supabase
     .from('monitor_state')
     .upsert({
       user_id:        '00000000-0000-0000-0000-000000000000',
@@ -67,7 +67,7 @@ async function acquireLock(supabase) {
       entity_id:      'cron-notify',
       last_checked_at: new Date().toISOString(),
     }, { onConflict: 'user_id,entity_type,entity_id' })
-    .catch(() => null)
+  if (lockError) log('warn', 'lock upsert error', { err: lockError.message })
 
   return true
 }
@@ -114,11 +114,10 @@ async function sendTelegram(chatId, text, replyMarkup) {
 // ── Notification helpers ──────────────────────────────────────────────────────
 
 async function markNotification(supabase, { userId, type, title, message, projectId }) {
-  await supabase
+  const { error } = await supabase
     .from('notifications')
     .insert({ user_id: userId, type, title, message, data: { project_id: projectId } })
-    .then(() => {})
-    .catch((e) => log('error', 'notification marker error', { err: e.message }))
+  if (error) log('error', 'notification marker error', { err: error.message })
 }
 
 async function getSentNotificationKeys(supabase, userIds, types, since) {
@@ -303,7 +302,7 @@ async function runMonitorSweep(supabase) {
         last_status: project.status, last_mint_date: project.mint_date ?? null,
         last_price: project.mint_price ?? null, last_supply: project.supply ?? null,
         last_contract: project.contract_address ?? null, last_checked_at: new Date().toISOString(),
-      }, { onConflict: 'user_id,entity_type,entity_id' }).catch(() => null)
+      }, { onConflict: 'user_id,entity_type,entity_id' })
     } catch (e) {
       log('error', 'monitor sweep row error', { project_id: watcher.project_id, err: e.message })
     }
