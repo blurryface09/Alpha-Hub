@@ -159,12 +159,13 @@ function makeForm(overrides = {}) {
 }
 
 // ── Modal (exported) ──────────────────────────────────────────────────────────
-export default function AddProjectModal({ onAdd, onClose }) {
-  const [step,     setStep]     = useState(1)
+export default function AddProjectModal({ onAdd, onClose, initialValues = {} }) {
+  const hasPrefill = Object.keys(initialValues).length > 0
+  const [step,     setStep]     = useState(hasPrefill ? 2 : 1)
   const [url,      setUrl]      = useState('')
   const [loading,  setLoading]  = useState(false)
   const [meta,     setMeta]     = useState(null)
-  const [form,     setForm]     = useState(() => makeForm())
+  const [form,     setForm]     = useState(() => makeForm(initialValues))
   const [saving,   setSaving]   = useState(false)
   const [advanced, setAdvanced] = useState(false)
   const urlRef = useRef(null)

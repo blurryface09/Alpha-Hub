@@ -16,6 +16,9 @@ import {
 import { useAuthStore, useNotificationStore, useWhaleStore } from '../store'
 import { useSubscription } from '../hooks/useSubscription'
 import { supabase } from '../lib/supabase'
+import { detectCopySignals } from '../lib/copyMintDetector'
+import CopyMintSignal from '../components/mint/CopyMintSignal'
+import AddProjectModal from '../components/mint/AddProjectModal'
 
 function timeAgo(value) {
   if (!value) return 'never'
@@ -61,8 +64,10 @@ export default function OverviewPage() {
     telegramConnected: false,
     lastSync: null,
   })
-  const [projects, setProjects] = useState([])
-  const [loading, setLoading] = useState(true)
+  const [projects, setProjects]         = useState([])
+  const [loading, setLoading]           = useState(true)
+  const [watchlist, setWatchlist]       = useState([])
+  const [copyMintPrefill, setCopyMintPrefill] = useState(null)
 
   const loadCommandCenter = React.useCallback(async () => {
     if (!user) return
@@ -84,7 +89,7 @@ export default function OverviewPage() {
           .limit(12),
         supabase
           .from('whale_watchlist')
-          .select('id, last_checked', { count: 'exact' })
+          .select('id, last_checked, wallet_address, label, chain', { count: 'exact' })
           .eq('user_id', user.id)
           .eq('is_active', true),
         supabase
@@ -115,15 +120,16 @@ export default function OverviewPage() {
       if (mintedResult.error) console.error('overview minted error:', mintedResult.error.message)
       if (profileResult.error) console.error('overview profile error:', profileResult.error.message)
 
-      const userProjects = projectResult.data || []
-      const watchlist = watchlistResult.data || []
-      const latestWalletSync = watchlist
+      const userProjects  = projectResult.data || []
+      const watchlistData = watchlistResult.data || []
+      const latestWalletSync = watchlistData
         .map((wallet) => wallet.last_checked)
         .filter(Boolean)
         .sort()
         .at(-1)
 
       setProjects(userProjects)
+      setWatchlist(watchlistData)
       setStats({
         activeAutomints: userProjects.filter((p) =>
           p.status === 'live' &&
@@ -134,7 +140,7 @@ export default function OverviewPage() {
         activeAlerts: activeAlertResult.count || 0,
         activeProjects: userProjects.filter((p) => ['upcoming', 'live'].includes(p.status)).length,
         totalProjects: userProjects.length,
-        walletsTracked: watchlistResult.count || 0,
+        walletsTracked: watchlistData.length || 0,
         minted: mintedResult.count || 0,
         telegramConnected: Boolean(profileResult.data?.telegram_chat_id),
         lastSync: latestWalletSync || new Date().toISOString(),
@@ -205,6 +211,11 @@ export default function OverviewPage() {
     { label: 'Strike Mode', value: stats.activeAutomints ? 'Armed' : 'Off', icon: Zap, tone: stats.activeAutomints ? 'text-green' : 'text-muted', hint: 'Opt-in only' },
   ]
 
+  const copySignals = useMemo(
+    () => detectCopySignals(activity, watchlist),
+    [activity, watchlist]
+  )
+
   const upcomingMints = projects.filter((p) => p.status === 'upcoming').length
   const recentWhaleAlerts = activity.filter((a) => !a.is_mint).slice(0, 10).length
   const lastDetection = [...activity]
@@ -228,8 +239,17 @@ export default function OverviewPage() {
     },
   ]
 
+  const handleCopyMint = (signal) => {
+    setCopyMintPrefill({ contract_address: signal.contract_address, chain: signal.chain })
+  }
+
   return (
     <div className="space-y-5">
+      {/* Copy Mint Signals — first section */}
+      {(copySignals.length > 0 || watchlist.length > 0) && (
+        <CopyMintSignal signals={copySignals} onCopyMint={handleCopyMint} />
+      )}
+
       <motion.div
         initial={{ opacity: 0, y: 8 }}
         animate={{ opacity: 1, y: 0 }}
@@ -364,6 +384,13 @@ export default function OverviewPage() {
           </section>
         </aside>
       </div>
+      {copyMintPrefill && (
+        <AddProjectModal
+          initialValues={copyMintPrefill}
+          onAdd={() => setCopyMintPrefill(null)}
+          onClose={() => setCopyMintPrefill(null)}
+        />
+      )}
     </div>
   )
 }
