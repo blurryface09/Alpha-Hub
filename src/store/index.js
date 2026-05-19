@@ -377,6 +377,29 @@ export const useWalletIntelStore = create((set, get) => ({
   },
 }))
 
+// --- Wallet Follow Store (localStorage, no DB needed) ------------
+// Completely separate from whale_watchlist — toggling never affects row display.
+export const useWalletFollowStore = create(
+  persist(
+    (set, get) => ({
+      followedKeys: [],  // array of "address:chain" strings
+
+      isFollowing: (address, chain = 'eth') =>
+        get().followedKeys.includes(`${(address || '').toLowerCase()}:${chain}`),
+
+      toggle: (address, chain = 'eth') => {
+        const key = `${(address || '').toLowerCase()}:${chain}`
+        set(s => ({
+          followedKeys: s.followedKeys.includes(key)
+            ? s.followedKeys.filter(k => k !== key)
+            : [...s.followedKeys, key],
+        }))
+      },
+    }),
+    { name: 'alphahub-wallet-follows' }
+  )
+)
+
 // --- Settings Store (persisted) ----------------------------------
 export const useSettingsStore = create(
   persist(

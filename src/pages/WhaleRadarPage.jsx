@@ -12,6 +12,7 @@ import Paywall from '../components/Paywall'
 import AddWalletModal from '../components/whale/AddWalletModal'
 import ActivityFeed from '../components/whale/ActivityFeed'
 import WalletIntelPanel from '../components/whale/WalletIntelPanel'
+import FollowWalletButton from '../components/whale/FollowWalletButton'
 
 const EXPLORER_HOSTS = {
   eth: 'etherscan.io',
@@ -270,6 +271,7 @@ export default function WhaleRadarPage() {
                           </div>
                         </div>
                         <div className="flex items-center gap-1.5 flex-shrink-0">
+                          <FollowWalletButton address={w.wallet_address} chain={w.chain} />
                           <button
                             onClick={() => setExpandedWallet(isExpanded ? null : w.id)}
                             title="Wallet Intelligence"
