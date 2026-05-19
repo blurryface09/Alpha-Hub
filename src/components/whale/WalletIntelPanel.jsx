@@ -116,7 +116,7 @@ return (
 <div className="flex items-center gap-2">
 <Activity size={13} className="text-accent" />
 <span className="text-xs font-semibold truncate">{label || shortAddr(address)}</span>
-<span className={'badge text-[10px] ${chain === 'eth' ? 'badge-purple' : 'badge-cyan'}'}>
+<span className={`badge text-[10px] ${chain === 'eth' ? 'badge-purple' : 'badge-cyan'}`}>
 {chain.toUpperCase()}
 </span>
 <a
