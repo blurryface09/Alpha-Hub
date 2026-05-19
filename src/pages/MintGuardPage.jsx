@@ -116,6 +116,7 @@ export default function MintGuardPage() {
         .from('wl_projects')
         .select('*')
         .eq('user_id', user.id)
+        .neq('status', 'cancelled')
         .order('mint_date', { ascending: true, nullsFirst: false })
       const { data, error } = await query
       if (error) { console.error('fetchProjects error:', error); return }
@@ -325,7 +326,10 @@ export default function MintGuardPage() {
     const snapshot = projects.find(p => p.id === id)
     setProjects(prev => prev.filter(p => p.id !== id))
     try {
-      const { error: delErr } = await supabase.from('wl_projects').delete().eq('id', id)
+      const { error: delErr } = await supabase
+        .from('wl_projects')
+        .update({ status: 'cancelled' })
+        .eq('id', id)
       if (delErr) throw new Error(delErr.message || 'Delete failed')
       toast.success('Project removed')
     } catch(e) {
