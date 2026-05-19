@@ -161,26 +161,33 @@ function makeForm(overrides = {}) {
 // ── Modal (exported) ──────────────────────────────────────────────────────────
 export default function AddProjectModal({ onAdd, onClose, initialValues = {} }) {
   const hasPrefill = Object.keys(initialValues).length > 0
-  const [step,     setStep]     = useState(hasPrefill ? 2 : 1)
-  const [url,      setUrl]      = useState('')
-  const [loading,  setLoading]  = useState(false)
-  const [meta,     setMeta]     = useState(null)
-  const [form,     setForm]     = useState(() => makeForm(initialValues))
-  const [saving,   setSaving]   = useState(false)
-  const [advanced, setAdvanced] = useState(false)
+  const [step,         setStep]         = useState(hasPrefill ? 2 : 1)
+  const [url,          setUrl]          = useState('')
+  const [loading,      setLoading]      = useState(false)
+  const [importFailed, setImportFailed] = useState(false)
+  const [meta,         setMeta]         = useState(null)
+  const [form,         setForm]         = useState(() => makeForm(initialValues))
+  const [saving,       setSaving]       = useState(false)
+  const [advanced,     setAdvanced]     = useState(false)
   const urlRef = useRef(null)
 
   const set = useCallback((key, val) => setForm(f => ({ ...f, [key]: val })), [])
   const toggleAdvanced = useCallback(() => setAdvanced(a => !a), [])
 
   // ── Step 1: analyse ──────────────────────────────────────────────────────
+  // DO NOT remove the /api/metadata call below -- it powers auto-import for MintGuard.
+  // The catch block is a URL-only fallback when the API is unreachable, not a replacement.
   const handleAnalyse = useCallback(async () => {
     const trimmed = url.trim()
     if (!trimmed) { toast.error('Paste a URL, contract address, or alpha text first'); return }
     setLoading(true)
+    setImportFailed(false)
+    toast.loading('Fetching project data...', { id: 'import-meta' })
+    console.debug('[import] fetching:', trimmed)
     try {
       const resp = await fetch(`/api/metadata?url=${encodeURIComponent(trimmed)}`)
       const data = await resp.json()
+      console.debug('[import] result:', data)
       setMeta(data)
       // When has WL phase, pick the first WL stage's type as the default wl_type
       const firstWlStage = Array.isArray(data.stages)
@@ -199,7 +206,9 @@ export default function AddProjectModal({ onAdd, onClose, initialValues = {} }) 
         notes:            data.notes            || '',
       }))
       setStep(2)
-    } catch {
+    } catch (err) {
+      console.debug('[import] failed:', err)
+      setImportFailed(true)
       // URL-only fallback (no API response)
       const mT = trimmed.match(/(?:twitter|x)\.com\/([^/?#]+)/)
       const mO = trimmed.match(/opensea\.io\/collection\/([^/?#]+)/)
@@ -211,6 +220,7 @@ export default function AddProjectModal({ onAdd, onClose, initialValues = {} }) 
       setStep(2)
     } finally {
       setLoading(false)
+      toast.dismiss('import-meta')
     }
   }, [url])
 
@@ -398,6 +408,13 @@ export default function AddProjectModal({ onAdd, onClose, initialValues = {} }) 
                 initial={{ opacity: 0, x: 10 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: 10 }}
                 className="space-y-5"
               >
+                {/* Auto-import failure banner */}
+                {importFailed && (
+                  <div className="flex items-center gap-2 px-3 py-2 rounded-lg bg-accent2/10 border border-accent2/30 text-xs text-accent2">
+                    <span>Auto-import failed. Enter manually.</span>
+                  </div>
+                )}
+
                 {/* Intelligence Report card */}
                 {meta && (
                   <div className="bg-bg border border-border/60 rounded-xl p-3">
