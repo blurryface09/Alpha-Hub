@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { Activity, Clock, ExternalLink } from 'lucide-react'
+import { Activity, Clock, ExternalLink, Zap } from 'lucide-react'
 
 const CHAIN_IDS = { eth: 1, base: 8453, bnb: 56 }
 const EXPLORER  = { eth: 'etherscan.io', base: 'basescan.org', bnb: 'bscscan.com' }
@@ -35,6 +35,16 @@ async function fetchWalletData(address, chain) {
   const json = await res.json()
   if (json.status !== '1' || !Array.isArray(json.result)) return null
   return json.result
+}
+
+function timeAgo(timestamp) {
+  const seconds = Math.floor(Date.now() / 1000) - parseInt(timestamp)
+  if (seconds < 60) return `${seconds}s ago`
+  const minutes = Math.floor(seconds / 60)
+  if (minutes < 60) return `${minutes}m ago`
+  const hours = Math.floor(minutes / 60)
+  if (hours < 24) return `${hours}h ago`
+  return `${Math.floor(hours / 24)}d ago`
 }
 
 function classifyTx(tx, addr) {
@@ -156,10 +166,10 @@ export default function WalletIntelPanel({ address, chain = 'eth', label }) {
       </div>
 
       {loading ? (
-        <div className="space-y-2 py-2">
-          {[1, 2, 3].map(i => (
-            <div key={i} className="h-4 bg-surface2 rounded animate-pulse"
-              style={{ width: i === 1 ? '80%' : i === 2 ? '60%' : '70%' }} />
+        <div className="space-y-3 py-3">
+          {[80, 60, 70].map((w, i) => (
+            <div key={i} className="h-3 bg-surface2 rounded-full animate-pulse"
+              style={{ width: w + '%' }} />
           ))}
         </div>
       ) : error ? (
@@ -241,25 +251,29 @@ export default function WalletIntelPanel({ address, chain = 'eth', label }) {
           {data.recentMints.length > 0 && (
             <div>
               <div className="text-[10px] text-muted uppercase tracking-wider font-mono mb-1.5">Last mints</div>
-              <div className="space-y-1">
+              <div className="space-y-1.5">
                 {data.recentMints.filter(tx => tx.to && tx.to.length === 42 && !tx.to.match(/^0x0{10,}/)).map((tx, i) => (
                   <div key={i} className="flex items-center gap-2 text-xs">
                     <div className="w-1.5 h-1.5 rounded-full bg-green flex-shrink-0" />
-                    <span className="font-mono text-muted max-w-[120px] truncate">
-                      {tx.to.slice(0, 12)}...
+                    <span className="font-mono text-muted truncate min-w-0">
+                      {tx.to.slice(0, 8)}...{tx.to.slice(-4)}
                     </span>
                     <div className="ml-auto flex items-center gap-1.5 flex-shrink-0">
+                      <span className="text-[10px] text-muted2">{timeAgo(tx.timeStamp)}</span>
                       {parseFloat(tx.value) > 0 && (
-                        <span className="text-green text-right font-mono">
+                        <span className="text-green font-mono">
                           {(parseFloat(tx.value) / 1e18).toFixed(3)} ETH
                         </span>
                       )}
-                      <button
-                        onClick={() => navigate('/mintguard', { state: { openAdd: true, contract: tx.to, chain: chain } })}
-                        className="text-[10px] px-1.5 py-0.5 rounded border border-accent/30 text-accent hover:bg-accent/10 transition-colors"
-                      >
-                        + Track
-                      </button>
+                      {parseFloat(tx.value) > 0 && (
+                        <button
+                          onClick={() => navigate('/mintguard', { state: { openAdd: true, contract: tx.to, chain: chain } })}
+                          className="flex items-center gap-0.5 text-[10px] px-1.5 py-0.5 rounded border border-accent/30 text-accent hover:bg-accent/10 transition-colors"
+                        >
+                          <Zap size={9} />
+                          Copy Mint
+                        </button>
+                      )}
                     </div>
                   </div>
                 ))}

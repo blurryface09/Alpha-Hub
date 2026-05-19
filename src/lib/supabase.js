@@ -14,40 +14,16 @@ export const supabase = createClient(supabaseUrl, supabaseKey, {
   },
 })
 
-// Get auth token — always uses SDK first for SIWE wallet sessions
-// localStorage scan is a fast-path fallback for email sessions only
 export async function getAuthToken() {
-  // Primary: always try SDK first — works for both email and wallet SIWE sessions
-  try {
-    const { data: { session }, error } = await Promise.race([
-      supabase.auth.getSession(),
-      new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), 4000))
-    ])
-    if (session?.access_token) return session.access_token
-  } catch {}
-
-  // Fallback: scan localStorage for email-based sessions
   try {
     for (const key of Object.keys(localStorage)) {
       if (key.startsWith('sb-') && key.endsWith('-auth-token')) {
         const parsed = JSON.parse(localStorage.getItem(key) || '{}')
         const token = parsed?.access_token
-        const exp = parsed?.expires_at
-
-        if (!token) continue
-
-        if (exp && exp * 1000 > Date.now() + 60_000) {
-          return token
-        }
-
-        if (exp && exp * 1000 > Date.now() - 5 * 60_000) {
-          supabase.auth.refreshSession().catch(() => {})
-          return token
-        }
+        if (token) return token
       }
     }
   } catch {}
-
   return null
 }
 
