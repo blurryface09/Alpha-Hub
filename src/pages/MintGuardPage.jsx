@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { useLocation } from 'react-router-dom'
-import { Plus, Shield, Sparkles, Wand2 } from 'lucide-react'
+import { Plus, Shield, Sparkles, Wand2, Loader } from 'lucide-react'
 import toast from 'react-hot-toast'
 import { supabase, directInsert, directUpdate, directDelete, getAuthToken } from '../lib/supabase'
 import { useMint } from '../hooks/useMint'
@@ -68,6 +68,10 @@ export default function MintGuardPage() {
   const [deletingId, setDeletingId] = useState(null)
   const [replayProject, setReplayProject] = useState(null)
   const [replayIntentId, setReplayIntentId] = useState(null)
+  const [pageImportLoading, setPageImportLoading] = useState(false)
+  // pendingImportData: { url, meta, failed } — result of clipboard auto-import
+  // passed to AddProjectModal so it opens pre-filled (or with failure banner)
+  const [pendingImportData, setPendingImportData] = useState(null)
   const autoFired = React.useRef(new Set())
   const tgNotified = React.useRef(new Set()) // prevent duplicate Telegram notifications
 
@@ -597,13 +601,50 @@ export default function MintGuardPage() {
               </span>
             </div>
           </div>
-          <button onClick={() => {
-            if (!user) { toast.error('Please sign out and back in, then try again.'); return }
-            console.debug('[import] starting')
-            setShowAddModal(true)
-          }} className="btn-primary flex items-center justify-center gap-2">
-            <Plus size={15} />
-            Add Alpha
+          <button
+            onClick={async () => {
+              if (!user) { toast.error('Please sign out and back in, then try again.'); return }
+              console.debug('[import] starting')
+
+              // Auto-import from clipboard before opening modal
+              let clipUrl = null
+              try {
+                const clip = (await navigator.clipboard.readText())?.trim()
+                if (clip && /^https?:\/\//i.test(clip)) clipUrl = clip
+              } catch {}
+
+              if (clipUrl) {
+                setPageImportLoading(true)
+                toast.loading('Fetching project data...', { id: 'import-meta' })
+                console.debug('[import] fetching OpenSea:', clipUrl)
+                try {
+                  const resp = await fetch(
+                    `/api/metadata?url=${encodeURIComponent(clipUrl)}`,
+                    { signal: AbortSignal.timeout(12000) }
+                  )
+                  const data = await resp.json()
+                  console.debug('[import] scraper result:', data)
+                  setPendingImportData({ url: clipUrl, meta: data, failed: false })
+                } catch (err) {
+                  console.debug('[import] fallback triggered:', err?.message || err)
+                  setPendingImportData({ url: clipUrl, meta: null, failed: true })
+                } finally {
+                  setPageImportLoading(false)
+                  toast.dismiss('import-meta')
+                }
+              } else {
+                // No clipboard URL -- open at step 1 for manual entry
+                setPendingImportData(null)
+              }
+
+              setShowAddModal(true)
+            }}
+            disabled={pageImportLoading}
+            className="btn-primary flex items-center justify-center gap-2 min-w-[110px]"
+          >
+            {pageImportLoading
+              ? <Loader size={15} className="animate-spin" />
+              : <><Plus size={15} /> Add Alpha</>}
           </button>
         </div>
       </div>
@@ -681,8 +722,14 @@ export default function MintGuardPage() {
       {showAddModal && (
         <AddProjectModal
           onAdd={handleAddProject}
-          onClose={() => { setShowAddModal(false); setInitialContract(null); setInitialChain('eth') }}
+          onClose={() => {
+            setShowAddModal(false)
+            setInitialContract(null)
+            setInitialChain('eth')
+            setPendingImportData(null)
+          }}
           initialValues={initialContract ? { contract_address: initialContract, chain: initialChain } : {}}
+          pendingImportData={pendingImportData}
         />
       )}
       {confirmMint && (

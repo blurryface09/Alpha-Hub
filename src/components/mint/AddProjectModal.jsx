@@ -159,17 +159,46 @@ function makeForm(overrides = {}) {
 }
 
 // ── Modal (exported) ──────────────────────────────────────────────────────────
-export default function AddProjectModal({ onAdd, onClose, initialValues = {} }) {
-  // hasPrefill only true when a real value (not null/empty) is passed — prevents
-  // the normal "Add Alpha" click (which passes {contract_address: null, chain: 'eth'})
-  // from skipping step 1 and bypassing auto-import entirely.
-  const hasPrefill = Object.values(initialValues).some(v => v !== null && v !== undefined && v !== '')
+// pendingImportData: { url, meta, failed } — passed by MintGuardPage when the
+// clipboard auto-import ran before this modal opened. If present, skip step 1
+// entirely: show step 2 with pre-filled data (or failure banner + empty form).
+export default function AddProjectModal({ onAdd, onClose, initialValues = {}, pendingImportData = null }) {
+  // hasPrefill: true when a real pre-import result or real contract prefill exists.
+  // Must never be true for a plain "Add Alpha" click with no context.
+  const hasPrefill =
+    pendingImportData !== null ||
+    Object.values(initialValues).some(v => v !== null && v !== undefined && v !== '')
+
+  // Initialise all state from pendingImportData when the auto-import already ran
   const [step,         setStep]         = useState(hasPrefill ? 2 : 1)
-  const [url,          setUrl]          = useState('')
+  const [url,          setUrl]          = useState(pendingImportData?.url || '')
   const [loading,      setLoading]      = useState(false)
-  const [importFailed, setImportFailed] = useState(false)
-  const [meta,         setMeta]         = useState(null)
-  const [form,         setForm]         = useState(() => makeForm(initialValues))
+  const [importFailed, setImportFailed] = useState(pendingImportData?.failed || false)
+  const [meta,         setMeta]         = useState(pendingImportData?.meta || null)
+  const [form,         setForm]         = useState(() => {
+    if (pendingImportData?.meta) {
+      const d = pendingImportData.meta
+      const firstWlStage = Array.isArray(d.stages)
+        ? d.stages.find(s => ['GTD', 'FCFS', 'RAFFLE'].includes(s.wl_type))
+        : null
+      return makeForm({
+        source_url:       pendingImportData.url   || '',
+        name:             d.name                  || '',
+        source_type:      d.source_type           || 'website',
+        chain:            d.chain                 || 'eth',
+        contract_address: d.contract_address      || '',
+        mint_price:       d.mint_price            || '',
+        mint_date:        d.mint_date             || '',
+        mint_phase:       d.mint_phase            || '',
+        wl_type:          firstWlStage?.wl_type || d.wl_type || 'UNKNOWN',
+        notes:            d.notes                 || '',
+      })
+    }
+    if (pendingImportData?.url) {
+      return makeForm({ source_url: pendingImportData.url })
+    }
+    return makeForm(initialValues)
+  })
   const [saving,       setSaving]       = useState(false)
   const [advanced,     setAdvanced]     = useState(false)
   const urlRef = useRef(null)
