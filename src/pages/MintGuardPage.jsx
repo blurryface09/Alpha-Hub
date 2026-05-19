@@ -599,6 +599,7 @@ export default function MintGuardPage() {
           </div>
           <button onClick={() => {
             if (!user) { toast.error('Please sign out and back in, then try again.'); return }
+            console.debug('[import] starting')
             setShowAddModal(true)
           }} className="btn-primary flex items-center justify-center gap-2">
             <Plus size={15} />
@@ -681,7 +682,7 @@ export default function MintGuardPage() {
         <AddProjectModal
           onAdd={handleAddProject}
           onClose={() => { setShowAddModal(false); setInitialContract(null); setInitialChain('eth') }}
-          initialValues={{ contract_address: initialContract, chain: initialChain }}
+          initialValues={initialContract ? { contract_address: initialContract, chain: initialChain } : {}}
         />
       )}
       {confirmMint && (

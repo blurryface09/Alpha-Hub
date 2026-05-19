@@ -160,7 +160,10 @@ function makeForm(overrides = {}) {
 
 // ── Modal (exported) ──────────────────────────────────────────────────────────
 export default function AddProjectModal({ onAdd, onClose, initialValues = {} }) {
-  const hasPrefill = Object.keys(initialValues).length > 0
+  // hasPrefill only true when a real value (not null/empty) is passed — prevents
+  // the normal "Add Alpha" click (which passes {contract_address: null, chain: 'eth'})
+  // from skipping step 1 and bypassing auto-import entirely.
+  const hasPrefill = Object.values(initialValues).some(v => v !== null && v !== undefined && v !== '')
   const [step,         setStep]         = useState(hasPrefill ? 2 : 1)
   const [url,          setUrl]          = useState('')
   const [loading,      setLoading]      = useState(false)
@@ -183,11 +186,11 @@ export default function AddProjectModal({ onAdd, onClose, initialValues = {} }) 
     setLoading(true)
     setImportFailed(false)
     toast.loading('Fetching project data...', { id: 'import-meta' })
-    console.debug('[import] fetching:', trimmed)
+    console.debug('[import] fetching OpenSea:', trimmed)
     try {
       const resp = await fetch(`/api/metadata?url=${encodeURIComponent(trimmed)}`)
       const data = await resp.json()
-      console.debug('[import] result:', data)
+      console.debug('[import] scraper result:', data)
       setMeta(data)
       // When has WL phase, pick the first WL stage's type as the default wl_type
       const firstWlStage = Array.isArray(data.stages)
@@ -207,7 +210,7 @@ export default function AddProjectModal({ onAdd, onClose, initialValues = {} }) 
       }))
       setStep(2)
     } catch (err) {
-      console.debug('[import] failed:', err)
+      console.debug('[import] fallback triggered:', err?.message || err)
       setImportFailed(true)
       // URL-only fallback (no API response)
       const mT = trimmed.match(/(?:twitter|x)\.com\/([^/?#]+)/)
