@@ -201,7 +201,12 @@ export default function ProjectCard({ project, isMinting, isDeleting, onMint, on
             <div className="flex items-center gap-2 flex-shrink-0">
               {user && (
                 <button
-                  onClick={() => isWatching ? unfollow(user.id, watchId) : follow(user.id, watchId)}
+                  onClick={async () => {
+                    const result = isWatching
+                      ? await unfollow(user.id, watchId)
+                      : await follow(user.id, watchId)
+                    if (result?.error) toast.error('Watch update failed')
+                  }}
                   disabled={watchLoading}
                   title={isWatching ? 'Unwatch project' : 'Watch project'}
                   className={`p-1.5 rounded-md border transition-all ${isWatching ? 'border-accent/40 text-accent bg-accent/8 hover:bg-accent/15' : 'border-border2 text-muted hover:border-accent hover:text-accent'} ${watchLoading ? 'opacity-50 cursor-not-allowed' : ''}`}

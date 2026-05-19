@@ -248,7 +248,7 @@ export const useMonitorStore = create((set, get) => ({
     if (!userId) return
     set({ loading: true })
     const { data } = await supabase
-      .from('calendar_project_watchers')
+      .from('wl_project_watchers')
       .select('project_id')
       .eq('user_id', userId)
     set({
@@ -258,33 +258,37 @@ export const useMonitorStore = create((set, get) => ({
   },
 
   follow: async (userId, projectId) => {
-    // Optimistic update
     set(s => ({ watchedProjects: new Set([...s.watchedProjects, projectId]) }))
     const { error } = await supabase
-      .from('calendar_project_watchers')
+      .from('wl_project_watchers')
       .upsert({ user_id: userId, project_id: projectId }, { onConflict: 'project_id,user_id', ignoreDuplicates: true })
     if (error) {
-      // Roll back on failure
       set(s => {
         const next = new Set(s.watchedProjects)
         next.delete(projectId)
         return { watchedProjects: next }
       })
+      return { error }
     }
+    return { error: null }
   },
 
   unfollow: async (userId, projectId) => {
-    // Optimistic update
     set(s => {
       const next = new Set(s.watchedProjects)
       next.delete(projectId)
       return { watchedProjects: next }
     })
-    await supabase
-      .from('calendar_project_watchers')
+    const { error } = await supabase
+      .from('wl_project_watchers')
       .delete()
       .eq('user_id', userId)
       .eq('project_id', projectId)
+    if (error) {
+      set(s => ({ watchedProjects: new Set([...s.watchedProjects, projectId]) }))
+      return { error }
+    }
+    return { error: null }
   },
 
   isWatching: (projectId) => get().watchedProjects.has(projectId),
