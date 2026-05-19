@@ -2,12 +2,34 @@ import { useAccount, useSwitchChain, useSendTransaction } from 'wagmi'
 import { mainnet, base, bsc } from 'wagmi/chains'
 import toast from 'react-hot-toast'
 import { supabase, getAuthToken } from '../lib/supabase'
-import { friendlyError } from '../lib/errors'
 
 const CHAIN_MAP = {
   eth: mainnet.id,
   base: base.id,
   bnb: bsc.id,
+}
+
+const MINT_FUNCTIONS = ['mint', 'publicMint', 'mintPublic', 'safeMint', 'mintNFT', 'claim', 'freeMint']
+
+function classifyMintError(message) {
+  const msg = (message || '').toLowerCase()
+  if (msg.includes('insufficient funds') || msg.includes('insufficient_funds')) {
+    return 'Not enough ETH for mint + gas'
+  }
+  if (msg.includes('execution reverted') || msg.includes('reverted')) {
+    return 'Contract rejected transaction. Mint may be closed or you are not eligible.'
+  }
+  if (msg.includes('nonce too low') || msg.includes('nonce')) {
+    return 'Nonce error. Refresh and try again.'
+  }
+  if (msg.includes('gas') && (msg.includes('estimation failed') || msg.includes('estimate'))) {
+    return 'Gas estimation failed. Try increasing gas limit manually.'
+  }
+  return message
+}
+
+function isFunctionNotFound(msg) {
+  return /function not found|unknown function|no function|cannot find|not found in abi/i.test(msg || '')
 }
 
 export function useMint() {
@@ -31,13 +53,15 @@ export function useMint() {
       return { success: false, error: 'Unsupported chain' }
     }
 
-    // Switch chain if needed
+    console.debug('[mint] chain check:', chain?.id, 'expected:', targetChainId)
+
     if (chain?.id !== targetChainId) {
       try {
         toast.loading('Switching network...', { id: 'mint-tx' })
         await switchChainAsync({ chainId: targetChainId })
       } catch (e) {
-        toast.error(friendlyError(e, 'Could not switch network. Please try again.'), { id: 'mint-tx' })
+        const chainName = (project.chain || 'eth').toUpperCase()
+        toast.error(`Switch your wallet to ${chainName} network and try again`, { id: 'mint-tx' })
         return { success: false, error: e.message }
       }
     }
@@ -46,31 +70,89 @@ export function useMint() {
       toast.loading('Preparing mint before wallet opens...', { id: 'mint-tx' })
       const token = await getAuthToken()
       if (!token) throw new Error('Sign in again before minting.')
-      const response = await fetch('/api/mint/prepare', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-        body: JSON.stringify({
-          projectId: project.id,
-          wlProjectId: project.id,
-          name: project.name,
-          contractAddress: project.contract_address,
-          chain: project.chain || 'eth',
-          mintUrl: project.source_url || project.mint_url,
-          mintPrice: project.mint_price || '0',
-          quantity: project.max_mint || 1,
-          walletAddress: address,
-          mode: project.mint_mode === 'auto' ? 'strike' : 'fast',
-          maxTotalSpend: project.max_total_spend,
-          maxGasFee: project.max_gas_fee,
-        }),
-        signal: AbortSignal.timeout(15000),
+
+      const apiParams = {
+        projectId: project.id,
+        wlProjectId: project.id,
+        name: project.name,
+        contractAddress: project.contract_address,
+        chain: project.chain || 'eth',
+        mintUrl: project.source_url || project.mint_url,
+        mintPrice: project.mint_price || '0',
+        quantity: project.max_mint || 1,
+        walletAddress: address,
+        mode: project.mint_mode === 'auto' ? 'strike' : 'fast',
+        maxTotalSpend: project.max_total_spend,
+        maxGasFee: project.max_gas_fee,
+      }
+
+      console.debug('[mint] preparing:', {
+        contract: project.contract_address,
+        value: project.mint_price,
+        gas: project.gas_limit,
+        chain: project.chain,
       })
-      const prepared = await response.json().catch(() => ({}))
-      if (!response.ok || prepared?.ok === false || !prepared?.preparedTransaction) {
-        throw new Error(prepared?.error || 'Needs contract or mint function before wallet can open.')
+
+      // First attempt without a specific function name (API may auto-detect)
+      let prepared = null
+      let firstResponse, firstResult
+      try {
+        firstResponse = await fetch('/api/mint/prepare', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+          body: JSON.stringify(apiParams),
+          signal: AbortSignal.timeout(15000),
+        })
+        firstResult = await firstResponse.json().catch(() => ({}))
+      } catch (fetchErr) {
+        throw new Error(fetchErr.message || 'Mint prepare request failed')
+      }
+
+      if (firstResponse.ok && firstResult?.preparedTransaction && firstResult?.ok !== false) {
+        prepared = firstResult
+      } else {
+        const firstErr = firstResult?.error || ''
+        if (!isFunctionNotFound(firstErr)) {
+          // Non-function-detection error -- classify and surface it immediately
+          throw new Error(classifyMintError(firstErr || 'Mint preparation failed'))
+        }
+        // API could not detect function -- try each name explicitly
+        for (const funcName of MINT_FUNCTIONS) {
+          console.debug('[mint] trying function:', funcName)
+          try {
+            const res = await fetch('/api/mint/prepare', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+              body: JSON.stringify({ ...apiParams, functionName: funcName }),
+              signal: AbortSignal.timeout(10000),
+            })
+            const result = await res.json().catch(() => ({}))
+            if (!res.ok || result?.ok === false || !result?.preparedTransaction) {
+              const errMsg = result?.error || ''
+              if (isFunctionNotFound(errMsg)) continue
+              throw new Error(classifyMintError(errMsg || 'Mint preparation failed'))
+            }
+            prepared = result
+            break
+          } catch (e) {
+            if (isFunctionNotFound(e.message)) continue
+            throw e
+          }
+        }
+        if (!prepared) {
+          throw new Error('Contract mint function not found. Check contract address or try manual mint.')
+        }
       }
 
       const tx = prepared.preparedTransaction
+      console.debug('[mint] preparing:', {
+        contract: tx.to,
+        functionName: prepared.functionName,
+        value: tx.value,
+        gas: tx.gas,
+        chain: tx.chainId,
+      })
+
       toast.loading('Ready. Check your wallet to confirm.', { id: 'mint-tx' })
       const txHash = await sendTransactionAsync({
         to: tx.to,
@@ -80,7 +162,8 @@ export function useMint() {
         gas: tx.gas ? BigInt(tx.gas) : undefined,
       })
 
-      // Log to mint_log; non-critical, don't fail a submitted mint.
+      console.debug('[mint] tx submitted:', txHash)
+
       try {
         await supabase.from('mint_log').insert({
           user_id: userId,
@@ -97,10 +180,10 @@ export function useMint() {
       return { success: true, txHash }
 
     } catch (e) {
-      const msg = e.shortMessage || e.message || 'Transaction failed'
-      toast.error(friendlyError(e, 'Mint transaction failed. Please check the project and try again.'), { id: 'mint-tx' })
+      const msg = classifyMintError(e.shortMessage || e.message || 'Transaction failed')
+      console.debug('[mint] error:', msg)
+      toast.error(msg, { id: 'mint-tx', duration: 6000 })
 
-      // Log failure (non-critical)
       if (userId) {
         try {
           await supabase.from('mint_log').insert({

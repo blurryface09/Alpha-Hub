@@ -541,6 +541,10 @@ export default function MintGuardPage() {
         }
         // Telegram failure alert
         notifyTelegram({ ...tgProject, error: result.error }, 'failed', liveToken)
+        // Hint to fix contract address if function detection failed
+        if (/not found|check contract|no function/i.test(result.error || '')) {
+          toast('Update contract address in Edit', { id: 'mint-edit-hint', duration: 6000, icon: '✏️' })
+        }
       }
     } finally {
       setMintingId(null)
