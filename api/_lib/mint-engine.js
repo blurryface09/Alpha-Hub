@@ -3,7 +3,7 @@ import { createServiceClient, requireUser } from './auth.js'
 import { rateLimit, sendRateLimit } from './redis.js'
 import { chainIdFor, normalizeChain, normalizePhase, recommendMode } from './project-intelligence.js'
 
-const SUPPORTED_EXECUTION_CHAINS = new Set(['eth', 'base', 'apechain'])
+const SUPPORTED_EXECUTION_CHAINS = new Set(['eth', 'base', 'apechain', 'bnb'])
 const AUTO_STRIKE_ENABLED = String(process.env.AUTO_STRIKE_ENABLED || '').toLowerCase() === 'true'
 const ALPHA_VAULT_ENABLED = String(process.env.ALPHA_VAULT_ENABLED || '').toLowerCase() === 'true'
 const MINT_NAMES = ['mint', 'publicMint', 'mintPublic', 'allowlistMint', 'presaleMint', 'purchase', 'claim', 'buy', 'safeMint']
@@ -11,11 +11,13 @@ const RPC_URLS = {
   eth: process.env.ETH_RPC_URL || 'https://eth.llamarpc.com',
   base: process.env.BASE_RPC_URL || 'https://mainnet.base.org',
   apechain: process.env.APECHAIN_RPC_URL || '',
+  bnb: process.env.BNB_RPC_URL || 'https://bsc-dataseed.binance.org',
 }
 const EXPLORER_CHAIN_NAMES = {
   eth: 'Ethereum',
   base: 'Base',
   apechain: 'ApeChain',
+  bnb: 'BNB Chain',
 }
 
 const EVENT_MESSAGES = {
@@ -98,7 +100,9 @@ function chainObject(chain) {
   return {
     id,
     name: EXPLORER_CHAIN_NAMES[chain] || chain,
-    nativeCurrency: { name: 'Ether', symbol: 'ETH', decimals: 18 },
+    nativeCurrency: chain === 'bnb'
+      ? { name: 'BNB', symbol: 'BNB', decimals: 18 }
+      : { name: 'Ether', symbol: 'ETH', decimals: 18 },
     rpcUrls: { default: { http: [RPC_URLS[chain]].filter(Boolean) } },
   }
 }
@@ -152,7 +156,7 @@ function isAddressInput(input) {
   return String(input?.type || '') === 'address'
 }
 
-function argsForInputs(inputs = [], quantity, walletAddress) {
+export function argsForInputs(inputs = [], quantity, walletAddress) {
   if (!inputs.length) return []
   if (inputs.length === 1) {
     if (isUint(inputs[0])) return [quantity]
@@ -166,7 +170,7 @@ function argsForInputs(inputs = [], quantity, walletAddress) {
   return null
 }
 
-function candidatesFromAbi(abi, quantity, walletAddress) {
+export function candidatesFromAbi(abi, quantity, walletAddress) {
   if (!Array.isArray(abi)) return []
   return abi
     .filter(fn => fn?.type === 'function' && MINT_NAMES.some(name => String(fn.name || '').toLowerCase() === name.toLowerCase()))
@@ -178,7 +182,7 @@ function candidatesFromAbi(abi, quantity, walletAddress) {
     .filter(Boolean)
 }
 
-function fallbackCandidates(quantity, walletAddress) {
+export function fallbackCandidates(quantity, walletAddress) {
   return [
     { sig: 'function mint(uint256 quantity) payable', name: 'mint', args: [quantity] },
     { sig: 'function publicMint(uint256 quantity) payable', name: 'publicMint', args: [quantity] },
@@ -198,47 +202,90 @@ function fallbackCandidates(quantity, walletAddress) {
   }))
 }
 
-export async function prepareMintTransaction(body) {
+// _clientOverride: inject a mock viem publicClient for testing
+export async function prepareMintTransaction(body, _clientOverride = null) {
+  const t0 = Date.now()
   const chain = normalizeChain(body.chain)
   const chainId = chainIdFor(chain)
   const contract = body.contractAddress || body.contract_address
   const walletAddress = body.walletAddress || body.wallet_address || body.account
-  if (!contract || !isAddress(contract)) throw new Error('Contract address is required for Fast Mint.')
-  if (!walletAddress || !isAddress(walletAddress)) throw new Error('Connect wallet before preparing this mint.')
-  const client = publicClient(chain)
+  if (!contract || !isAddress(contract, { strict: false })) throw new Error('Contract address is required for Fast Mint.')
+  if (!walletAddress || !isAddress(walletAddress, { strict: false })) throw new Error('Connect wallet before preparing this mint.')
+  const client = _clientOverride || publicClient(chain)
   if (!client) throw new Error('Mint preparation needs RPC configured for this chain.')
-
-  const code = await client.getBytecode({ address: contract })
-  if (!code || code === '0x') throw new Error('No contract exists at this address on the selected chain.')
 
   const quantity = BigInt(Math.max(1, Number(body.quantity || body.max_mint || 1)))
   const value = parseEther(cleanPrice(body.mintPrice || body.mint_price || body.price)) * quantity
   const maxSpend = spendLimitWei(body)
-  const verifiedAbi = await fetchVerifiedAbi(contract, chain).catch(() => null)
+
+  // Parallel: bytecode existence check + verified ABI fetch (independent)
+  const t1 = Date.now()
+  const [code, verifiedAbi] = await Promise.all([
+    client.getBytecode({ address: contract }),
+    fetchVerifiedAbi(contract, chain).catch(() => null),
+  ])
+  console.log('[mint-benchmark] abi+bytecode', {
+    duration_ms: Date.now() - t1,
+    chain,
+    contract: contract.slice(0, 10),
+    hasVerifiedAbi: Boolean(verifiedAbi),
+  })
+
+  if (!code || code === '0x') throw new Error('No contract exists at this address on the selected chain.')
+
+  // Deduplicate: skip fallback candidates whose function name is already covered by verified ABI
+  const abiCandidates = candidatesFromAbi(verifiedAbi, quantity, walletAddress)
+  const abiNames = new Set(abiCandidates.map(c => c.functionName))
   const candidates = [
-    ...candidatesFromAbi(verifiedAbi, quantity, walletAddress),
-    ...fallbackCandidates(quantity, walletAddress),
+    ...abiCandidates,
+    ...fallbackCandidates(quantity, walletAddress).filter(c => !abiNames.has(c.functionName)),
   ]
+  console.log('[mint-benchmark] candidates', {
+    chain,
+    contract: contract.slice(0, 10),
+    abiCount: abiCandidates.length,
+    fallbackCount: candidates.length - abiCandidates.length,
+    total: candidates.length,
+  })
 
   let lastError = null
+  let attemptCount = 0
   for (const candidate of candidates) {
+    attemptCount++
     try {
       const data = encodeFunctionData({
         abi: candidate.abi,
         functionName: candidate.functionName,
         args: candidate.args,
       })
-      const gas = await client.estimateGas({
-        account: walletAddress,
-        to: contract,
-        data,
-        value,
-      })
-      if (maxSpend) {
-        const gasPrice = await client.getGasPrice().catch(() => 0n)
-        const estimatedTotal = value + (gas * gasPrice)
-        if (estimatedTotal > maxSpend) throw new Error('max_spend_exceeded')
+      // Parallel: estimateGas + getGasPrice (getGasPrice only needed when spend limit set)
+      const [gasResult, gasPriceResult] = await Promise.allSettled([
+        client.estimateGas({ account: walletAddress, to: contract, data, value }),
+        maxSpend ? client.getGasPrice().catch(() => 0n) : Promise.resolve(0n),
+      ])
+      if (gasResult.status === 'rejected') {
+        lastError = gasResult.reason
+        console.log('[mint-benchmark] candidate_fail', {
+          chain,
+          contract: contract.slice(0, 10),
+          fn: candidate.functionName,
+          source: candidate.source,
+          error: String(gasResult.reason?.message || gasResult.reason || '').slice(0, 80),
+        })
+        continue
       }
+      const gas = gasResult.value
+      const gasPrice = gasPriceResult.status === 'fulfilled' ? gasPriceResult.value : 0n
+      if (maxSpend && (value + gas * gasPrice) > maxSpend) throw new Error('max_spend_exceeded')
+      console.log('[mint-benchmark] success', {
+        duration_ms: Date.now() - t0,
+        chain,
+        contract: contract.slice(0, 10),
+        fn: candidate.functionName,
+        source: candidate.source,
+        gas: gas.toString(),
+        attempts: attemptCount,
+      })
       return {
         to: contract,
         data,
@@ -254,6 +301,13 @@ export async function prepareMintTransaction(body) {
     }
   }
 
+  console.log('[mint-benchmark] all_candidates_failed', {
+    duration_ms: Date.now() - t0,
+    chain,
+    contract: contract.slice(0, 10),
+    attempts: attemptCount,
+    failure_reason: String(lastError?.message || lastError || '').slice(0, 100),
+  })
   throw new Error(safeMessage(lastError))
 }
 
@@ -442,10 +496,13 @@ export async function handleMintAction(req, res, action) {
       }
       const row = await insertOptional(supabase, 'mint_intents', intentPayload(user, body, 'prepared'))
       const intentId = row.id || `local-${Date.now()}`
-      await logEvent(supabase, intentId, user.id, 'preparing')
-      await logEvent(supabase, intentId, user.id, 'phase')
-      await logEvent(supabase, intentId, user.id, 'checking')
-      await logEvent(supabase, intentId, user.id, 'prepared')
+      // Parallel DB inserts — order not load-bearing for display
+      await Promise.all([
+        logEvent(supabase, intentId, user.id, 'preparing'),
+        logEvent(supabase, intentId, user.id, 'phase'),
+        logEvent(supabase, intentId, user.id, 'checking'),
+        logEvent(supabase, intentId, user.id, 'prepared'),
+      ])
       return res.status(200).json({
         ok: true,
         intent: { ...row, id: intentId },

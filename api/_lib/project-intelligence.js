@@ -10,6 +10,8 @@ const CHAIN_IDS = {
   base: 8453,
   apechain: 33139,
   ape: 33139,
+  bnb: 56,
+  bsc: 56,
   solana: 0,
   sol: 0,
 }
@@ -18,6 +20,7 @@ export function normalizeChain(value = '') {
   const text = String(value || '').toLowerCase()
   if (text.includes('base')) return 'base'
   if (text.includes('ape')) return 'apechain'
+  if (text.includes('bnb') || text.includes('bsc')) return 'bnb'
   if (text.includes('sol')) return 'solana'
   return 'eth'
 }

@@ -38,6 +38,13 @@ export function useMint() {
   const { switchChainAsync } = useSwitchChain()
 
   const executeMint = async (project, userId) => {
+    const benchStart = Date.now()
+    console.debug('[mint-benchmark] start', {
+      chain: project.chain,
+      contract: project.contract_address?.slice(0, 10),
+      mode: project.mint_mode,
+    })
+
     if (!isConnected || !address) {
       toast.error('Connect your wallet first')
       return { success: false, error: 'Wallet not connected' }
@@ -53,14 +60,17 @@ export function useMint() {
       return { success: false, error: 'Unsupported chain' }
     }
 
-    console.debug('[mint] chain check:', chain?.id, 'expected:', targetChainId)
+    console.debug('[mint-benchmark] chain_check', { current: chain?.id, expected: targetChainId })
 
     if (chain?.id !== targetChainId) {
+      const tSwitch = Date.now()
       try {
         toast.loading('Switching network...', { id: 'mint-tx' })
         await switchChainAsync({ chainId: targetChainId })
+        console.debug('[mint-benchmark] chain_switch_done', { duration_ms: Date.now() - tSwitch })
       } catch (e) {
         const chainName = (project.chain || 'eth').toUpperCase()
+        console.debug('[mint-benchmark] chain_switch_fail', { duration_ms: Date.now() - tSwitch, error: e.message })
         toast.error(`Switch your wallet to ${chainName} network and try again`, { id: 'mint-tx' })
         return { success: false, error: e.message }
       }
@@ -145,15 +155,17 @@ export function useMint() {
       }
 
       const tx = prepared.preparedTransaction
-      console.debug('[mint] preparing:', {
-        contract: tx.to,
-        functionName: prepared.functionName,
-        value: tx.value,
+      console.debug('[mint-benchmark] prepared', {
+        duration_ms: Date.now() - benchStart,
+        fn: prepared.functionName,
+        source: prepared.source,
+        contract: tx.to?.slice(0, 10),
         gas: tx.gas,
         chain: tx.chainId,
       })
 
       toast.loading('Ready. Check your wallet to confirm.', { id: 'mint-tx' })
+      const tSubmit = Date.now()
       const txHash = await sendTransactionAsync({
         to: tx.to,
         data: tx.data,
@@ -162,7 +174,11 @@ export function useMint() {
         gas: tx.gas ? BigInt(tx.gas) : undefined,
       })
 
-      console.debug('[mint] tx submitted:', txHash)
+      console.debug('[mint-benchmark] submitted', {
+        duration_ms: Date.now() - benchStart,
+        wallet_time_ms: Date.now() - tSubmit,
+        txHash: txHash?.slice(0, 10),
+      })
 
       try {
         await supabase.from('mint_log').insert({
@@ -181,7 +197,10 @@ export function useMint() {
 
     } catch (e) {
       const msg = classifyMintError(e.shortMessage || e.message || 'Transaction failed')
-      console.debug('[mint] error:', msg)
+      console.debug('[mint-benchmark] failed', {
+        duration_ms: Date.now() - benchStart,
+        failure_reason: msg.slice(0, 100),
+      })
       toast.error(msg, { id: 'mint-tx', duration: 6000 })
 
       if (userId) {
