@@ -316,17 +316,11 @@ export default function MintGuardPage() {
     const snapshot = projects.find(p => p.id === id)
     setProjects(prev => prev.filter(p => p.id !== id))
     try {
-      const { error } = await supabase
-        .from('wl_projects')
-        .delete()
-        .eq('id', id)
-        .eq('user_id', user.id)
-      if (error) {
-        if (snapshot) setProjects(prev => [snapshot, ...prev.filter(p => p.id !== id)])
-        toast.error(friendlyError(error, 'Could not delete this project. Please try again.'))
-        return
-      }
+      await directDelete('wl_projects', 'id', id)
       toast.success('Project removed')
+    } catch(e) {
+      if (snapshot) setProjects(prev => [snapshot, ...prev.filter(p => p.id !== id)])
+      toast.error('Could not delete this project. Please try again.')
     } finally {
       setDeletingId(null)
     }
