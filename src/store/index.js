@@ -362,12 +362,13 @@ export const useWalletIntelStore = create((set, get) => ({
   fetchProfile: async (address, chain = 'eth') => {
     const key = `${address.toLowerCase()}:${chain}`
     if (get().profiles[key]) return get().profiles[key]
-    const { data } = await supabase
+    const { data, error } = await supabase
       .from('wallet_profiles')
       .select('*')
       .eq('address', address.toLowerCase())
       .eq('chain', chain)
       .maybeSingle()
+    if (error) return null  // table may not exist yet; caller handles fallback
     if (data) {
       set(s => ({ profiles: { ...s.profiles, [key]: data } }))
       return data

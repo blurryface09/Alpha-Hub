@@ -12,7 +12,6 @@ import Paywall from '../components/Paywall'
 import AddWalletModal from '../components/whale/AddWalletModal'
 import ActivityFeed from '../components/whale/ActivityFeed'
 import WalletIntelPanel from '../components/whale/WalletIntelPanel'
-import FollowWalletButton from '../components/whale/FollowWalletButton'
 
 const EXPLORER_HOSTS = {
   eth: 'etherscan.io',
@@ -25,8 +24,9 @@ export default function WhaleRadarPage() {
   const { user } = useAuthStore()
   const { address, isConnected } = useAccount()
   const { activity, fetch: fetchActivity, subscribe } = useWhaleStore()
-  const { watchedWallets, loading, followWallet, unfollowWallet, fetchWatched } = useWalletIntelStore()
   const { plan, limits, hasAccess, refresh } = useSubscription()
+  const [watchlist, setWatchlist] = useState([])
+  const [listLoading, setListLoading] = useState(true)
   const [showAddModal, setShowAddModal] = useState(false)
   const [activeChain, setActiveChain] = useState('all')
   const [upgradeRequired, setUpgradeRequired] = useState(false)
@@ -34,28 +34,33 @@ export default function WhaleRadarPage() {
   const ADMIN_WALLET = import.meta.env.VITE_ADMIN_WALLET?.toLowerCase()
   const isAdmin = isConnected && address?.toLowerCase() === ADMIN_WALLET
 
-  // Admin needs full watchlist; regular users already loaded via DashboardLayout
-  useEffect(() => {
-    if (isAdmin && user) fetchWatched(null)
-  }, [isAdmin, user, fetchWatched])
+  // Watchlist display state is fully local — not coupled to follow/unfollow store
+  const fetchWatchlist = React.useCallback(async () => {
+    if (!user) return
+    setListLoading(true)
+    let query = supabase.from('whale_watchlist').select('*').eq('is_active', true)
+    if (!isAdmin) query = query.eq('user_id', user.id)
+    const { data } = await query
+    setWatchlist(data || [])
+    setListLoading(false)
+  }, [user, isAdmin])
 
   useEffect(() => {
+    fetchWatchlist()
     fetchActivity(isAdmin ? null : user?.id)
     if (!hasAccess('pro')) return undefined
     const unsub = subscribe(isAdmin ? null : user?.id)
     return unsub
-  }, [fetchActivity, hasAccess, subscribe, user?.id, isAdmin])
+  }, [fetchWatchlist, fetchActivity, hasAccess, subscribe, user?.id, isAdmin])
 
   useEffect(() => {
-    const refreshOnResume = () => fetchActivity(isAdmin ? null : user?.id)
+    const refreshOnResume = () => {
+      fetchWatchlist()
+      fetchActivity(isAdmin ? null : user?.id)
+    }
     window.addEventListener('alphahub:resume', refreshOnResume)
     return () => window.removeEventListener('alphahub:resume', refreshOnResume)
-  }, [fetchActivity, user?.id, isAdmin])
-
-  // watchlist shown on this page
-  const watchlist = isAdmin
-    ? watchedWallets
-    : watchedWallets.filter(() => true) // already scoped to user by store
+  }, [fetchWatchlist, fetchActivity, user?.id, isAdmin])
 
   const addWallet = async ({ address, label, chain }) => {
     try {
@@ -70,11 +75,18 @@ export default function WhaleRadarPage() {
         toast.error(`Your ${plan || 'Free'} plan tracks ${limits.trackedWallets} wallet${limits.trackedWallets === 1 ? '' : 's'}. Upgrade to add more.`)
         return
       }
-      const { error } = await followWallet(user.id, address, label, chain)
+      const insertPromise = supabase
+        .from('whale_watchlist')
+        .insert({ user_id: user.id, wallet_address: address, label: label || 'Unlabeled', chain, is_active: true })
+        .select().single()
+      const timeoutPromise = new Promise((_, reject) =>
+        setTimeout(() => reject(new Error('Request timed out after 10s')), 10000))
+      const { data, error } = await Promise.race([insertPromise, timeoutPromise])
       if (error) {
         toast.error(friendlyError(error, 'Could not save this wallet. Please try again.'), { duration: 6000 })
         return
       }
+      setWatchlist(prev => [...prev, data])
       toast.success(`Watching ${label || address.slice(0, 12)}!`)
       setShowAddModal(false)
     } catch (err) {
@@ -83,7 +95,13 @@ export default function WhaleRadarPage() {
   }
 
   const removeWallet = async (id, label) => {
-    await unfollowWallet(user.id, id)
+    setWatchlist(prev => prev.filter(w => w.id !== id))
+    const { error } = await supabase.from('whale_watchlist').delete().eq('id', id)
+    if (error) {
+      toast.error('Could not remove wallet')
+      fetchWatchlist()
+      return
+    }
     toast.success(`Removed ${label || 'wallet'}`)
   }
 
@@ -209,7 +227,7 @@ export default function WhaleRadarPage() {
         <div className="lg:col-span-2">
           <div className="card">
             <div className="section-label">Watchlist ({watchlist.length})</div>
-            {loading ? (
+            {listLoading ? (
               <div className="flex flex-col items-center justify-center py-8 text-center">
                 <div className="alpha-loader scale-75" />
                 <p className="mt-2 text-xs text-muted">Loading watched wallets...</p>
@@ -252,11 +270,6 @@ export default function WhaleRadarPage() {
                           </div>
                         </div>
                         <div className="flex items-center gap-1.5 flex-shrink-0">
-                          <FollowWalletButton
-                            address={w.wallet_address}
-                            chain={w.chain}
-                            label={w.label}
-                          />
                           <button
                             onClick={() => setExpandedWallet(isExpanded ? null : w.id)}
                             title="Wallet Intelligence"

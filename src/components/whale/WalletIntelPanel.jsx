@@ -1,7 +1,9 @@
 import React, { useEffect, useState } from 'react'
 import { Activity, Zap, Hash, Repeat2, TrendingUp } from 'lucide-react'
 import { useWalletIntelStore } from '../../store'
-import { convictionLabel, convictionColor } from '../../../worker/lib/wallet-intelligence.js'
+import {
+  convictionLabel, convictionColor, buildWalletProfile,
+} from '../../../worker/lib/wallet-intelligence.js'
 
 function shortAddr(addr) {
   if (!addr) return ''
@@ -15,16 +17,15 @@ function StatBox({ icon: Icon, label, value, color = 'text-text' }) {
         <Icon size={10} />
         <span className="text-[10px] uppercase tracking-wider font-mono">{label}</span>
       </div>
-      <div className={`text-base font-bold ${color}`}>{value}</div>
+      <div className={`text-base font-bold ${color}`}>{value ?? '—'}</div>
     </div>
   )
 }
 
-function ConvictionBar({ score }) {
-  const label = convictionLabel(score)
-  const color = convictionColor(score)
-  const pct   = Math.min(score, 100)
-
+function ConvictionBar({ score, estimated }) {
+  const label    = convictionLabel(score)
+  const color    = convictionColor(score)
+  const pct      = Math.min(score, 100)
   const barColor =
     score >= 80 ? 'bg-green' :
     score >= 60 ? 'bg-accent' :
@@ -34,7 +35,9 @@ function ConvictionBar({ score }) {
   return (
     <div>
       <div className="flex items-center justify-between mb-1">
-        <span className="text-[10px] text-muted uppercase tracking-wider font-mono">Conviction</span>
+        <span className="text-[10px] text-muted uppercase tracking-wider font-mono">
+          Conviction{estimated ? ' (live est.)' : ''}
+        </span>
         <span className={`text-xs font-bold ${color}`}>{label} ({score}/100)</span>
       </div>
       <div className="h-1.5 bg-surface2 rounded-full overflow-hidden">
@@ -46,20 +49,58 @@ function ConvictionBar({ score }) {
 
 export default function WalletIntelPanel({ address, chain = 'eth', label, recentActivity = [] }) {
   const { fetchProfile } = useWalletIntelStore()
-  const [profile, setProfile] = useState(null)
-  const [loading, setLoading] = useState(true)
+  const [profile, setProfile]   = useState(null)
+  const [loading, setLoading]   = useState(true)
+  const [estimated, setEstimated] = useState(false)
 
   useEffect(() => {
     if (!address) return
+    let cancelled = false
     setLoading(true)
+    setEstimated(false)
+
     fetchProfile(address, chain).then(p => {
-      setProfile(p)
+      if (cancelled) return
+      if (p) {
+        setProfile(p)
+        setEstimated(false)
+      } else {
+        // DB profile missing — compute from available activity data
+        const walletActs = recentActivity.filter(
+          a => a.wallet_address?.toLowerCase() === address.toLowerCase()
+        )
+        if (walletActs.length) {
+          setProfile(buildWalletProfile(walletActs))
+          setEstimated(true)
+        } else {
+          setProfile(null)
+        }
+      }
+      setLoading(false)
+    }).catch(() => {
+      if (cancelled) return
+      // Table may not exist yet — compute from activity
+      const walletActs = recentActivity.filter(
+        a => a.wallet_address?.toLowerCase() === address.toLowerCase()
+      )
+      if (walletActs.length) {
+        setProfile(buildWalletProfile(walletActs))
+        setEstimated(true)
+      } else {
+        setProfile(null)
+      }
       setLoading(false)
     })
-  }, [address, chain, fetchProfile])
+
+    return () => { cancelled = true }
+  }, [address, chain, fetchProfile, recentActivity])
 
   const recentMints = recentActivity
     .filter(a => a.is_mint && a.wallet_address?.toLowerCase() === address?.toLowerCase())
+    .slice(0, 5)
+
+  const allActivity = recentActivity
+    .filter(a => a.wallet_address?.toLowerCase() === address?.toLowerCase())
     .slice(0, 5)
 
   return (
@@ -74,27 +115,27 @@ export default function WalletIntelPanel({ address, chain = 'eth', label, recent
       </div>
 
       {loading && (
-        <div className="flex items-center gap-2 py-4 text-muted text-xs">
+        <div className="flex items-center gap-2 py-3 text-muted text-xs">
           <div className="spinner w-3 h-3" />
           Loading profile…
         </div>
       )}
 
-      {!loading && !profile && (
+      {!loading && !profile && recentMints.length === 0 && (
         <p className="text-xs text-muted italic">
-          No profile yet — data builds after the wallet mints something.
+          No activity yet — profile builds once this wallet mints.
         </p>
       )}
 
       {!loading && profile && (
         <>
-          <ConvictionBar score={profile.conviction_score} />
+          <ConvictionBar score={profile.conviction_score} estimated={estimated} />
 
           <div className="grid grid-cols-2 gap-2">
-            <StatBox icon={Zap}      label="Mints"     value={profile.total_mints}      color="text-green" />
-            <StatBox icon={Hash}     label="Projects"  value={profile.unique_contracts}  color="text-accent" />
-            <StatBox icon={TrendingUp} label="Large"   value={profile.large_mints}       color="text-accent3" />
-            <StatBox icon={Repeat2}  label="Repeats"   value={profile.repeat_mints}      color="text-amber-400" />
+            <StatBox icon={Zap}        label="Mints"    value={profile.total_mints}      color="text-green" />
+            <StatBox icon={Hash}       label="Projects" value={profile.unique_contracts}  color="text-accent" />
+            <StatBox icon={TrendingUp} label="Large"    value={profile.large_mints}       color="text-accent3" />
+            <StatBox icon={Repeat2}    label="Repeats"  value={profile.repeat_mints}      color="text-amber-400" />
           </div>
 
           {profile.last_active_at && (
@@ -105,16 +146,20 @@ export default function WalletIntelPanel({ address, chain = 'eth', label, recent
         </>
       )}
 
-      {/* Recent mints */}
-      {recentMints.length > 0 && (
+      {/* Recent activity */}
+      {(recentMints.length > 0 || (!profile && allActivity.length > 0)) && (
         <div>
-          <div className="text-[10px] text-muted uppercase tracking-wider font-mono mb-1.5">Recent mints</div>
+          <div className="text-[10px] text-muted uppercase tracking-wider font-mono mb-1.5">
+            Recent activity
+          </div>
           <div className="space-y-1">
-            {recentMints.map((a, i) => (
+            {(recentMints.length ? recentMints : allActivity).map((a, i) => (
               <div key={i} className="flex items-center gap-2 text-xs">
-                <div className="dot-live w-1.5 h-1.5 flex-shrink-0" />
+                <div className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${a.is_mint ? 'bg-green' : 'bg-muted'}`} />
                 <span className="font-mono text-muted truncate">
-                  {a.contract_address ? a.contract_address.slice(0, 14) + '…' : a.method_name || 'mint'}
+                  {a.contract_address
+                    ? a.contract_address.slice(0, 14) + '…'
+                    : a.method_name || 'tx'}
                 </span>
                 {parseFloat(a.value_eth || 0) > 0 && (
                   <span className="text-green ml-auto flex-shrink-0">
