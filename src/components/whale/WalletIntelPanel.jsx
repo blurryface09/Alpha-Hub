@@ -34,6 +34,7 @@ function analyzeTransactions(txs, address) {
   const mintTxs = outgoing.filter(tx =>
     tx.input !== '0x' &&
     tx.to !== addr &&
+    tx.to && !tx.to.match(/^0x0+$/) &&
     (parseFloat(tx.value) > 0 || /mint|buy|claim/i.test(tx.functionName || ''))
   )
 
@@ -60,8 +61,8 @@ function analyzeTransactions(txs, address) {
   const firstActive = timestamps.length > 0 ? Math.min(...timestamps) : null
 
   const signals = []
-  if (mintTxs.length >= 5)              signals.push(`${mintTxs.length} mint txs detected`)
-  if (uniqueContracts.size >= 3)        signals.push(`Active across ${uniqueContracts.size} contracts`)
+  if (mintTxs.length >= 5)              signals.push(`Minted ${mintTxs.length} projects on-chain`)
+  if (uniqueContracts.size >= 3)        signals.push(`Interacted with ${uniqueContracts.size} unique contracts`)
   if (flipRatio < 0.2 && mintTxs.length >= 3) signals.push('Consistent holder pattern')
   if (flipRatio > 0.7)                  signals.push('High flip rate — watch carefully')
   if (parseFloat(mintTxs[0]?.value || 0) / 1e18 > 0.5) signals.push('Large mint detected recently')
@@ -195,7 +196,7 @@ export default function WalletIntelPanel({ address, chain = 'eth', label }) {
             <div>
               <div className="text-[10px] text-muted uppercase tracking-wider font-mono mb-1.5">Last mints</div>
               <div className="space-y-1">
-                {data.recentMints.map((tx, i) => (
+                {data.recentMints.filter(tx => tx.to && !tx.to.match(/^0x0+$/)).map((tx, i) => (
                   <div key={i} className="flex items-center gap-2 text-xs">
                     <div className="w-1.5 h-1.5 rounded-full bg-green flex-shrink-0" />
                     <span className="font-mono text-muted truncate">
