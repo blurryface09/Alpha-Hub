@@ -64,7 +64,7 @@ const signals = []
 if (mintTxs.length >= 5)              signals.push(`Minted ${mintTxs.length} projects on-chain`)
 if (uniqueContracts.size >= 3)        signals.push(`Interacted with ${uniqueContracts.size} unique contracts`)
 if (flipRatio < 0.2 && mintTxs.length >= 3) signals.push(‘Consistent holder pattern’)
-if (flipRatio > 0.7)                  signals.push(‘High flip rate — watch carefully’)
+if (flipRatio > 0.7)                  signals.push(‘High flip rate – watch carefully’)
 if (parseFloat(mintTxs[0]?.value || 0) / 1e18 > 0.5) signals.push(‘Large mint detected recently’)
 
 return {
@@ -90,20 +90,18 @@ let cancelled = false
 setLoading(true)
 setError(null)
 
-```
 fetchWalletData(address, chain)
-  .then(txs => {
-    if (cancelled) return
-    if (!txs) { setError('No on-chain data returned'); setLoading(false); return }
-    setData(analyzeTransactions(txs, address))
-    setLoading(false)
-  })
-  .catch(() => {
-    if (!cancelled) { setError('Could not reach Etherscan API'); setLoading(false) }
-  })
+.then(txs => {
+if (cancelled) return
+if (!txs) { setError(‘No on-chain data returned’); setLoading(false); return }
+setData(analyzeTransactions(txs, address))
+setLoading(false)
+})
+.catch(() => {
+if (!cancelled) { setError(‘Could not reach Etherscan API’); setLoading(false) }
+})
 
 return () => { cancelled = true }
-```
 
 }, [address, chain])
 
@@ -111,6 +109,7 @@ const conviction  = data ? convictionFromFlipRatio(data.flipRatio, data.mintCoun
 const explorerUrl = `https://${EXPLORER[chain] || EXPLORER.eth}/address/${address}`
 
 return (
+
 <div className="space-y-3">
 {/* Header */}
 <div className="flex items-center gap-2">
@@ -129,103 +128,104 @@ className="ml-auto text-muted hover:text-accent transition-colors"
 </a>
 </div>
 
-```
-  {loading ? (
-    <div className="flex items-center gap-2 py-3 text-muted text-xs">
-      <div className="spinner w-3 h-3" />
-      Analyzing on-chain activity…
-    </div>
-  ) : error ? (
-    <p className="text-xs text-muted2 italic">{error}</p>
-  ) : (
-    <>
-      {/* Conviction bar */}
-      <div className="bg-surface2 rounded-lg p-2.5">
-        <div className="flex items-center justify-between mb-1.5">
-          <span className="text-[10px] text-muted uppercase tracking-wider font-mono">Conviction</span>
-          <span className={`text-xs font-bold ${conviction.color}`}>{conviction.label}</span>
-        </div>
-        <div className="h-1.5 bg-bg rounded-full overflow-hidden">
-          <div
-            className={`h-full rounded-full transition-all ${conviction.bar}`}
-            style={{ width: `${conviction.pct}%` }}
-          />
-        </div>
-        <div className="text-[10px] text-muted2 mt-1">
-          {data.mintCount > 0
-            ? `${Math.round(data.flipRatio * 100)}% sold within 48h of mint`
-            : 'No mint activity found in last 200 txs'}
-        </div>
-      </div>
-
-      {/* Stats row */}
-      <div className="grid grid-cols-3 gap-2">
-        <div className="bg-surface2 rounded-lg p-2 text-center">
-          <div className="text-sm font-bold text-text">{data.totalTxs}</div>
-          <div className="text-[10px] text-muted font-mono">Total Txs</div>
-        </div>
-        <div className="bg-surface2 rounded-lg p-2 text-center">
-          <div className="text-sm font-bold text-accent">{data.uniqueContracts}</div>
-          <div className="text-[10px] text-muted font-mono">Contracts</div>
-        </div>
-        <div className="bg-surface2 rounded-lg p-2 text-center">
-          <div className="text-sm font-bold text-green">{data.avgEth.toFixed(3)}</div>
-          <div className="text-[10px] text-muted font-mono">Avg ETH</div>
-        </div>
-      </div>
-
-      {/* First active */}
-      {data.firstActive && (
-        <div className="flex items-center gap-1.5 text-[10px] text-muted2">
-          <Clock size={10} />
-          First active: {new Date(data.firstActive * 1000).toLocaleDateString([], { year: 'numeric', month: 'short', day: 'numeric' })}
-        </div>
-      )}
-
-      {/* Signals */}
-      {data.signals.length > 0 && (
-        <div className="space-y-1">
-          <div className="text-[10px] text-muted uppercase tracking-wider font-mono">Signals</div>
-          {data.signals.map((s, i) => (
-            <div key={i} className="flex items-center gap-1.5 text-xs text-text">
-              <div className="w-1 h-1 rounded-full bg-accent flex-shrink-0" />
-              {s}
-            </div>
-          ))}
-        </div>
-      )}
-
-      {/* Last 5 mints */}
-      {data.recentMints.length > 0 && (
-        <div>
-          <div className="text-[10px] text-muted uppercase tracking-wider font-mono mb-1.5">Last mints</div>
-          <div className="space-y-1">
-            {data.recentMints.filter(tx => tx.to && tx.to.length === 42 && !tx.to.match(/^0x0{10,}/)).map((tx, i) => (
-              <div key={i} className="flex items-center gap-2 text-xs">
-                <div className="w-1.5 h-1.5 rounded-full bg-green flex-shrink-0" />
-                <span className="font-mono text-muted truncate">
-                  {tx.to.slice(0, 12)}…
-                </span>
-                {parseFloat(tx.value) > 0 && (
-                  <span className="text-green ml-auto flex-shrink-0 font-mono">
-                    {(parseFloat(tx.value) / 1e18).toFixed(3)} ETH
-                  </span>
-                )}
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
-
-      {data.totalTxs === 0 && (
-        <p className="text-[10px] text-muted2 italic">
-          No transaction history found on {chain.toUpperCase()}.
-        </p>
-      )}
-    </>
-  )}
+{loading ? (
+<div className="flex items-center gap-2 py-3 text-muted text-xs">
+<div className="spinner w-3 h-3" />
+Analyzing on-chain activity…
 </div>
+) : error ? (
+<p className="text-xs text-muted2 italic">{error}</p>
+) : (
+<>
+{/* Conviction bar */}
+<div className="bg-surface2 rounded-lg p-2.5">
+<div className="flex items-center justify-between mb-1.5">
+<span className="text-[10px] text-muted uppercase tracking-wider font-mono">Conviction</span>
+<span className={`text-xs font-bold ${conviction.color}`}>{conviction.label}</span>
+</div>
+<div className="h-1.5 bg-bg rounded-full overflow-hidden">
+<div
+className={`h-full rounded-full transition-all ${conviction.bar}`}
+style={{ width: `${conviction.pct}%` }}
+/>
+</div>
+<div className="text-[10px] text-muted2 mt-1">
+{data.mintCount > 0
+? `${Math.round(data.flipRatio * 100)}% sold within 48h of mint`
+: ‘No mint activity found in last 200 txs’}
+</div>
+</div>
+
+```
+  {/* Stats row */}
+  <div className="grid grid-cols-3 gap-2">
+    <div className="bg-surface2 rounded-lg p-2 text-center">
+      <div className="text-sm font-bold text-text">{data.totalTxs}</div>
+      <div className="text-[10px] text-muted font-mono">Total Txs</div>
+    </div>
+    <div className="bg-surface2 rounded-lg p-2 text-center">
+      <div className="text-sm font-bold text-accent">{data.uniqueContracts}</div>
+      <div className="text-[10px] text-muted font-mono">Contracts</div>
+    </div>
+    <div className="bg-surface2 rounded-lg p-2 text-center">
+      <div className="text-sm font-bold text-green">{data.avgEth.toFixed(3)}</div>
+      <div className="text-[10px] text-muted font-mono">Avg ETH</div>
+    </div>
+  </div>
+
+  {/* First active */}
+  {data.firstActive && (
+    <div className="flex items-center gap-1.5 text-[10px] text-muted2">
+      <Clock size={10} />
+      First active: {new Date(data.firstActive * 1000).toLocaleDateString([], { year: 'numeric', month: 'short', day: 'numeric' })}
+    </div>
+  )}
+
+  {/* Signals */}
+  {data.signals.length > 0 && (
+    <div className="space-y-1">
+      <div className="text-[10px] text-muted uppercase tracking-wider font-mono">Signals</div>
+      {data.signals.map((s, i) => (
+        <div key={i} className="flex items-center gap-1.5 text-xs text-text">
+          <div className="w-1 h-1 rounded-full bg-accent flex-shrink-0" />
+          {s}
+        </div>
+      ))}
+    </div>
+  )}
+
+  {/* Last 5 mints */}
+  {data.recentMints.length > 0 && (
+    <div>
+      <div className="text-[10px] text-muted uppercase tracking-wider font-mono mb-1.5">Last mints</div>
+      <div className="space-y-1">
+        {data.recentMints.filter(tx => tx.to && tx.to.length === 42 && !tx.to.match(/^0x0{10,}/)).map((tx, i) => (
+          <div key={i} className="flex items-center gap-2 text-xs">
+            <div className="w-1.5 h-1.5 rounded-full bg-green flex-shrink-0" />
+            <span className="font-mono text-muted truncate">
+              {tx.to.slice(0, 12)}...
+            </span>
+            {parseFloat(tx.value) > 0 && (
+              <span className="text-green ml-auto flex-shrink-0 font-mono">
+                {(parseFloat(tx.value) / 1e18).toFixed(3)} ETH
+              </span>
+            )}
+          </div>
+        ))}
+      </div>
+    </div>
+  )}
+
+  {data.totalTxs === 0 && (
+    <p className="text-[10px] text-muted2 italic">
+      No transaction history found on {chain.toUpperCase()}.
+    </p>
+  )}
+</>
 ```
 
+)}
+
+</div>
 )
 }
