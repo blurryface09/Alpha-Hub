@@ -150,13 +150,14 @@ export async function directUpdate(table, data, column, value) {
   return Array.isArray(result) ? result[0] : result
 }
 
-// Timeout wrapper
-export async function directDelete(table, column, value) {
-  const token = getAuthToken()
+export async function directDelete(table, column, value, extraColumn, extraValue) {
+  const token = await getAuthToken()
   if (!token) throw new Error('Not authenticated')
   const url = import.meta.env.VITE_SUPABASE_URL
   const key = import.meta.env.VITE_SUPABASE_ANON_KEY
-  const response = await fetch(`${url}/rest/v1/${table}?${column}=eq.${value}`, {
+  let endpoint = `${url}/rest/v1/${table}?${column}=eq.${value}`
+  if (extraColumn && extraValue) endpoint += `&${extraColumn}=eq.${extraValue}`
+  const response = await fetch(endpoint, {
     method: 'DELETE',
     headers: {
       'apikey': key,

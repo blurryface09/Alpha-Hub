@@ -156,9 +156,10 @@ export default function WalletIntelPanel({ address, chain = 'eth', label }) {
       </div>
 
       {loading ? (
-        <div className="space-y-2 py-1">
-          {[0, 1, 2].map(i => (
-            <div key={i} className="animate-pulse bg-surface2 rounded h-4" />
+        <div className="space-y-2 py-2">
+          {[1, 2, 3].map(i => (
+            <div key={i} className="h-4 bg-surface2 rounded animate-pulse"
+              style={{ width: i === 1 ? '80%' : i === 2 ? '60%' : '70%' }} />
           ))}
         </div>
       ) : error ? (
@@ -254,7 +255,7 @@ export default function WalletIntelPanel({ address, chain = 'eth', label }) {
                         </span>
                       )}
                       <button
-                        onClick={() => navigate(`/mintguard?contract=${tx.to}&chain=${chain}`)}
+                        onClick={() => navigate('/mintguard', { state: { openAdd: true, contract: tx.to, chain: chain } })}
                         className="text-[10px] px-1.5 py-0.5 rounded border border-accent/30 text-accent hover:bg-accent/10 transition-colors"
                       >
                         + Track

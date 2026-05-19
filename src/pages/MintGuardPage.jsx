@@ -1,8 +1,9 @@
 import React, { useState, useEffect, useCallback } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
+import { useLocation } from 'react-router-dom'
 import { Plus, Shield, Sparkles, Wand2 } from 'lucide-react'
 import toast from 'react-hot-toast'
-import { supabase, directInsert, directUpdate, getAuthToken } from '../lib/supabase'
+import { supabase, directInsert, directUpdate, directDelete, getAuthToken } from '../lib/supabase'
 import { useMint } from '../hooks/useMint'
 import { useSubscription } from '../hooks/useSubscription'
 import { useAuthStore } from '../store'
@@ -47,6 +48,7 @@ async function notifyTelegram(project, type, userToken) {
 }
 
 export default function MintGuardPage() {
+  const location = useLocation()
   const { user } = useAuthStore()
   const { plan, limits, hasAccess, refresh } = useSubscription()
   const { executeMint: mintHook, isConnected } = useMint()
@@ -54,6 +56,8 @@ export default function MintGuardPage() {
   const [loading, setLoading] = useState(true)
   const [activeTab, setActiveTab] = useState('all')
   const [showAddModal, setShowAddModal] = useState(false)
+  const [initialContract, setInitialContract] = useState(null)
+  const [initialChain, setInitialChain] = useState('eth')
   const [confirmMint, setConfirmMint] = useState(null) // project to confirm mint for
   const [mintingId, setMintingId] = useState(null)
   const [telegramChatId, setTelegramChatId] = useState(null)
@@ -137,6 +141,11 @@ export default function MintGuardPage() {
     if (!initialLoad.current) {
       initialLoad.current = true
       fetchProjects(true) // show spinner on first load
+    }
+    if (location.state?.openAdd) {
+      setShowAddModal(true)
+      setInitialContract(location.state.contract)
+      setInitialChain(location.state.chain)
     }
     // Silent background refresh every 60s -- never clears projects
     const interval = setInterval(() => fetchProjects(false), 60000)
@@ -316,7 +325,7 @@ export default function MintGuardPage() {
     const snapshot = projects.find(p => p.id === id)
     setProjects(prev => prev.filter(p => p.id !== id))
     try {
-      await directDelete('wl_projects', 'id', id)
+      await directDelete('wl_projects', 'id', id, 'user_id', user.id)
       toast.success('Project removed')
     } catch(e) {
       if (snapshot) setProjects(prev => [snapshot, ...prev.filter(p => p.id !== id)])
@@ -662,7 +671,8 @@ export default function MintGuardPage() {
       {showAddModal && (
         <AddProjectModal
           onAdd={handleAddProject}
-          onClose={() => setShowAddModal(false)}
+          onClose={() => { setShowAddModal(false); setInitialContract(null); setInitialChain('eth') }}
+          initialValues={{ contract_address: initialContract, chain: initialChain }}
         />
       )}
       {confirmMint && (
