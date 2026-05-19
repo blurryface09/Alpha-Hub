@@ -20,7 +20,7 @@ return                         { label: 'Serial Jeet',  color: 'text-accent2', b
 async function fetchWalletData(address, chain) {
 const apiKey  = import.meta.env.VITE_ETHERSCAN_API_KEY || ''
 const chainId = CHAIN_IDS[chain] || 1
-const url = 'https://api.etherscan.io/v2/api?chainid=${chainId}&module=account&action=txlist&address=${address}&startblock=0&endblock=99999999&sort=desc&offset=200&page=1&apikey=${apiKey}'
+const url = `https://api.etherscan.io/v2/api?chainid=${chainId}&module=account&action=txlist&address=${address}&startblock=0&endblock=99999999&sort=desc&offset=200&page=1&apikey=${apiKey}`
 const res  = await fetch(url)
 const json = await res.json()
 if (json.status !== '1' || !Array.isArray(json.result)) return null
@@ -61,8 +61,8 @@ const timestamps  = txs.map(tx => parseInt(tx.timeStamp))
 const firstActive = timestamps.length > 0 ? Math.min(...timestamps) : null
 
 const signals = []
-if (mintTxs.length >= 5)              signals.push('Minted ${mintTxs.length} projects on-chain')
-if (uniqueContracts.size >= 3)        signals.push('Interacted with ${uniqueContracts.size} unique contracts')
+if (mintTxs.length >= 5)              signals.push(`Minted ${mintTxs.length} projects on-chain`)
+if (uniqueContracts.size >= 3)        signals.push(`Interacted with ${uniqueContracts.size} unique contracts`)
 if (flipRatio < 0.2 && mintTxs.length >= 3) signals.push('Consistent holder pattern')
 if (flipRatio > 0.7)                  signals.push('High flip rate -- watch carefully')
 if (parseFloat(mintTxs[0]?.value || 0) / 1e18 > 0.5) signals.push('Large mint detected recently')
@@ -108,7 +108,7 @@ return () => { cancelled = true }
 }, [address, chain])
 
 const conviction  = data ? convictionFromFlipRatio(data.flipRatio, data.mintCount) : null
-const explorerUrl = 'https://${EXPLORER[chain] || EXPLORER.eth}/address/${address}'
+const explorerUrl = `https://${EXPLORER[chain] || EXPLORER.eth}/address/${address}`
 
 return (
 <div className="space-y-3">
@@ -143,17 +143,17 @@ className="ml-auto text-muted hover:text-accent transition-colors"
       <div className="bg-surface2 rounded-lg p-2.5">
         <div className="flex items-center justify-between mb-1.5">
           <span className="text-[10px] text-muted uppercase tracking-wider font-mono">Conviction</span>
-          <span className={'text-xs font-bold ${conviction.color}'}>{conviction.label}</span>
+          <span className={`text-xs font-bold ${conviction.color}`}>{conviction.label}</span>
         </div>
         <div className="h-1.5 bg-bg rounded-full overflow-hidden">
           <div
-            className={'h-full rounded-full transition-all ${conviction.bar}'}
+            className={`h-full rounded-full transition-all ${conviction.bar}`}
             style={{ width: '${conviction.pct}%' }}
           />
         </div>
         <div className="text-[10px] text-muted2 mt-1">
           {data.mintCount > 0
-            ? '${Math.round(data.flipRatio * 100)}% sold within 48h of mint'
+            ? `${Math.round(data.flipRatio * 100)}% sold within 48h of mint`
             : 'No mint activity found in last 200 txs'}
         </div>
       </div>
