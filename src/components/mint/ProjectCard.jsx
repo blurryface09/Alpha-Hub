@@ -209,7 +209,7 @@ export default function ProjectCard({ project, isMinting, isDeleting, onMint, on
                   }}
                   disabled={watchLoading}
                   title={isWatching ? 'Unwatch project' : 'Watch project'}
-                  className={`p-1.5 rounded-md border transition-all ${isWatching ? 'border-accent/40 text-accent bg-accent/8 hover:bg-accent/15' : 'border-border2 text-muted hover:border-accent hover:text-accent'} ${watchLoading ? 'opacity-50 cursor-not-allowed' : ''}`}
+                  className={`min-w-[44px] min-h-[44px] flex items-center justify-center rounded-md border transition-all ${isWatching ? 'border-accent/40 text-accent bg-accent/8 hover:bg-accent/15' : 'border-border2 text-muted hover:border-accent hover:text-accent'} ${watchLoading ? 'opacity-50 cursor-not-allowed' : ''}`}
                 >
                   {isWatching ? <Bell size={12} className="fill-current" /> : <BellOff size={12} />}
                 </button>
@@ -221,22 +221,13 @@ export default function ProjectCard({ project, isMinting, isDeleting, onMint, on
                 {project.mint_mode === "auto" ? React.createElement(ToggleRight, { size: 12 }) : React.createElement(ToggleLeft, { size: 12 })}
                 {project.mint_mode === "auto" ? "Strike" : "Fast"}
               </button>
-              {project.mint_mode === 'auto' && project.status !== 'minted' && (
-                <button
-                  onClick={onReplay}
-                  className="flex items-center gap-1 cursor-pointer hover:opacity-80 transition-opacity"
-                  title="View simulation replay"
-                >
-                  <StrikeStateBadge project={project} />
-                </button>
-              )}
               {(project.status === "live" || project.status === "upcoming") && project.contract_address && (
                 <button onClick={() => onMint(false)} disabled={isMinting} className="btn-primary text-xs px-3 py-1.5 flex items-center gap-1.5">
                   {isMinting ? React.createElement("div", { className: "spinner w-3 h-3" }) : React.createElement(Zap, { size: 12 })}
                   {isMinting ? "Minting..." : "Mint"}
                 </button>
               )}
-              <button onClick={function() { setExpanded(!expanded) }} className="text-muted hover:text-text p-1">
+              <button onClick={function() { setExpanded(!expanded) }} className="text-muted hover:text-text min-w-[44px] min-h-[44px] flex items-center justify-center">
                 {expanded ? React.createElement(ChevronUp, { size: 14 }) : React.createElement(ChevronDown, { size: 14 })}
               </button>
             </div>
@@ -358,6 +349,19 @@ export default function ProjectCard({ project, isMinting, isDeleting, onMint, on
               <p className="text-xs text-accent2">Error: {intel.error}</p>
             )}
           </div>
+
+          {/* Strike status — only when auto mode is active */}
+          {project.mint_mode === 'auto' && project.status !== 'minted' && (
+            <div className="border-t border-border pt-3 mt-1 flex items-center gap-2 flex-wrap">
+              <button
+                onClick={onReplay}
+                className="flex items-center gap-1 cursor-pointer hover:opacity-80 transition-opacity"
+                title="View simulation replay"
+              >
+                <StrikeStateBadge project={project} />
+              </button>
+            </div>
+          )}
 
           {/* Live Mint Feed */}
           <div className="border-t border-border pt-3 mt-1">

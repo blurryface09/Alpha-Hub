@@ -4,8 +4,8 @@ import { Bell, X, Check, Filter } from 'lucide-react'
 import { useNotificationStore } from '../../store'
 import { AlertTypeBadge, SeverityDot, getTypeIcon, getTypeColor } from './AlertBadge'
 
-// Alerts that belong to the "whale" filter tab
-const WHALE_TYPES = new Set(['whale_mint', 'whale_move', 'wallet_entry', 'wallet_repeat_mint', 'wallet_large_mint'])
+// Alerts that belong to the "whale" filter tab (whale_move excluded — too generic)
+const WHALE_TYPES = new Set(['whale_mint', 'wallet_entry', 'wallet_repeat_mint', 'wallet_large_mint'])
 // Alerts that belong to the "project" filter tab
 const PROJECT_TYPES = new Set([
   'project_live', 'stealth_delay', 'schedule_changed', 'price_changed',
@@ -72,11 +72,17 @@ function AlertRow({ notification, onMarkRead }) {
   )
 }
 
+const SEVEN_DAYS_MS = 7 * 24 * 60 * 60 * 1000
+
 export default function AlertCenter({ notifications, unreadCount, onMarkAllRead, onClose }) {
   const { markRead } = useNotificationStore()
   const [activeTab, setActiveTab] = useState('all')
 
-  const filtered = notifications.filter(n => {
+  const recent = notifications.filter(n =>
+    Date.now() - new Date(n.created_at).getTime() < SEVEN_DAYS_MS
+  )
+
+  const filtered = recent.filter(n => {
     if (activeTab === 'all')     return true
     if (activeTab === 'whale')   return WHALE_TYPES.has(n.type)
     if (activeTab === 'project') return PROJECT_TYPES.has(n.type)
@@ -84,8 +90,8 @@ export default function AlertCenter({ notifications, unreadCount, onMarkAllRead,
   })
 
   const tabUnread = (tab) => {
-    if (tab === 'all') return unreadCount
-    return notifications.filter(n => {
+    if (tab === 'all') return recent.filter(n => !n.read).length
+    return recent.filter(n => {
       if (!n.read) {
         if (tab === 'whale')   return WHALE_TYPES.has(n.type)
         if (tab === 'project') return PROJECT_TYPES.has(n.type)
@@ -115,13 +121,13 @@ export default function AlertCenter({ notifications, unreadCount, onMarkAllRead,
           )}
         </div>
         <div className="flex items-center gap-2">
-          {unreadCount > 0 && (
+          {tabUnread('all') > 0 && (
             <button
               onClick={onMarkAllRead}
               className="flex items-center gap-1 text-xs text-accent hover:text-accent/80 transition-colors"
             >
               <Check size={11} />
-              All read
+              Mark all read
             </button>
           )}
           <button onClick={onClose} className="text-muted hover:text-text p-0.5">
@@ -157,12 +163,17 @@ export default function AlertCenter({ notifications, unreadCount, onMarkAllRead,
       {/* Alert list */}
       <div className="max-h-96 overflow-y-auto">
         {filtered.length === 0 ? (
-          <div className="flex flex-col items-center justify-center py-10 text-center gap-2">
+          <div className="flex flex-col items-center justify-center py-10 text-center gap-2 px-4">
             <Bell size={20} className="text-muted2" />
-            <p className="text-xs text-muted">
+            <p className="text-xs font-semibold text-text">
+              {activeTab === 'all' ? 'No recent alerts' : `No ${activeTab} alerts`}
+            </p>
+            <p className="text-[10px] text-muted2 leading-relaxed">
               {activeTab === 'all'
-                ? 'No alerts yet — follow a project to get started'
-                : `No ${activeTab} alerts`}
+                ? 'Watch a project or wallet to start receiving alerts here.'
+                : activeTab === 'whale'
+                  ? 'Add wallets in Watchlist to get mint and entry alerts.'
+                  : 'Follow a project in MintGuard to get live status alerts.'}
             </p>
           </div>
         ) : (

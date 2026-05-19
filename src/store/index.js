@@ -296,8 +296,7 @@ export const useMonitorStore = create((set, get) => ({
 
 // --- Wallet Intel Store ------------------------------------------
 export const useWalletIntelStore = create((set, get) => ({
-  watchedWallets: [],   // [{id, wallet_address, label, chain}]
-  profiles: {},         // { 'address:chain': profile }
+  watchedWallets: [],
   loading: false,
 
   fetchWatched: async (userId) => {
@@ -311,94 +310,7 @@ export const useWalletIntelStore = create((set, get) => ({
     set({ watchedWallets: data || [], loading: false })
   },
 
-  followWallet: async (userId, address, label, chain = 'eth') => {
-    const existing = get().watchedWallets.find(
-      w => w.wallet_address.toLowerCase() === address.toLowerCase() && w.chain === chain
-    )
-    if (existing) return { error: null }
-
-    const tempId = `temp-${Date.now()}`
-    set(s => ({ watchedWallets: [...s.watchedWallets, { id: tempId, wallet_address: address, label, chain }] }))
-    const { data, error } = await supabase
-      .from('whale_watchlist')
-      .insert({ user_id: userId, wallet_address: address, label: label || 'Unlabeled', chain, is_active: true })
-      .select('id, wallet_address, label, chain')
-      .single()
-
-    if (error) {
-      set(s => ({ watchedWallets: s.watchedWallets.filter(w => w.id !== tempId) }))
-      return { error }
-    }
-    set(s => ({ watchedWallets: s.watchedWallets.map(w => w.id === tempId ? data : w) }))
-    return { error: null }
-  },
-
-  unfollowWallet: async (userId, walletId) => {
-    set(s => ({ watchedWallets: s.watchedWallets.filter(w => w.id !== walletId) }))
-    const { error } = await supabase
-      .from('whale_watchlist')
-      .delete()
-      .eq('id', walletId)
-      .eq('user_id', userId)
-    if (error) {
-      await get().fetchWatched(userId)
-      return { error }
-    }
-    return { error: null }
-  },
-
-  isFollowing: (address, chain = 'eth') => {
-    return get().watchedWallets.some(
-      w => w.wallet_address.toLowerCase() === address.toLowerCase() && w.chain === chain
-    )
-  },
-
-  getWatchEntry: (address, chain = 'eth') => {
-    return get().watchedWallets.find(
-      w => w.wallet_address.toLowerCase() === address.toLowerCase() && w.chain === chain
-    ) || null
-  },
-
-  fetchProfile: async (address, chain = 'eth') => {
-    const key = `${address.toLowerCase()}:${chain}`
-    if (get().profiles[key]) return get().profiles[key]
-    const { data, error } = await supabase
-      .from('wallet_profiles')
-      .select('*')
-      .eq('address', address.toLowerCase())
-      .eq('chain', chain)
-      .maybeSingle()
-    if (error) return null  // table may not exist yet; caller handles fallback
-    if (data) {
-      set(s => ({ profiles: { ...s.profiles, [key]: data } }))
-      return data
-    }
-    return null
-  },
 }))
-
-// --- Wallet Follow Store (localStorage, no DB needed) ------------
-// Completely separate from whale_watchlist — toggling never affects row display.
-export const useWalletFollowStore = create(
-  persist(
-    (set, get) => ({
-      followedKeys: [],  // array of "address:chain" strings
-
-      isFollowing: (address, chain = 'eth') =>
-        get().followedKeys.includes(`${(address || '').toLowerCase()}:${chain}`),
-
-      toggle: (address, chain = 'eth') => {
-        const key = `${(address || '').toLowerCase()}:${chain}`
-        set(s => ({
-          followedKeys: s.followedKeys.includes(key)
-            ? s.followedKeys.filter(k => k !== key)
-            : [...s.followedKeys, key],
-        }))
-      },
-    }),
-    { name: 'alphahub-wallet-follows' }
-  )
-)
 
 // --- Settings Store (persisted) ----------------------------------
 export const useSettingsStore = create(

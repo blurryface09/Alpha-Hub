@@ -5,14 +5,13 @@ import { useAccount } from 'wagmi'
 import { Radar, Plus, Trash2, Eye, Sparkles, ChevronDown, ChevronUp } from 'lucide-react'
 import toast from 'react-hot-toast'
 import { supabase } from '../lib/supabase'
-import { useAuthStore, useWhaleStore, useWalletIntelStore } from '../store'
+import { useAuthStore, useWhaleStore } from '../store'
 import { useSubscription } from '../hooks/useSubscription'
 import { friendlyError } from '../lib/errors'
 import Paywall from '../components/Paywall'
 import AddWalletModal from '../components/whale/AddWalletModal'
 import ActivityFeed from '../components/whale/ActivityFeed'
 import WalletIntelPanel from '../components/whale/WalletIntelPanel'
-import FollowWalletButton from '../components/whale/FollowWalletButton'
 
 const EXPLORER_HOSTS = {
   eth: 'etherscan.io',
@@ -271,11 +270,10 @@ export default function WhaleRadarPage() {
                           </div>
                         </div>
                         <div className="flex items-center gap-1.5 flex-shrink-0">
-                          <FollowWalletButton address={w.wallet_address} chain={w.chain} />
                           <button
                             onClick={() => setExpandedWallet(isExpanded ? null : w.id)}
                             title="Wallet Intelligence"
-                            className={`p-1.5 rounded-md border transition-all
+                            className={`min-w-[44px] min-h-[44px] flex items-center justify-center rounded-md border transition-all
                               ${isExpanded
                                 ? 'border-accent/40 text-accent bg-accent/8'
                                 : 'border-border2 text-muted hover:border-accent hover:text-accent'}`}
@@ -284,7 +282,7 @@ export default function WhaleRadarPage() {
                           </button>
                           <button
                             onClick={() => removeWallet(w.id, w.label)}
-                            className="p-1.5 rounded-md border border-border2 text-muted hover:border-red-500/40 hover:text-red-400 transition-all"
+                            className="min-w-[44px] min-h-[44px] flex items-center justify-center rounded-md border border-border2 text-muted hover:border-red-500/40 hover:text-red-400 transition-all"
                           >
                             <Trash2 size={12} />
                           </button>
