@@ -294,6 +294,88 @@ export const useMonitorStore = create((set, get) => ({
   isWatching: (projectId) => get().watchedProjects.has(projectId),
 }))
 
+// --- Wallet Intel Store ------------------------------------------
+export const useWalletIntelStore = create((set, get) => ({
+  watchedWallets: [],   // [{id, wallet_address, label, chain}]
+  profiles: {},         // { 'address:chain': profile }
+  loading: false,
+
+  fetchWatched: async (userId) => {
+    if (!userId) return
+    set({ loading: true })
+    const { data } = await supabase
+      .from('whale_watchlist')
+      .select('id, wallet_address, label, chain')
+      .eq('user_id', userId)
+      .eq('is_active', true)
+    set({ watchedWallets: data || [], loading: false })
+  },
+
+  followWallet: async (userId, address, label, chain = 'eth') => {
+    const existing = get().watchedWallets.find(
+      w => w.wallet_address.toLowerCase() === address.toLowerCase() && w.chain === chain
+    )
+    if (existing) return { error: null }
+
+    const tempId = `temp-${Date.now()}`
+    set(s => ({ watchedWallets: [...s.watchedWallets, { id: tempId, wallet_address: address, label, chain }] }))
+    const { data, error } = await supabase
+      .from('whale_watchlist')
+      .insert({ user_id: userId, wallet_address: address, label: label || 'Unlabeled', chain, is_active: true })
+      .select('id, wallet_address, label, chain')
+      .single()
+
+    if (error) {
+      set(s => ({ watchedWallets: s.watchedWallets.filter(w => w.id !== tempId) }))
+      return { error }
+    }
+    set(s => ({ watchedWallets: s.watchedWallets.map(w => w.id === tempId ? data : w) }))
+    return { error: null }
+  },
+
+  unfollowWallet: async (userId, walletId) => {
+    set(s => ({ watchedWallets: s.watchedWallets.filter(w => w.id !== walletId) }))
+    const { error } = await supabase
+      .from('whale_watchlist')
+      .delete()
+      .eq('id', walletId)
+      .eq('user_id', userId)
+    if (error) {
+      await get().fetchWatched(userId)
+      return { error }
+    }
+    return { error: null }
+  },
+
+  isFollowing: (address, chain = 'eth') => {
+    return get().watchedWallets.some(
+      w => w.wallet_address.toLowerCase() === address.toLowerCase() && w.chain === chain
+    )
+  },
+
+  getWatchEntry: (address, chain = 'eth') => {
+    return get().watchedWallets.find(
+      w => w.wallet_address.toLowerCase() === address.toLowerCase() && w.chain === chain
+    ) || null
+  },
+
+  fetchProfile: async (address, chain = 'eth') => {
+    const key = `${address.toLowerCase()}:${chain}`
+    if (get().profiles[key]) return get().profiles[key]
+    const { data } = await supabase
+      .from('wallet_profiles')
+      .select('*')
+      .eq('address', address.toLowerCase())
+      .eq('chain', chain)
+      .maybeSingle()
+    if (data) {
+      set(s => ({ profiles: { ...s.profiles, [key]: data } }))
+      return data
+    }
+    return null
+  },
+}))
+
 // --- Settings Store (persisted) ----------------------------------
 export const useSettingsStore = create(
   persist(

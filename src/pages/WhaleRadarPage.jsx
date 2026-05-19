@@ -1,8 +1,8 @@
 import React, { useState, useEffect, useCallback } from 'react'
-import { motion } from 'framer-motion'
+import { motion, AnimatePresence } from 'framer-motion'
 import { useNavigate } from 'react-router-dom'
 import { useAccount } from 'wagmi'
-import { Radar, Plus, Trash2, Eye, Sparkles } from 'lucide-react'
+import { Radar, Plus, Trash2, Eye, Sparkles, ChevronDown, ChevronUp } from 'lucide-react'
 import toast from 'react-hot-toast'
 import { supabase } from '../lib/supabase'
 import { useAuthStore, useWhaleStore } from '../store'
@@ -11,6 +11,7 @@ import { friendlyError } from '../lib/errors'
 import Paywall from '../components/Paywall'
 import AddWalletModal from '../components/whale/AddWalletModal'
 import ActivityFeed from '../components/whale/ActivityFeed'
+import WalletIntelPanel from '../components/whale/WalletIntelPanel'
 
 const EXPLORER_HOSTS = {
   eth: 'etherscan.io',
@@ -29,6 +30,7 @@ export default function WhaleRadarPage() {
   const [showAddModal, setShowAddModal] = useState(false)
   const [activeChain, setActiveChain] = useState('all')
   const [upgradeRequired, setUpgradeRequired] = useState(false)
+  const [expandedWallet, setExpandedWallet] = useState(null)
   const ADMIN_WALLET = import.meta.env.VITE_ADMIN_WALLET?.toLowerCase()
   const isAdmin = isConnected && address?.toLowerCase() === ADMIN_WALLET
 
@@ -246,33 +248,61 @@ export default function WhaleRadarPage() {
               <div className="space-y-2">
                 {watchlist.map(w => {
                   const recentMove = activity.find(a => a.wallet_address?.toLowerCase() === w.wallet_address?.toLowerCase())
+                  const isExpanded = expandedWallet === w.id
                   return (
                     <motion.div
                       key={w.id}
                       initial={{ opacity: 0 }}
                       animate={{ opacity: 1 }}
-                      className="flex items-center gap-3 p-3 bg-surface2 rounded-lg border border-border"
+                      className="bg-surface2 rounded-lg border border-border overflow-hidden"
                     >
-                      <div className={`dot-live ${recentMove ? '' : 'opacity-30'}`} />
-                      <div className="flex-1 min-w-0">
-                        <div className="text-sm font-medium truncate">{w.label || 'Unlabeled'}</div>
-                        <div className="font-mono text-xs text-muted truncate">
-                          {w.wallet_address.slice(0, 12)}...{w.wallet_address.slice(-6)}
-                        </div>
-                        <div className="flex items-center gap-2 mt-0.5">
-                          <span className={`badge text-[10px] ${w.chain === 'eth' ? 'badge-purple' : 'badge-cyan'}`}>
-                            {w.chain.toUpperCase()}
-                          </span>
-                          {recentMove && (
-                            <span className="text-[10px] text-muted">
-                              Last: {recentMove.method_name?.slice(0, 20)}
+                      <div className="flex items-center gap-3 p-3">
+                        <div className={`dot-live ${recentMove ? '' : 'opacity-30'}`} />
+                        <div className="flex-1 min-w-0">
+                          <div className="text-sm font-medium truncate">{w.label || 'Unlabeled'}</div>
+                          <div className="font-mono text-xs text-muted truncate">
+                            {w.wallet_address.slice(0, 12)}...{w.wallet_address.slice(-6)}
+                          </div>
+                          <div className="flex items-center gap-2 mt-0.5">
+                            <span className={`badge text-[10px] ${w.chain === 'eth' ? 'badge-purple' : 'badge-cyan'}`}>
+                              {w.chain.toUpperCase()}
                             </span>
-                          )}
+                            {recentMove && (
+                              <span className="text-[10px] text-muted">
+                                Last: {recentMove.method_name?.slice(0, 20)}
+                              </span>
+                            )}
+                          </div>
                         </div>
+                        <button
+                          onClick={() => setExpandedWallet(isExpanded ? null : w.id)}
+                          className="text-muted hover:text-accent p-1"
+                          title="Wallet Intelligence"
+                        >
+                          {isExpanded ? <ChevronUp size={13} /> : <ChevronDown size={13} />}
+                        </button>
+                        <button onClick={() => removeWallet(w.id, w.label)} className="text-muted hover:text-accent2 p-1">
+                          <Trash2 size={13} />
+                        </button>
                       </div>
-                      <button onClick={() => removeWallet(w.id, w.label)} className="text-muted hover:text-accent2 p-1">
-                        <Trash2 size={13} />
-                      </button>
+                      <AnimatePresence>
+                        {isExpanded && (
+                          <motion.div
+                            initial={{ height: 0, opacity: 0 }}
+                            animate={{ height: 'auto', opacity: 1 }}
+                            exit={{ height: 0, opacity: 0 }}
+                            transition={{ duration: 0.18 }}
+                            className="border-t border-border px-3 py-3"
+                          >
+                            <WalletIntelPanel
+                              address={w.wallet_address}
+                              chain={w.chain}
+                              label={w.label}
+                              recentActivity={activity}
+                            />
+                          </motion.div>
+                        )}
+                      </AnimatePresence>
                     </motion.div>
                   )
                 })}

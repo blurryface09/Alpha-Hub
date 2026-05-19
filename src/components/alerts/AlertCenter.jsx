@@ -5,7 +5,7 @@ import { useNotificationStore } from '../../store'
 import { AlertTypeBadge, SeverityDot, getTypeIcon, getTypeColor } from './AlertBadge'
 
 // Alerts that belong to the "whale" filter tab
-const WHALE_TYPES = new Set(['whale_mint', 'whale_move'])
+const WHALE_TYPES = new Set(['whale_mint', 'whale_move', 'wallet_entry', 'wallet_repeat_mint', 'wallet_large_mint'])
 // Alerts that belong to the "project" filter tab
 const PROJECT_TYPES = new Set([
   'project_live', 'stealth_delay', 'schedule_changed', 'price_changed',

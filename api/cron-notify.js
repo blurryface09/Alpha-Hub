@@ -1,6 +1,7 @@
 import { createClient } from '@supabase/supabase-js'
 import { detectProjectChanges, detectStealthDelay, shouldCheckThisTick, buildDedupKey, buildAlertTitle, buildAlertMessage, ALERT_TYPES } from '../worker/lib/monitor.js'
 import { createAlert } from '../worker/lib/alerter.js'
+import { buildWalletProfile, detectLargeMint, detectRepeatMint, detectWalletEntry } from '../worker/lib/wallet-intelligence.js'
 
 const MONITOR_TICK_MS   = 5 * 60 * 1000
 const MONITOR_BATCH     = 40
@@ -310,6 +311,104 @@ async function runMonitorSweep(supabase) {
   return alerted
 }
 
+// ── Wallet Intel sweep ────────────────────────────────────────────────────────
+
+async function runWalletIntelSweep(supabase, now) {
+  let alerted = 0
+  const since = new Date(now.getTime() - MONITOR_TICK_MS * 2).toISOString()
+
+  // Recent whale mints only
+  const { data: recent } = await supabase
+    .from('whale_activity')
+    .select('id, user_id, wallet_address, contract_address, value_eth, chain, is_mint, method_name, tx_hash, timestamp')
+    .eq('is_mint', true)
+    .gte('timestamp', since)
+    .limit(200)
+
+  if (!recent?.length) return alerted
+
+  // ── Update wallet_profiles (conviction cache) ──────────────────────────────
+  const byWalletChain = {}
+  for (const a of recent) {
+    const key = `${a.wallet_address?.toLowerCase()}:${a.chain || 'eth'}`
+    if (!byWalletChain[key]) byWalletChain[key] = []
+    byWalletChain[key].push(a)
+  }
+
+  for (const [key, acts] of Object.entries(byWalletChain)) {
+    const [address, chain] = key.split(':')
+    // Pull full history for accurate scoring
+    const { data: history } = await supabase
+      .from('whale_activity')
+      .select('is_mint, contract_address, value_eth, timestamp')
+      .eq('wallet_address', address)
+      .eq('chain', chain)
+      .limit(500)
+
+    const profile = buildWalletProfile(history || acts)
+    await supabase.from('wallet_profiles').upsert({
+      address, chain, ...profile, updated_at: new Date().toISOString(),
+    }, { onConflict: 'address,chain' })
+  }
+
+  // ── Wallet-entry alerts (whale minted a project you track) ─────────────────
+  const contracts = [...new Set(recent.map(a => a.contract_address).filter(Boolean))]
+  const userIds   = [...new Set(recent.map(a => a.user_id).filter(Boolean))]
+
+  if (contracts.length && userIds.length) {
+    const { data: matchProjects } = await supabase
+      .from('wl_projects')
+      .select('id, name, user_id, contract_address')
+      .in('contract_address', contracts)
+      .in('user_id', userIds)
+
+    for (const proj of matchProjects || []) {
+      const trigger = recent.find(
+        a => a.contract_address === proj.contract_address && a.user_id === proj.user_id
+      )
+      if (!trigger) continue
+      const alert = detectWalletEntry(trigger, proj.name)
+      if (!alert) continue
+      const id = await createAlert(supabase, { userId: proj.user_id, ...alert })
+      if (id) alerted++
+    }
+  }
+
+  // ── Per-activity alerts: large mint + repeat mint ──────────────────────────
+  for (const act of recent) {
+    if (!act.user_id) continue
+
+    // Large mint
+    const largeAlert = detectLargeMint(act)
+    if (largeAlert) {
+      const id = await createAlert(supabase, { userId: act.user_id, ...largeAlert })
+      if (id) alerted++
+    }
+
+    // Repeat mint — check for prior mint to same contract
+    if (act.contract_address) {
+      const { data: prior } = await supabase
+        .from('whale_activity')
+        .select('id')
+        .eq('user_id', act.user_id)
+        .eq('wallet_address', act.wallet_address)
+        .eq('contract_address', act.contract_address)
+        .eq('is_mint', true)
+        .lt('timestamp', act.timestamp)
+        .limit(1)
+        .maybeSingle()
+
+      const repeatAlert = detectRepeatMint(act, !!prior)
+      if (repeatAlert) {
+        const id = await createAlert(supabase, { userId: act.user_id, ...repeatAlert })
+        if (id) alerted++
+      }
+    }
+  }
+
+  return alerted
+}
+
 // ── Handler ───────────────────────────────────────────────────────────────────
 
 export default async function handler(req, res) {
@@ -335,7 +434,7 @@ export default async function handler(req, res) {
   const now = new Date()
   log('info', 'cron-notify start', { ts: now.toISOString() })
 
-  const stats = { reminders: 0, live_alerts: 0, monitor_alerted: 0, errors: [] }
+  const stats = { reminders: 0, live_alerts: 0, monitor_alerted: 0, wallet_alerted: 0, errors: [] }
 
   try {
     await updateProjectStatuses(supabase, now)
@@ -365,6 +464,13 @@ export default async function handler(req, res) {
     log('error', 'monitor sweep error', { err: e.message })
   }
 
+  try {
+    stats.wallet_alerted = await runWalletIntelSweep(supabase, now)
+  } catch (e) {
+    stats.errors.push('wallet_intel: ' + e.message)
+    log('error', 'wallet intel sweep error', { err: e.message })
+  }
+
   const duration_ms = Date.now() - startMs
   log('info', 'cron-notify complete', { ...stats, duration_ms })
 
@@ -375,6 +481,7 @@ export default async function handler(req, res) {
     reminders:       stats.reminders,
     live_alerts:     stats.live_alerts,
     monitor_alerted: stats.monitor_alerted,
+    wallet_alerted:  stats.wallet_alerted,
     errors:          stats.errors.length ? stats.errors : undefined,
   })
 }

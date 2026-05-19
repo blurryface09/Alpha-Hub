@@ -21,6 +21,9 @@ const DEDUP_WINDOWS_MS = {
   status_changed:     60 * 60 * 1000,
   whale_mint:          5 * 60 * 1000,   // per-tx (short window; tx_hash in data is unique key)
   whale_move:          5 * 60 * 1000,
+  wallet_entry:        6 * 60 * 60 * 1000,  // 6 hours per wallet+contract
+  wallet_repeat_mint: 24 * 60 * 60 * 1000,  // 24 hours per wallet+contract
+  wallet_large_mint:   1 * 60 * 60 * 1000,  // 1 hour per wallet+tx
   default:            60 * 60 * 1000,
 }
 

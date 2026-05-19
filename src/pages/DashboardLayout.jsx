@@ -6,7 +6,7 @@ import {
   User, Bell, LogOut, Menu, X, Zap, Compass
 } from 'lucide-react'
 import { useAccount } from 'wagmi'
-import { useAuthStore, useNotificationStore, useMonitorStore } from '../store'
+import { useAuthStore, useNotificationStore, useMonitorStore, useWalletIntelStore } from '../store'
 import { useSubscription } from '../hooks/useSubscription'
 import { planLabel } from '../lib/access'
 import ConnectWallet from '../components/shared/ConnectWallet'
@@ -29,6 +29,7 @@ export default function DashboardLayout() {
   const { subscription, plan, isActive, isPending, isFree } = useSubscription()
   const { notifications, unreadCount, fetch: fetchNotifs, subscribe, markAllRead } = useNotificationStore()
   const { fetchWatched } = useMonitorStore()
+  const { fetchWatched: fetchWatchedWallets } = useWalletIntelStore()
   const [sidebarOpen, setSidebarOpen] = useState(false)
   const [notifOpen, setNotifOpen] = useState(false)
   const navigate = useNavigate()
@@ -39,6 +40,7 @@ export default function DashboardLayout() {
     if (user) {
       fetchNotifs(user.id)
       fetchWatched(user.id)
+      fetchWatchedWallets(user.id)
       const unsub = subscribe(user.id)
       return unsub
     }
