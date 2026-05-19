@@ -120,7 +120,8 @@ export default function ProjectCard({ project, isMinting, isDeleting, onMint, on
   const mintPrice = displayMintPrice(project.mint_price)
   const { user } = useAuthStore()
   const { watchedProjects, follow, unfollow, loading: watchLoading } = useMonitorStore()
-  const isWatching = project.calendar_project_id ? watchedProjects.has(project.calendar_project_id) : false
+  const watchId = project.calendar_project_id || project.id
+  const isWatching = watchedProjects.has(watchId)
 
   const handleFetchIntel = async function() {
     setIntelLoading(true)
@@ -198,9 +199,9 @@ export default function ProjectCard({ project, isMinting, isDeleting, onMint, on
               </div>
             </div>
             <div className="flex items-center gap-2 flex-shrink-0">
-              {project.calendar_project_id && user && (
+              {user && (
                 <button
-                  onClick={() => isWatching ? unfollow(user.id, project.calendar_project_id) : follow(user.id, project.calendar_project_id)}
+                  onClick={() => isWatching ? unfollow(user.id, watchId) : follow(user.id, watchId)}
                   disabled={watchLoading}
                   title={isWatching ? 'Unwatch project' : 'Watch project'}
                   className={`p-1.5 rounded-md border transition-all ${isWatching ? 'border-accent/40 text-accent bg-accent/8 hover:bg-accent/15' : 'border-border2 text-muted hover:border-accent hover:text-accent'} ${watchLoading ? 'opacity-50 cursor-not-allowed' : ''}`}
