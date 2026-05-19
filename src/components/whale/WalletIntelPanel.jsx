@@ -138,11 +138,11 @@ export default function WalletIntelPanel({ address, chain = 'eth', label }) {
       {/* Header */}
       <div className="flex items-center gap-2">
         <Activity size={13} className="text-accent" />
-        <span className="text-xs font-semibold truncate">{label || shortAddr(address)}</span>
+        <span className="text-xs font-semibold truncate min-w-0">{label || shortAddr(address)}</span>
         {knownName && (
-          <span className="badge badge-green text-[10px]">Known Whale</span>
+          <span className="badge badge-green text-[10px] flex-shrink-0">Known Whale</span>
         )}
-        <span className={`badge text-[10px] ${chain === 'eth' ? 'badge-purple' : 'badge-cyan'}`}>
+        <span className={`badge text-[10px] flex-shrink-0 ${chain === 'eth' ? 'badge-purple' : 'badge-cyan'}`}>
           {chain.toUpperCase()}
         </span>
         <a
@@ -247,17 +247,19 @@ export default function WalletIntelPanel({ address, chain = 'eth', label }) {
                     <span className="font-mono text-muted max-w-[120px] truncate">
                       {tx.to.slice(0, 12)}...
                     </span>
-                    {parseFloat(tx.value) > 0 && (
-                      <span className="ml-auto text-green flex-shrink-0 text-right font-mono">
-                        {(parseFloat(tx.value) / 1e18).toFixed(3)} ETH
-                      </span>
-                    )}
-                    <button
-                      onClick={() => navigate(`/mintguard?contract=${tx.to}&chain=${chain}`)}
-                      className="text-[10px] px-1.5 py-0.5 rounded border border-accent/30 text-accent hover:bg-accent/10 transition-colors flex-shrink-0"
-                    >
-                      + Track
-                    </button>
+                    <div className="ml-auto flex items-center gap-1.5 flex-shrink-0">
+                      {parseFloat(tx.value) > 0 && (
+                        <span className="text-green text-right font-mono">
+                          {(parseFloat(tx.value) / 1e18).toFixed(3)} ETH
+                        </span>
+                      )}
+                      <button
+                        onClick={() => navigate(`/mintguard?contract=${tx.to}&chain=${chain}`)}
+                        className="text-[10px] px-1.5 py-0.5 rounded border border-accent/30 text-accent hover:bg-accent/10 transition-colors"
+                      >
+                        + Track
+                      </button>
+                    </div>
                   </div>
                 ))}
               </div>
