@@ -1,17 +1,18 @@
-import React, { useState, useEffect, useCallback } from 'react'
+import React, { useState, useEffect } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { useNavigate } from 'react-router-dom'
 import { useAccount } from 'wagmi'
 import { Radar, Plus, Trash2, Eye, Sparkles, ChevronDown, ChevronUp } from 'lucide-react'
 import toast from 'react-hot-toast'
 import { supabase } from '../lib/supabase'
-import { useAuthStore, useWhaleStore } from '../store'
+import { useAuthStore, useWhaleStore, useWalletIntelStore } from '../store'
 import { useSubscription } from '../hooks/useSubscription'
 import { friendlyError } from '../lib/errors'
 import Paywall from '../components/Paywall'
 import AddWalletModal from '../components/whale/AddWalletModal'
 import ActivityFeed from '../components/whale/ActivityFeed'
 import WalletIntelPanel from '../components/whale/WalletIntelPanel'
+import FollowWalletButton from '../components/whale/FollowWalletButton'
 
 const EXPLORER_HOSTS = {
   eth: 'etherscan.io',
@@ -24,9 +25,8 @@ export default function WhaleRadarPage() {
   const { user } = useAuthStore()
   const { address, isConnected } = useAccount()
   const { activity, fetch: fetchActivity, subscribe } = useWhaleStore()
+  const { watchedWallets, loading, followWallet, unfollowWallet, fetchWatched } = useWalletIntelStore()
   const { plan, limits, hasAccess, refresh } = useSubscription()
-  const [watchlist, setWatchlist] = useState([])
-  const [loading, setLoading] = useState(true)
   const [showAddModal, setShowAddModal] = useState(false)
   const [activeChain, setActiveChain] = useState('all')
   const [upgradeRequired, setUpgradeRequired] = useState(false)
@@ -34,40 +34,32 @@ export default function WhaleRadarPage() {
   const ADMIN_WALLET = import.meta.env.VITE_ADMIN_WALLET?.toLowerCase()
   const isAdmin = isConnected && address?.toLowerCase() === ADMIN_WALLET
 
-  const fetchWatchlist = useCallback(async () => {
-    if (!user) return
-    let query = supabase
-      .from('whale_watchlist')
-      .select('*')
-      .eq('is_active', true)
-    if (!isAdmin) query = query.eq('user_id', user.id)
-    const { data } = await query
-    setWatchlist(data || [])
-    setLoading(false)
-  }, [user, isAdmin])
+  // Admin needs full watchlist; regular users already loaded via DashboardLayout
+  useEffect(() => {
+    if (isAdmin && user) fetchWatched(null)
+  }, [isAdmin, user, fetchWatched])
 
   useEffect(() => {
-    fetchWatchlist()
     fetchActivity(isAdmin ? null : user?.id)
     if (!hasAccess('pro')) return undefined
     const unsub = subscribe(isAdmin ? null : user?.id)
     return unsub
-  }, [fetchWatchlist, fetchActivity, hasAccess, subscribe, user?.id, isAdmin])
+  }, [fetchActivity, hasAccess, subscribe, user?.id, isAdmin])
 
   useEffect(() => {
-    const refreshOnResume = () => {
-      fetchWatchlist()
-      fetchActivity(isAdmin ? null : user?.id)
-    }
+    const refreshOnResume = () => fetchActivity(isAdmin ? null : user?.id)
     window.addEventListener('alphahub:resume', refreshOnResume)
-    return () => {
-      window.removeEventListener('alphahub:resume', refreshOnResume)
-    }
-  }, [fetchActivity, fetchWatchlist, user?.id, isAdmin])
+    return () => window.removeEventListener('alphahub:resume', refreshOnResume)
+  }, [fetchActivity, user?.id, isAdmin])
+
+  // watchlist shown on this page
+  const watchlist = isAdmin
+    ? watchedWallets
+    : watchedWallets.filter(() => true) // already scoped to user by store
 
   const addWallet = async ({ address, label, chain }) => {
     try {
-      if (!user?.id) { toast.error('Not logged in -- please sign out and back in'); return }
+      if (!user?.id) { toast.error('Not logged in — please sign out and back in'); return }
       if (!address || !address.startsWith('0x')) { toast.error('Invalid wallet address'); return }
       if (watchlist.find(w => w.wallet_address.toLowerCase() === address.toLowerCase() && w.chain === chain)) {
         toast.error('Already watching this wallet')
@@ -78,35 +70,20 @@ export default function WhaleRadarPage() {
         toast.error(`Your ${plan || 'Free'} plan tracks ${limits.trackedWallets} wallet${limits.trackedWallets === 1 ? '' : 's'}. Upgrade to add more.`)
         return
       }
-      const insertPromise = supabase
-        .from('whale_watchlist')
-        .insert({ user_id: user.id, wallet_address: address, label: label || 'Unlabeled', chain, is_active: true })
-        .select()
-        .single()
-
-      const timeoutPromise = new Promise((_, reject) =>
-        setTimeout(() => reject(new Error('Request timed out after 10s')), 10000)
-      )
-
-      const { data, error } = await Promise.race([insertPromise, timeoutPromise])
-
+      const { error } = await followWallet(user.id, address, label, chain)
       if (error) {
-        console.error('Supabase whale error:', error.code, error.message)
         toast.error(friendlyError(error, 'Could not save this wallet. Please try again.'), { duration: 6000 })
         return
       }
-      setWatchlist(prev => [...prev, data])
       toast.success(`Watching ${label || address.slice(0, 12)}!`)
       setShowAddModal(false)
     } catch (err) {
-      console.error('Unexpected error adding wallet:', err)
       toast.error(friendlyError(err, 'Could not save this wallet. Please try again.'))
     }
   }
 
   const removeWallet = async (id, label) => {
-    await supabase.from('whale_watchlist').delete().eq('id', id)
-    setWatchlist(prev => prev.filter(w => w.id !== id))
+    await unfollowWallet(user.id, id)
     toast.success(`Removed ${label || 'wallet'}`)
   }
 
@@ -256,34 +233,47 @@ export default function WhaleRadarPage() {
                       animate={{ opacity: 1 }}
                       className="bg-surface2 rounded-lg border border-border overflow-hidden"
                     >
-                      <div className="flex items-center gap-3 p-3">
-                        <div className={`dot-live ${recentMove ? '' : 'opacity-30'}`} />
+                      <div className="flex items-center gap-2 p-3">
+                        <div className={`dot-live flex-shrink-0 ${recentMove ? '' : 'opacity-30'}`} />
                         <div className="flex-1 min-w-0">
-                          <div className="text-sm font-medium truncate">{w.label || 'Unlabeled'}</div>
+                          <div className="text-sm font-semibold truncate">{w.label || 'Unlabeled'}</div>
                           <div className="font-mono text-xs text-muted truncate">
-                            {w.wallet_address.slice(0, 12)}...{w.wallet_address.slice(-6)}
+                            {w.wallet_address.slice(0, 10)}…{w.wallet_address.slice(-6)}
                           </div>
-                          <div className="flex items-center gap-2 mt-0.5">
+                          <div className="flex items-center gap-2 mt-0.5 flex-wrap">
                             <span className={`badge text-[10px] ${w.chain === 'eth' ? 'badge-purple' : 'badge-cyan'}`}>
                               {w.chain.toUpperCase()}
                             </span>
                             {recentMove && (
                               <span className="text-[10px] text-muted">
-                                Last: {recentMove.method_name?.slice(0, 20)}
+                                {recentMove.method_name?.slice(0, 18)}
                               </span>
                             )}
                           </div>
                         </div>
-                        <button
-                          onClick={() => setExpandedWallet(isExpanded ? null : w.id)}
-                          className="text-muted hover:text-accent p-1"
-                          title="Wallet Intelligence"
-                        >
-                          {isExpanded ? <ChevronUp size={13} /> : <ChevronDown size={13} />}
-                        </button>
-                        <button onClick={() => removeWallet(w.id, w.label)} className="text-muted hover:text-accent2 p-1">
-                          <Trash2 size={13} />
-                        </button>
+                        <div className="flex items-center gap-1.5 flex-shrink-0">
+                          <FollowWalletButton
+                            address={w.wallet_address}
+                            chain={w.chain}
+                            label={w.label}
+                          />
+                          <button
+                            onClick={() => setExpandedWallet(isExpanded ? null : w.id)}
+                            title="Wallet Intelligence"
+                            className={`p-1.5 rounded-md border transition-all
+                              ${isExpanded
+                                ? 'border-accent/40 text-accent bg-accent/8'
+                                : 'border-border2 text-muted hover:border-accent hover:text-accent'}`}
+                          >
+                            {isExpanded ? <ChevronUp size={12} /> : <ChevronDown size={12} />}
+                          </button>
+                          <button
+                            onClick={() => removeWallet(w.id, w.label)}
+                            className="p-1.5 rounded-md border border-border2 text-muted hover:border-red-500/40 hover:text-red-400 transition-all"
+                          >
+                            <Trash2 size={12} />
+                          </button>
+                        </div>
                       </div>
                       <AnimatePresence>
                         {isExpanded && (
