@@ -151,6 +151,25 @@ export async function directUpdate(table, data, column, value) {
 }
 
 // Timeout wrapper
+export async function directDelete(table, column, value) {
+  const token = getAuthToken()
+  if (!token) throw new Error('Not authenticated')
+  const url = import.meta.env.VITE_SUPABASE_URL
+  const key = import.meta.env.VITE_SUPABASE_ANON_KEY
+  const response = await fetch(`${url}/rest/v1/${table}?${column}=eq.${value}`, {
+    method: 'DELETE',
+    headers: {
+      'apikey': key,
+      'Authorization': 'Bearer ' + token,
+    },
+  })
+  if (!response.ok) {
+    const err = await response.json().catch(() => ({ message: response.statusText }))
+    throw new Error(err.message || 'Delete failed')
+  }
+  return true
+}
+
 export async function withTimeout(promise, ms = 8000) {
   let timer
   const timeout = new Promise((_, reject) => {
