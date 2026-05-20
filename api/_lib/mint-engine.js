@@ -27,7 +27,7 @@ const RPC_URLS = {
   base: process.env.BASE_RPC_URL || 'https://mainnet.base.org',
   apechain: process.env.APECHAIN_RPC_URL || '',
   bnb: process.env.BNB_RPC_URL || 'https://bsc-dataseed.binance.org',
-  sepolia: process.env.SEPOLIA_RPC_URL || 'https://rpc.sepolia.org',
+  sepolia: process.env.SEPOLIA_RPC_URL || 'https://ethereum-sepolia-rpc.publicnode.com',
   'base-sepolia': process.env.BASE_SEPOLIA_RPC_URL || 'https://sepolia.base.org',
 }
 const EXPLORER_CHAIN_NAMES = {
