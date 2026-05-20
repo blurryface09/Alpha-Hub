@@ -35,6 +35,13 @@ alter table public.calendar_projects add column if not exists mint_date_source t
 alter table public.calendar_projects add column if not exists mint_date_confidence text default 'low';
 alter table public.calendar_projects add column if not exists mint_time_confirmed boolean default false;
 alter table public.calendar_projects add column if not exists mint_price text;
+alter table public.calendar_projects add column if not exists price_value numeric;
+alter table public.calendar_projects add column if not exists price_currency text;
+alter table public.calendar_projects add column if not exists price_label text;
+alter table public.calendar_projects add column if not exists price_note text;
+alter table public.calendar_projects add column if not exists price_confidence text;
+alter table public.calendar_projects add column if not exists stage_prices jsonb;
+alter table public.calendar_projects add column if not exists mint_schedule jsonb;
 alter table public.calendar_projects add column if not exists mint_type text default 'unknown';
 alter table public.calendar_projects add column if not exists status text default 'pending_review';
 alter table public.calendar_projects add column if not exists source text default 'community';
@@ -61,6 +68,9 @@ alter table public.calendar_projects add column if not exists submitted_by_label
 alter table public.calendar_projects add column if not exists first_seen_at timestamptz default now();
 alter table public.calendar_projects add column if not exists last_seen_at timestamptz default now();
 alter table public.calendar_projects add column if not exists last_synced_at timestamptz;
+alter table public.calendar_projects add column if not exists mint_status text;
+alter table public.calendar_projects add column if not exists mint_end_date timestamptz;
+alter table public.calendar_projects add column if not exists source_metadata jsonb;
 alter table public.calendar_projects add column if not exists created_by uuid;
 alter table public.calendar_projects add column if not exists created_by_wallet text;
 alter table public.calendar_projects add column if not exists approved_by uuid;
@@ -281,6 +291,7 @@ begin
   alter table public.wl_projects add column if not exists mint_time_confirmed_at timestamptz;
   alter table public.wl_projects add column if not exists execution_status text;
   alter table public.wl_projects add column if not exists notes text;
+  alter table public.wl_projects add column if not exists deleted_at timestamptz;
   alter table public.wl_projects add column if not exists automint_enabled boolean default false;
   alter table public.wl_projects add column if not exists max_mint_price numeric;
   alter table public.wl_projects add column if not exists max_gas_fee numeric;
@@ -445,3 +456,43 @@ on public.calendar_sync_runs
 for all
 using (public.alpha_hub_is_admin())
 with check (public.alpha_hub_is_admin());
+
+-- Execution optimization memory used by the Strike worker and mint preparation engine.
+alter table if exists public.mint_intents add column if not exists tx_resilience_state text;
+alter table if exists public.mint_intents add column if not exists replacement_tx_hash text;
+alter table if exists public.mint_intents add column if not exists last_nonce integer;
+alter table if exists public.mint_attempts add column if not exists metadata jsonb default '{}'::jsonb;
+alter table if exists public.mint_attempts add column if not exists gas_used numeric;
+alter table if exists public.mint_attempts add column if not exists rpc_label text;
+alter table if exists public.mint_attempts add column if not exists latency_ms numeric;
+alter table if exists public.mint_attempts add column if not exists confirmation_ms numeric;
+
+create table if not exists public.execution_optimization_profiles (
+  id uuid primary key default gen_random_uuid(),
+  chain text not null,
+  contract_key text not null,
+  contract_address text,
+  contract_type text,
+  best_rpc text,
+  best_function_path text,
+  success_count integer default 0,
+  failure_count integer default 0,
+  success_rate numeric default 0,
+  avg_latency_ms numeric,
+  avg_confirmation_ms numeric,
+  min_gas numeric,
+  max_gas numeric,
+  avg_gas numeric,
+  retry_profile jsonb default '{}'::jsonb,
+  successful_pattern jsonb default '{}'::jsonb,
+  last_success_at timestamptz,
+  last_failure_at timestamptz,
+  created_at timestamptz default now(),
+  updated_at timestamptz default now(),
+  unique(chain, contract_key)
+);
+
+create index if not exists execution_optimization_profiles_chain_idx
+on public.execution_optimization_profiles(chain, updated_at desc);
+
+alter table public.execution_optimization_profiles enable row level security;

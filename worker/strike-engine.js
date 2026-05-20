@@ -1,8 +1,21 @@
 import crypto from 'crypto'
 import { createClient } from '@supabase/supabase-js'
-import { createWalletClient, http } from 'viem'
+import { createPublicClient, createWalletClient, http } from 'viem'
 import { privateKeyToAccount } from 'viem/accounts'
 import { prepareMintTransaction } from '../api/_lib/mint-engine.js'
+import {
+  confirmationTimeoutMs,
+  loadExecutionProfile,
+  optimizationTelemetry,
+  orderRpcCandidates,
+  recordExecutionOptimization,
+  rpcTimeoutMs,
+} from '../api/_lib/execution-optimizer.js'
+import {
+  classifyTxError,
+  recordTxState,
+  waitForReceiptWithRecovery,
+} from './lib/tx-resilience.js'
 
 // ── New lib modules (loaded dynamically so engine still starts if files are missing) ──
 let FLAGS = null
@@ -106,11 +119,26 @@ const RUN_ONCE = String(process.env.STRIKE_WORKER_RUN_ONCE || '').toLowerCase() 
 const AUTO_STRIKE_ENABLED = String(process.env.AUTO_STRIKE_ENABLED || '').toLowerCase() === 'true'
 const ALPHA_VAULT_ENABLED = String(process.env.ALPHA_VAULT_ENABLED || '').toLowerCase() === 'true'
 
-const CHAIN_RPC = {
-  eth: process.env.ETH_RPC_URL || 'https://eth.llamarpc.com',
-  base: process.env.BASE_RPC_URL || 'https://mainnet.base.org',
-  apechain: process.env.APECHAIN_RPC_URL || '',
+const CHAIN_RPCS = {
+  eth: [
+    { label: 'ETH_RPC_URL', url: process.env.ETH_RPC_URL || 'https://eth.llamarpc.com' },
+    { label: 'ETH_RPC_URL_FALLBACK_1', url: process.env.ETH_RPC_URL_FALLBACK_1 || '' },
+    { label: 'ETH_RPC_URL_FALLBACK_2', url: process.env.ETH_RPC_URL_FALLBACK_2 || '' },
+  ],
+  base: [
+    { label: 'BASE_RPC_URL', url: process.env.BASE_RPC_URL || 'https://mainnet.base.org' },
+    { label: 'BASE_RPC_URL_FALLBACK_1', url: process.env.BASE_RPC_URL_FALLBACK_1 || '' },
+    { label: 'BASE_RPC_URL_FALLBACK_2', url: process.env.BASE_RPC_URL_FALLBACK_2 || '' },
+  ],
+  apechain: [
+    { label: 'APECHAIN_RPC_URL', url: process.env.APECHAIN_RPC_URL || '' },
+    { label: 'APECHAIN_RPC_URL_FALLBACK_1', url: process.env.APECHAIN_RPC_URL_FALLBACK_1 || '' },
+    { label: 'APECHAIN_RPC_URL_FALLBACK_2', url: process.env.APECHAIN_RPC_URL_FALLBACK_2 || '' },
+  ],
 }
+const CHAIN_RPC = Object.fromEntries(
+  Object.entries(CHAIN_RPCS).map(([chain, urls]) => [chain, urls.find(item => item.url)?.url || '']),
+)
 
 const CHAIN_IDS = {
   eth: 1,
@@ -183,13 +211,13 @@ function normalizeChain(chain = 'eth') {
   return 'eth'
 }
 
-function chainObject(chain) {
+function chainObject(chain, rpcUrl = CHAIN_RPC[chain]) {
   const id = CHAIN_IDS[chain] || 1
   return {
     id,
     name: chain === 'base' ? 'Base' : chain === 'apechain' ? 'ApeChain' : 'Ethereum',
     nativeCurrency: { name: 'Ether', symbol: 'ETH', decimals: 18 },
-    rpcUrls: { default: { http: [CHAIN_RPC[chain]].filter(Boolean) } },
+    rpcUrls: { default: { http: [rpcUrl].filter(Boolean) } },
   }
 }
 
@@ -270,6 +298,14 @@ async function legacyProcessIntent(supabase, queuedIntent) {
   const intent = await legacyClaimIntent(supabase, queuedIntent)
   if (!intent) return
 
+  let selectedRpc = null
+  let prepared = null
+  let prepareLatencyMs = null
+  let executionProfile = null
+  let chain = normalizeChain(intent.chain)
+  let currentNonce = null
+  let txHash = null
+
   try {
     await insertEvent(supabase, intent, 'preparing', 'Strike worker is preparing the mint.')
     const vault = await loadIntentVault(supabase, intent)
@@ -277,35 +313,98 @@ async function legacyProcessIntent(supabase, queuedIntent) {
 
     const privateKey = decryptPrivateKey(vault.encrypted_private_key, intent.user_id)
     const account = privateKeyToAccount(privateKey)
-    const chain = normalizeChain(intent.chain)
-    const rpc = CHAIN_RPC[chain]
-    if (!rpc) throw new Error('Strike RPC is not configured for this chain.')
-
-    const prepared = await prepareMintTransaction({
-      ...intent,
-      walletAddress: account.address,
-      mintPrice: intent.max_mint_price || '0',
-      maxTotalSpend: intent.max_total_spend,
+    executionProfile = await loadExecutionProfile(supabase, {
+      chain,
+      contractAddress: intent.contract_address,
     })
+    const rpcCandidates = orderRpcCandidates(chain, executionProfile, CHAIN_RPCS[chain] || [])
+    if (!rpcCandidates.length) throw new Error('Strike RPC is not configured for this chain.')
+
+    let lastPrepareError = null
+    for (const candidate of rpcCandidates) {
+      const startedAt = Date.now()
+      try {
+        prepared = await prepareMintTransaction({
+          ...intent,
+          walletAddress: account.address,
+          mintPrice: intent.max_mint_price || '0',
+          maxTotalSpend: intent.max_total_spend,
+          rpcUrl: candidate.url,
+          rpcLabel: candidate.label,
+          executionProfile,
+        })
+        selectedRpc = candidate
+        prepareLatencyMs = Date.now() - startedAt
+        break
+      } catch (error) {
+        lastPrepareError = error
+        await recordExecutionOptimization(supabase, {
+          intent,
+          chain,
+          contractAddress: intent.contract_address,
+          status: 'failed',
+          latencyMs: Date.now() - startedAt,
+          errorMessage: String(error?.message || error).slice(0, 180),
+          rpcLabel: candidate.label,
+        })
+      }
+    }
+    if (!prepared || !selectedRpc) throw lastPrepareError || new Error('Strike preparation failed.')
+    if (prepared.optimized || executionProfile?.success_count) {
+      await insertEvent(supabase, intent, 'optimized', 'Execution profile loaded for this contract.', {
+        ...optimizationTelemetry(executionProfile, {
+          chain,
+          contractAddress: intent.contract_address,
+          bestRpc: selectedRpc.label,
+        }),
+        readinessBoost: prepared.readinessBoost,
+      })
+    }
     await insertEvent(supabase, intent, 'simulating', 'Mint simulation passed. Broadcasting Strike transaction.', {
       functionName: prepared.functionName,
       chainId: prepared.chainId,
+      rpc: selectedRpc.label,
     })
 
     const walletClient = createWalletClient({
       account,
-      chain: chainObject(chain),
-      transport: http(rpc, { timeout: 10000 }),
+      chain: chainObject(chain, selectedRpc.url),
+      transport: http(selectedRpc.url, { timeout: rpcTimeoutMs(executionProfile, 10000) }),
+    })
+    const publicClient = createPublicClient({
+      chain: chainObject(chain, selectedRpc.url),
+      transport: http(selectedRpc.url, { timeout: rpcTimeoutMs(executionProfile, 10000) }),
     })
 
-    const txHash = await walletClient.sendTransaction({
+    currentNonce = await publicClient.getTransactionCount({ address: account.address, blockTag: 'pending' })
+    txHash = await walletClient.sendTransaction({
       to: prepared.to,
       data: prepared.data,
       value: BigInt(prepared.value || '0'),
       gas: prepared.gas ? BigInt(prepared.gas) : undefined,
+      nonce: currentNonce,
     })
 
     await recordAttempt(supabase, intent, 'submitted', { tx_hash: txHash })
+    await recordTxState(supabase, intent, 'pending', {
+      txHash,
+      chain,
+      nonce: currentNonce,
+      gas: prepared.gas,
+      reason: 'legacy_worker_submission',
+      message: 'Transaction submitted and waiting for confirmation.',
+    })
+    await recordExecutionOptimization(supabase, {
+      intent,
+      chain,
+      contractAddress: intent.contract_address,
+      status: 'submitted',
+      latencyMs: prepareLatencyMs,
+      gasUsed: prepared.gas,
+      functionName: prepared.functionName,
+      functionSource: prepared.source,
+      rpcLabel: selectedRpc.label,
+    })
     await supabase.from('mint_intents').update({
       status: 'submitted',
       tx_hash: txHash,
@@ -313,9 +412,58 @@ async function legacyProcessIntent(supabase, queuedIntent) {
       updated_at: new Date().toISOString(),
     }).eq('id', intent.id).throwOnError()
     await insertEvent(supabase, intent, 'submitted', 'Strike transaction submitted.', { txHash })
+    const recovery = await waitForReceiptWithRecovery({
+      supabase,
+      intent,
+      publicClient,
+      txHash,
+      chain,
+      nonce: currentNonce,
+      walletAddress: account.address,
+      timeoutMs: confirmationTimeoutMs(executionProfile),
+    })
+    if (recovery.status === 'confirmed') {
+      const receipt = recovery.receipt
+      await recordAttempt(supabase, intent, 'confirmed', { tx_hash: txHash, gas_used: receipt?.gasUsed?.toString?.() })
+      await insertEvent(supabase, intent, 'confirmed', 'Strike transaction confirmed.', {
+        txHash,
+        confirmationMs: recovery.latencyMs,
+      })
+      await recordExecutionOptimization(supabase, {
+        intent,
+        chain,
+        contractAddress: intent.contract_address,
+        status: 'confirmed',
+        confirmationMs: recovery.latencyMs,
+        gasUsed: receipt?.gasUsed?.toString?.() || prepared.gas,
+        functionName: prepared.functionName,
+        functionSource: prepared.source,
+        rpcLabel: selectedRpc.label,
+      })
+    }
     legacyLog('submitted', intent.id, txHash)
   } catch (error) {
     const message = String(error?.shortMessage || error?.message || 'Strike execution failed.').slice(0, 240)
+    await recordTxState(supabase, intent, classifyTxError(error) === 'dropped' ? 'dropped' : 'recovering', {
+      txHash,
+      chain,
+      nonce: currentNonce,
+      error: message,
+      reason: classifyTxError(error),
+      message: 'Transaction recovery recorded after execution failure.',
+    }).catch(() => null)
+    await recordExecutionOptimization(supabase, {
+      intent,
+      chain,
+      contractAddress: intent.contract_address,
+      status: 'failed',
+      latencyMs: prepareLatencyMs,
+      gasUsed: prepared?.gas,
+      functionName: prepared?.functionName,
+      functionSource: prepared?.source,
+      rpcLabel: selectedRpc?.label,
+      errorMessage: message,
+    })
     await recordAttempt(supabase, intent, 'failed', { error_message: message }).catch(() => null)
     await supabase.from('mint_intents').update({
       status: 'failed',

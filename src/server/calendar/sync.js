@@ -20,6 +20,13 @@ const EXTENDED_PROJECT_FIELDS = [
   'submitted_by_label',
   'mint_status',
   'mint_end_date',
+  'price_value',
+  'price_currency',
+  'price_label',
+  'price_note',
+  'price_confidence',
+  'stage_prices',
+  'mint_schedule',
   'source_metadata',
 ]
 

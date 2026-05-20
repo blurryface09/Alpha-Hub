@@ -121,11 +121,16 @@ export default function MintGuardPage() {
         .select('*')
         .eq('user_id', user.id)
         .neq('status', 'cancelled')
+        .not('status', 'eq', 'archived')
         .order('mint_date', { ascending: true, nullsFirst: false })
       const { data, error } = await query
       if (error) { console.error('fetchProjects error:', error); return }
       if (Array.isArray(data)) {
-        const updated = await autoUpdateStatus(data)
+        const visibleProjects = data.filter(project => (
+          !project.deleted_at &&
+          !['archived', 'cancelled'].includes(String(project.status || '').toLowerCase())
+        ))
+        const updated = await autoUpdateStatus(visibleProjects)
         setProjects(updated)
       }
     } catch(e) {
@@ -330,15 +335,23 @@ export default function MintGuardPage() {
     const snapshot = projects.find(p => p.id === id)
     setProjects(prev => prev.filter(p => p.id !== id))
     try {
-      const { error: delErr } = await supabase
-        .from('wl_projects')
-        .update({ status: 'cancelled' })
-        .eq('id', id)
-      if (delErr) throw new Error(delErr.message || 'Delete failed')
-      toast.success('Project removed')
-    } catch(e) {
+      const token = await getAuthToken()
+      if (!token) throw new Error('Sign in again before deleting this project.')
+      const response = await fetch('/api/calendar/delete-mintguard', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({ projectId: id }),
+      })
+      const data = await response.json().catch(() => ({}))
+      if (!response.ok || data?.ok === false) throw new Error(data.error || 'Could not delete this project. Please try again.')
+      toast.success(data.mode === 'archive' ? 'Project archived' : 'Project removed')
+    } catch (error) {
+      console.error('handleDelete project error:', error)
       if (snapshot) setProjects(prev => [snapshot, ...prev.filter(p => p.id !== id)])
-      toast.error('Could not delete this project. Please try again.')
+      toast.error(friendlyError(error, 'Could not delete this project. Please try again.'))
     } finally {
       setDeletingId(null)
     }

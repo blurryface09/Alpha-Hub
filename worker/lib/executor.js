@@ -12,6 +12,18 @@ import { isReadyToExecute, isInPrewarmWindow, msUntilExecute } from './timing.js
 import { loadExecutionWallet } from './wallet.js'
 import { withRetry, classifyError, nonceTracker } from './retry.js'
 import { claimIntent, transitionIntent, INTENT_STATES } from './queue.js'
+import {
+  confirmationTimeoutMs,
+  loadExecutionProfile,
+  optimizationTelemetry,
+  recordExecutionOptimization,
+} from '../../api/_lib/execution-optimizer.js'
+import {
+  classifyTxError,
+  recordTxState,
+  syncNonceAfterFailure,
+  waitForReceiptWithRecovery,
+} from './tx-resilience.js'
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -109,27 +121,47 @@ export async function dryRunIntent(intent, gasParams, wallet) {
 export async function executeIntent(supabase, queuedIntent) {
   const startMs = Date.now()
   const log = createLogger(queuedIntent.id, queuedIntent.user_id)
+  let intent = null
+  let chainKey = normaliseChain(queuedIntent.chain)
+  let executionProfile = null
+  let rpcLabel = null
+  let gasParams = null
+  let wallet = null
+  let txHash = null
+  let currentNonce = null
 
   // ── Step 1: Atomic claim ──────────────────────────────────────────────────
   log.info('claim', 'Attempting to claim intent')
-  const intent = await claimIntent(supabase, queuedIntent.id)
+  intent = await claimIntent(supabase, queuedIntent.id)
   if (!intent) {
     log.warn('claim', 'Intent already claimed by another worker — skipping')
     return
   }
 
-  const chainKey = normaliseChain(intent.chain)
+  chainKey = normaliseChain(intent.chain)
+  const rpcUrls = getRpcUrls(chainKey)
+  executionProfile = await loadExecutionProfile(supabase, {
+    chain: chainKey,
+    contractAddress: intent.contract_address || intent.mint_contract_address || intent.to,
+  })
+  rpcLabel = executionProfile?.best_rpc || (rpcUrls[0] ? `${chainKey}_rpc` : null)
   const transport = createViemTransport(chainKey)
   const publicClient = createPublicClient({
     chain: buildChainDescriptor(chainKey),
     transport,
   })
 
-  let gasParams = null
-  let wallet = null
-
   try {
     await insertEvent(supabase, intent, 'preparing', 'Strike worker: preparing execution')
+    if (executionProfile?.success_count) {
+      await insertEvent(supabase, intent, 'optimized', 'Execution profile loaded for this contract.', {
+        ...optimizationTelemetry(executionProfile, {
+          chain: chainKey,
+          contractAddress: intent.contract_address || intent.mint_contract_address || intent.to,
+          bestRpc: rpcLabel,
+        }),
+      }).catch(() => null)
+    }
 
     // ── Step 2: Load wallet ─────────────────────────────────────────────────
     log.info('prepare', 'Loading execution wallet')
@@ -220,12 +252,21 @@ export async function executeIntent(supabase, queuedIntent) {
     // ── Step 8: withRetry → sendTransaction ────────────────────────────────
     let currentGasParams = { ...gasParams }
     let pendingTxHash = null
+    let previousPendingTxHash = null
 
-    const txHash = await withRetry(
+    txHash = await withRetry(
       async (attempt) => {
         // Escalate gas on retries
         if (attempt > 0 && flagEnabled('GAS_ESCALATION_ENABLED')) {
           currentGasParams = escalateGas(currentGasParams, attempt)
+          await recordTxState(supabase, intent, 'accelerating', {
+            txHash: pendingTxHash,
+            chain: chainKey,
+            nonce: currentNonce,
+            reason: 'retry_gas_bump',
+            gasStrategy: currentGasParams.strategy,
+            message: 'Bumping gas for retry.',
+          })
           log.info('retry', 'Gas escalated for retry', {
             attempt,
             max_fee_gwei: currentGasParams.maxFeePerGas
@@ -248,6 +289,7 @@ export async function executeIntent(supabase, queuedIntent) {
           : await publicClient.getTransactionCount({ address: wallet.address, blockTag: 'pending' })
 
         nonceTracker.set(wallet.address, nonce)
+        currentNonce = nonce
 
         const hash = await wallet.walletClient.sendTransaction({
           ...baseTx,
@@ -255,7 +297,21 @@ export async function executeIntent(supabase, queuedIntent) {
           nonce,
         })
 
+        previousPendingTxHash = pendingTxHash
         pendingTxHash = hash
+        if (attempt > 0 || previousPendingTxHash) {
+          await recordTxState(supabase, intent, previousPendingTxHash && previousPendingTxHash !== hash ? 'replaced' : 'accelerated', {
+            txHash: hash,
+            previousTxHash: previousPendingTxHash,
+            chain: chainKey,
+            nonce,
+            gasStrategy: currentGasParams.strategy,
+            reason: 'replacement_submission',
+            message: previousPendingTxHash && previousPendingTxHash !== hash
+              ? 'Replacement transaction submitted.'
+              : 'Accelerated transaction submitted.',
+          })
+        }
         return hash
       },
       {
@@ -266,10 +322,24 @@ export async function executeIntent(supabase, queuedIntent) {
         publicClient,
         onRetry: async (attempt, err, classification) => {
           const errMsg = String(err?.shortMessage || err?.message || err).slice(0, 240)
+          const txReason = classifyTxError(err)
           await recordAttempt(supabase, intent, 'failed', {
             error_message: errMsg,
             tx_hash: pendingTxHash,
           }).catch(() => null)
+          await recordTxState(supabase, intent, txReason === 'nonce_sync' ? 'recovering' : 'accelerating', {
+            txHash: pendingTxHash,
+            chain: chainKey,
+            nonce: currentNonce,
+            reason: txReason,
+            error: errMsg,
+            message: txReason === 'nonce_sync'
+              ? 'Recovering nonce before retry.'
+              : 'Preparing retry with adjusted transaction settings.',
+          })
+          if (txReason === 'nonce_sync') {
+            await syncNonceAfterFailure(publicClient, wallet.address, nonceTracker, intent, supabase)
+          }
           await insertEvent(supabase, intent, 'retry', `Retry attempt ${attempt + 1}: ${classification.type}`, {
             attempt,
             error_type: classification.type,
@@ -289,20 +359,90 @@ export async function executeIntent(supabase, queuedIntent) {
     // ── Step 9: Success ─────────────────────────────────────────────────────
     const latencyMs = Date.now() - startMs
     await recordAttempt(supabase, intent, 'submitted', { tx_hash: txHash })
-    await transitionIntent(supabase, intent.id, INTENT_STATES.EXECUTING, INTENT_STATES.SUCCESS, {
+    await recordTxState(supabase, intent, 'pending', {
+      txHash,
+      chain: chainKey,
+      nonce: currentNonce,
+      latencyMs,
+      gasStrategy: currentGasParams.strategy,
+      message: 'Transaction submitted and waiting for confirmation.',
+    })
+    await recordExecutionOptimization(supabase, {
+      intent,
+      chain: chainKey,
+      contractAddress: intent.contract_address || intent.mint_contract_address || intent.to,
+      status: 'submitted',
+      latencyMs,
+      gasUsed: baseTx.gas?.toString?.(),
+      functionName: intent.function_name || intent.mint_function || null,
+      functionSource: intent.function_source || 'strike_engine',
+      rpcLabel,
+    })
+    await transitionIntent(supabase, intent.id, INTENT_STATES.EXECUTING, INTENT_STATES.PENDING, {
       tx_hash: txHash,
       strike_enabled: false,
-      last_state: 'Strike transaction submitted',
+      last_state: 'Transaction pending on-chain',
     })
-    await insertEvent(supabase, intent, 'success', 'Strike transaction submitted.', {
+    await insertEvent(supabase, intent, 'pending', 'Strike transaction submitted and pending confirmation.', {
       tx_hash: txHash,
       latency_ms: latencyMs,
+      nonce: currentNonce,
     })
     log.info('success', 'Intent executed successfully', {
       tx_hash: txHash,
       latency_ms: latencyMs,
       chain: chainKey,
     })
+
+    const recovery = await waitForReceiptWithRecovery({
+      supabase,
+      intent,
+      publicClient,
+      txHash,
+      chain: chainKey,
+      nonce: currentNonce,
+      walletAddress: wallet.address,
+      nonceTracker,
+      timeoutMs: confirmationTimeoutMs(executionProfile),
+    })
+
+    if (recovery.status === 'confirmed') {
+      const receipt = recovery.receipt
+      const confirmationMs = recovery.latencyMs
+      await recordAttempt(supabase, intent, 'confirmed', {
+        tx_hash: txHash,
+        gas_used: receipt?.gasUsed?.toString?.(),
+        confirmation_ms: confirmationMs,
+        rpc_label: rpcLabel,
+      }).catch(() => null)
+      await insertEvent(supabase, intent, 'confirmed', 'Strike transaction confirmed.', {
+        tx_hash: txHash,
+        confirmation_ms: confirmationMs,
+      }).catch(() => null)
+      await recordExecutionOptimization(supabase, {
+        intent,
+        chain: chainKey,
+        contractAddress: intent.contract_address || intent.mint_contract_address || intent.to,
+        status: 'confirmed',
+        latencyMs,
+        confirmationMs,
+        gasUsed: receipt?.gasUsed?.toString?.(),
+        functionName: intent.function_name || intent.mint_function || null,
+        functionSource: intent.function_source || 'strike_engine',
+        rpcLabel,
+      })
+      await transitionIntent(supabase, intent.id, INTENT_STATES.PENDING, INTENT_STATES.SUCCESS, {
+        tx_hash: txHash,
+        strike_enabled: false,
+        last_state: 'Strike transaction confirmed',
+      }).catch(() => null)
+    } else if (recovery.status === 'reverted' || recovery.status === 'dropped') {
+      await transitionIntent(supabase, intent.id, INTENT_STATES.PENDING, INTENT_STATES.FAILED, {
+        tx_hash: txHash,
+        strike_enabled: false,
+        last_state: recovery.status === 'dropped' ? 'Transaction dropped from mempool' : 'Transaction reverted on-chain',
+      }).catch(() => null)
+    }
 
   } catch (err) {
     // ── Step 10: Final failure ──────────────────────────────────────────────
@@ -316,6 +456,24 @@ export async function executeIntent(supabase, queuedIntent) {
       latency_ms: latencyMs,
     })
 
+    await recordExecutionOptimization(supabase, {
+      intent,
+      chain: chainKey,
+      contractAddress: intent?.contract_address || intent?.mint_contract_address || intent?.to,
+      status: 'failed',
+      latencyMs,
+      gasUsed: gasParams?.gas?.toString?.(),
+      rpcLabel,
+      errorMessage: message,
+    })
+    await recordTxState(supabase, intent, classifyTxError(err) === 'dropped' ? 'dropped' : 'recovering', {
+      txHash,
+      chain: chainKey,
+      nonce: currentNonce,
+      error: message,
+      reason: classifyTxError(err),
+      message: 'Transaction recovery recorded after execution failure.',
+    }).catch(() => null)
     await recordAttempt(supabase, intent, 'failed', { error_message: message }).catch(() => null)
     await supabase.from('mint_intents').update({
       status: INTENT_STATES.FAILED,

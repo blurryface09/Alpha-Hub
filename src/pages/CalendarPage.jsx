@@ -1,7 +1,7 @@
 import React, { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   Clock, ExternalLink, Gem, Loader, Plus, Radar, Share2,
-  Search, Shield, Sparkles, TrendingUp, Zap, Wand2
+  Search, Sparkles, Star, Target, TrendingUp, Wand2
 } from 'lucide-react'
 import toast from 'react-hot-toast'
 import { useAccount } from 'wagmi'
@@ -12,8 +12,6 @@ import { useSubscription } from '../hooks/useSubscription'
 import { friendlyError } from '../lib/errors'
 import {
   calendarQualityScore,
-  freshnessBonus,
-  isActiveMintCalendarProject,
   isLaunchReadyCalendarProject,
   isRawCalendarDiscovery,
   isStaleCalendarProject,
@@ -24,10 +22,11 @@ import { MINT_MODES, MINT_PHASES, recommendMintMode } from '../lib/mintModes'
 const ADMIN_WALLET = import.meta.env.VITE_ADMIN_WALLET?.toLowerCase()
 
 const TABS = [
-  { id: 'trending', label: 'Trending', icon: TrendingUp, copy: 'Highest visible activity and strongest tracked-wallet signals.' },
-  { id: 'hidden-gems', label: 'Hidden Gems', icon: Gem, copy: 'Low-noise mints with early contract, whale, or deployer signals.' },
-  { id: 'minting-now', label: 'Minting Now', icon: Zap, copy: 'Live launches, warm countdowns, and mints that need fast review.' },
-  { id: 'new-contracts', label: 'New Contracts', icon: Shield, copy: 'Fresh NFT-style contracts that need intelligence review.' },
+  { id: 'trending', label: 'Trending', icon: TrendingUp, copy: 'Strongest attention signals right now.' },
+  { id: 'minting-soon', label: 'Minting Soon', icon: Target, copy: 'Confirmed launches approaching soon.' },
+  { id: 'whale-minted', label: 'Whale Minted', icon: Radar, copy: 'Projects touched by watched or whale wallets.' },
+  { id: 'hidden-gems', label: 'Hidden Gems', icon: Gem, copy: 'Quiet projects with early quality signals.' },
+  { id: 'high-confidence', label: 'High Confidence', icon: Star, copy: 'Best metadata, timing, and source clarity.' },
 ]
 
 const CHAINS = [
@@ -49,18 +48,101 @@ function chainIdFor(chain) {
   return CHAINS.find(item => item.value === normalizeChain(chain))?.chainId || 1
 }
 
+function numberSignal(value, fallback = 0) {
+  const number = Number(value)
+  return Number.isFinite(number) ? number : fallback
+}
+
+function qualitySignal(project) {
+  return numberSignal(project.quality_score, calendarQualityScore(project))
+}
+
+function confidenceSignal(project) {
+  const confidence = String(project.source_confidence || project.mint_date_confidence || '').toLowerCase()
+  if (['high', 'confirmed', 'manual'].includes(confidence)) return 100
+  if (confidence === 'medium') return 62
+  if (confidence === 'low') return 28
+  return qualitySignal(project) >= 70 ? 55 : 20
+}
+
+function whaleSignal(project) {
+  const metadata = project.source_metadata || {}
+  return Math.max(
+    numberSignal(project.whale_interest_score),
+    numberSignal(project.tracked_wallet_count) * 18,
+    numberSignal(project.whale_count) * 20,
+    numberSignal(metadata.whale_interest_score),
+    numberSignal(metadata.tracked_wallet_count) * 18,
+    numberSignal(metadata.whale_mint_count) * 22,
+  )
+}
+
+function watchSignal(project) {
+  return Math.max(
+    numberSignal(project.watch_count),
+    numberSignal(project.watchers_count),
+    numberSignal(project.saved_count),
+    numberSignal(project.tracked_wallet_count),
+    numberSignal(project.rating_count) * 2,
+  )
+}
+
+function readinessSignal(project) {
+  let score = 0
+  if (project.contract_address) score += 24
+  if (project.mint_url || project.website_url || project.source_url) score += 18
+  if (project.mint_date) score += 22
+  if (project.mint_time_confirmed) score += 22
+  if (confidenceSignal(project) >= 80) score += 14
+  return Math.min(100, score)
+}
+
+function proximitySignal(project) {
+  if (isLive(project)) return 100
+  if (!project.mint_date) return 0
+  const diff = new Date(project.mint_date).getTime() - Date.now()
+  if (!Number.isFinite(diff) || diff < 0) return 0
+  const hours = diff / 3600000
+  if (hours <= 1) return 95
+  if (hours <= 6) return 86
+  if (hours <= 24) return 72
+  if (hours <= 72) return 56
+  if (hours <= 24 * 7) return 35
+  return 12
+}
+
+function freshnessSignal(project) {
+  const time = new Date(project.last_seen_at || project.first_seen_at || project.created_at || project.updated_at || 0).getTime()
+  if (!Number.isFinite(time) || !time) return 0
+  const hours = (Date.now() - time) / 3600000
+  if (hours <= 2) return 55
+  if (hours <= 12) return 42
+  if (hours <= 24) return 30
+  if (hours <= 72) return 18
+  return 5
+}
+
+function baseSignalScore(project) {
+  return (
+    qualitySignal(project) * 1.2 +
+    confidenceSignal(project) * 0.9 +
+    whaleSignal(project) * 1.1 +
+    watchSignal(project) * 8 +
+    readinessSignal(project) * 0.95 +
+    proximitySignal(project) * 1.1 +
+    freshnessSignal(project)
+  )
+}
+
 function scoreFor(project, tab) {
-  const sourcePriority = { admin: 500, community: 450, opensea: 350, alchemy: 330, zora: 300, onchain: 0 }[project.source] || 100
+  const sourcePriority = { admin: 500, community: 450, opensea_drops: 380, opensea: 350, alchemy: 330, zora: 300, onchain: 0 }[project.source] || 100
   const quality = Number(project.quality_score || calendarQualityScore(project))
-  const fresh = freshnessBonus(project)
   const userBoost = userInteractionBoost(project)
-  if (tab === 'hidden-gems') return (project.hidden_gem_score || 0) + fresh + userBoost
-  if (tab === 'new-contracts') return (project.first_seen_at ? new Date(project.first_seen_at).getTime() : 0) + quality
-  if (tab === 'minting-now') return sourcePriority + quality + (project.mint_count || project.hype_score || 0) + fresh
-  // Trending: amplify whale interest score when strong signal
-  const whaleRaw = project.whale_interest_score || 0
-  const whaleBoost = whaleRaw >= 70 ? whaleRaw * 2 : whaleRaw >= 40 ? whaleRaw * 1.4 : whaleRaw
-  return sourcePriority + quality + (project.hype_score || 0) + whaleBoost + fresh + userBoost
+  if (tab === 'minting-soon') return sourcePriority + proximitySignal(project) * 5 + readinessSignal(project) * 3 + confidenceSignal(project) * 2
+  if (tab === 'whale-minted') return sourcePriority + whaleSignal(project) * 6 + freshnessSignal(project) * 4 + quality
+  if (tab === 'hidden-gems') return sourcePriority + numberSignal(project.hidden_gem_score) * 4 + quality * 2 + freshnessSignal(project) - numberSignal(project.hype_score) + userBoost
+  if (tab === 'high-confidence') return sourcePriority + confidenceSignal(project) * 5 + readinessSignal(project) * 3 + quality * 2
+  return sourcePriority + baseSignalScore(project) + numberSignal(project.hype_score) * 2 + userBoost
 }
 
 function isLive(project) {
@@ -68,8 +150,8 @@ function isLive(project) {
   if (project.mint_status === 'live_now') return true
 
   if (!project.mint_date) return false
-  // Only trusted sources can use 'medium' confidence as confirmed
-  const trustedSource = ['opensea', 'alchemy', 'admin', 'community'].includes(project.source)
+  // Only trusted sources can use medium confidence as confirmed for Live Now.
+  const trustedSource = ['opensea_drops', 'opensea', 'alchemy', 'admin', 'community'].includes(project.source)
   const confidence = project.mint_date_confidence || project.source_confidence || 'low'
   const highConf = ['high', 'manual', 'confirmed'].includes(confidence)
   const confirmed = highConf || (confidence === 'medium' && trustedSource)
@@ -97,13 +179,36 @@ function friendlyMintStatus(project) {
 function tabFilter(project, tab) {
   const raw = isRawCalendarDiscovery(project)
   const quality = Number(project.quality_score || calendarQualityScore(project))
-  if (tab === 'new-contracts') return raw || project.status === 'pending_review' || !project.mint_date
-  if (tab === 'minting-now') return isActiveMintCalendarProject(project) && (quality >= 60 || project.source_confidence === 'high' || ['admin', 'community'].includes(project.source))
-  // Drop ended/stale projects from trending and hidden-gems
+  const launchReady = isLaunchReadyCalendarProject(project)
+  if (raw && tab !== 'whale-minted') return false
+  if (tab === 'minting-soon') {
+    if (!project.mint_date || !launchReady) return false
+    const diff = new Date(project.mint_date).getTime() - Date.now()
+    return Number.isFinite(diff) && diff > 0 && diff <= 7 * 24 * 60 * 60 * 1000
+  }
+  if (tab === 'whale-minted') return whaleSignal(project) > 0 && quality >= 40
+  // Filter ended/stale projects from curated tabs
   if (isStaleCalendarProject(project)) return false
-  if (!isLaunchReadyCalendarProject(project)) return false
+  if (!launchReady) return false
   if (tab === 'hidden-gems') return quality >= 50 && ((project.hidden_gem_score || 0) >= (project.hype_score || 0) || (project.hype_score || 0) < 45)
-  return quality >= 60
+  if (tab === 'high-confidence') return quality >= 60 && confidenceSignal(project) >= 80
+  return quality >= 60 || baseSignalScore(project) >= 260
+}
+
+function signalBadges(project, tab) {
+  const badges = []
+  const whale = whaleSignal(project)
+  const watch = watchSignal(project)
+  const ready = readinessSignal(project)
+  const fresh = freshnessSignal(project)
+  const proximity = proximitySignal(project)
+  if (whale > 0) badges.push({ label: 'Whale signal', tone: 'badge-purple' })
+  if (watch > 0) badges.push({ label: `${watch} watching`, tone: 'badge-cyan' })
+  if (ready >= 70) badges.push({ label: 'MintGuard ready', tone: 'badge-green' })
+  if (proximity >= 70) badges.push({ label: 'Soon', tone: 'badge-yellow' })
+  if (fresh >= 30) badges.push({ label: 'Fresh', tone: 'badge-cyan' })
+  if (tab === 'high-confidence' || confidenceSignal(project) >= 80) badges.push({ label: 'High confidence', tone: 'badge-green' })
+  return badges.slice(0, 4)
 }
 
 function countdown(project) {
@@ -121,6 +226,23 @@ function formatTime(project) {
   if (!project.mint_date) return 'Mint time not confirmed'
   const date = new Date(project.mint_date)
   return `${date.toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })} local / ${date.toISOString().slice(0, 16).replace('T', ' ')} UTC`
+}
+
+function projectSchedule(project) {
+  const schedule = project.mint_schedule || project.source_metadata?.schedule?.stages || project.source_metadata?.stages
+  return Array.isArray(schedule) ? schedule : []
+}
+
+function displayProjectPrice(project) {
+  const schedule = project.source_metadata?.schedule
+  const value = project.price_label || schedule?.price_label || project.mint_price
+  if (!value) return 'Price TBA'
+  const text = String(value).trim()
+  if (!text) return 'Price TBA'
+  if (/^tba$/i.test(text)) return 'Price TBA'
+  if (/free/i.test(text)) return 'Free mint'
+  if (/\b(ETH|WETH|SOL|MATIC|POL|BNB|APE|Ξ)\b/i.test(text)) return text
+  return text
 }
 
 function confidenceClass(confidence) {
@@ -475,7 +597,7 @@ export default function CalendarPage() {
         mint_date: project.mintDate ? project.mintDate.slice(0, 16) : prev.mint_date,
         mint_type: project.mintPhase || prev.mint_type,
         mint_phase: project.mintPhase || prev.mint_phase,
-        mint_price: project.mintPrice || prev.mint_price,
+        mint_price: project.priceLabel || project.mintPrice || prev.mint_price,
         notes: project.notes?.join(' ') || prev.notes,
       }))
       toast.success('Alpha detected. Confirm phase and mint mode.')
@@ -516,7 +638,15 @@ export default function CalendarPage() {
       })
       const data = await res.json().catch(() => ({}))
       if (!res.ok || data?.ok === false) throw new Error(data.error || 'Could not prepare mint')
-      setConsoleSteps(['Preparing project', 'Detecting phase', 'Checking contract', 'Preparing transaction', 'Simulating mint', selectedMode === 'strike' ? 'Watching mint window' : 'Gas locked'])
+      setConsoleSteps([
+        'Preparing project',
+        'Detecting phase',
+        'Checking contract',
+        'Preparing transaction',
+        'Simulating mint',
+        ...(data.optimized ? ['Optimized'] : []),
+        selectedMode === 'strike' ? 'Watching mint window' : 'Gas locked',
+      ])
       toast.success(data.message || `${MINT_MODES[selectedMode]?.label || 'Mint'} prepared.`)
     } catch (error) {
       setConsoleSteps(prev => [...prev, 'Failed'])
@@ -916,7 +1046,7 @@ export default function CalendarPage() {
         <Metric label="Pending" value={isAdmin ? (status?.pendingCount ?? 0) : '-'} tone="text-muted" />
       </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-4 gap-3 mb-5">
+      <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-5 gap-3 mb-5">
         {TABS.map(tab => {
           const Icon = tab.icon
           return (
@@ -974,7 +1104,7 @@ export default function CalendarPage() {
           <p className="text-sm text-muted mt-2 max-w-md">
             {calendarNotReady
               ? 'Alpha Radar storage is not ready yet. Apply the Alpha Radar SQL migration in Supabase before syncing real projects.'
-              : 'OpenSea, Alchemy, or Zora source data is needed for curated project listings. Raw onchain contracts only appear under New Contracts for review.'}
+              : 'OpenSea, Alchemy, or Zora source data is needed for curated project listings. Low-confidence raw contracts stay out of the daily alpha feed until they are enriched.'}
           </p>
           <div className="flex flex-col sm:flex-row gap-2 mt-4">
             {isAdmin && !calendarNotReady && <button onClick={runSync} disabled={syncing} className="btn-primary text-xs">{syncing ? 'Syncing...' : 'Run Sync Now'}</button>}
@@ -992,7 +1122,6 @@ export default function CalendarPage() {
               isAdmin={isAdmin}
               onOpen={() => { setSelectedProject(project); trackProjectView(project.id) }}
               onAdd={() => addToMintGuard(project)}
-              onSave={() => saveProject(project)}
               onStatus={status => updateStatus(project, status)}
               onRate={rating => rateProject(project, rating)}
               onShare={() => copyShare(project)}
@@ -1019,7 +1148,6 @@ export default function CalendarPage() {
           isAdmin={isAdmin}
           onClose={() => setSelectedProject(null)}
           onAdd={() => addToMintGuard(selectedProject)}
-          onSave={() => saveProject(selectedProject)}
           onStatus={status => updateStatus(selectedProject, status)}
           onRate={rating => rateProject(selectedProject, rating)}
           onShare={() => copyShare(selectedProject)}
@@ -1030,7 +1158,7 @@ export default function CalendarPage() {
   )
 }
 
-const ProjectCard = memo(function ProjectCard({ project, tab, isAdmin, onOpen, onAdd, onSave, onStatus, onRate, onShare, ratingBusy }) {
+const ProjectCard = memo(function ProjectCard({ project, tab, isAdmin, onOpen, onAdd, onStatus, onRate, onShare, ratingBusy }) {
   const live = isLive(project)
   const launchReady = isLaunchReadyCalendarProject(project)
   const quality = Number(project.quality_score || calendarQualityScore(project))
@@ -1038,11 +1166,15 @@ const ProjectCard = memo(function ProjectCard({ project, tab, isAdmin, onOpen, o
   const ratingCount = Number(project.rating_count || 0)
   const rankValue = tab === 'hidden-gems'
     ? project.hidden_gem_score || 0
-    : tab === 'new-contracts'
-    ? project.source_confidence || 'review'
+    : tab === 'whale-minted'
+    ? whaleSignal(project)
+    : tab === 'minting-soon'
+    ? proximitySignal(project)
+    : tab === 'high-confidence'
+    ? confidenceSignal(project)
     : project.hype_score || 0
-  const risk = Number(project.risk_score || 0)
   const needsReview = !launchReady || (project.source_confidence || project.mint_date_confidence || 'low') === 'low'
+  const badges = signalBadges(project, tab)
 
   return (
     <div className="card overflow-hidden p-4 hover:border-accent/40 hover:-translate-y-0.5 transition-all duration-200">
@@ -1066,20 +1198,21 @@ const ProjectCard = memo(function ProjectCard({ project, tab, isAdmin, onOpen, o
             <span className="badge badge-cyan">{normalizeChain(project.chain).toUpperCase()}</span>
             <span className={`badge ${confidenceClass(project.source_confidence || project.mint_date_confidence)}`}>{confidenceText(project)}</span>
             {(project.status === 'pending_review' || !launchReady) && <span className="badge badge-yellow">Needs Review</span>}
+            {badges.map(badge => <span key={badge.label} className={`badge ${badge.tone}`}>{badge.label}</span>)}
           </div>
           <h2 className="font-bold truncate">{projectTitle(project)}</h2>
           <p className="text-xs text-muted mt-1 line-clamp-2">{projectSummary(project)}</p>
         </div>
         <div className="text-right shrink-0">
           <div className={`font-mono font-bold ${live ? 'text-green' : 'text-accent3'}`}>{countdown(project)}</div>
-          <div className="text-[10px] text-muted uppercase tracking-widest mt-1">{project.mint_price || 'Price TBA'}</div>
+          <div className="text-[10px] text-muted uppercase tracking-widest mt-1">{displayProjectPrice(project)}</div>
         </div>
       </div>
 
       <div className="mt-4 grid grid-cols-2 sm:grid-cols-4 gap-2 text-xs">
-        <Signal label={tab === 'hidden-gems' ? 'Gem score' : 'Hype'} value={rankValue} />
+        <Signal label={tab === 'hidden-gems' ? 'Gem score' : tab === 'whale-minted' ? 'Whale' : tab === 'minting-soon' ? 'Soon' : tab === 'high-confidence' ? 'Trust' : 'Signal'} value={Math.round(numberSignal(rankValue))} />
         <Signal label="Quality" value={quality} tone={quality >= 60 ? 'text-green' : 'text-accent3'} />
-        <Signal label="Risk" value={project.risk_score ?? 'Review'} tone={risk > 60 ? 'text-accent2' : 'text-green'} />
+        <Signal label="Ready" value={readinessSignal(project)} tone={readinessSignal(project) >= 70 ? 'text-green' : 'text-accent3'} />
         <Signal label="Rating" value={ratingCount ? `${rating}/5` : 'New'} />
       </div>
 
@@ -1097,10 +1230,10 @@ const ProjectCard = memo(function ProjectCard({ project, tab, isAdmin, onOpen, o
       <div className="mt-4 space-y-2">
         <div className="flex gap-2">
           <button onClick={onOpen} className="btn-primary flex-1">View Details</button>
-          <button onClick={onAdd} className="btn-ghost flex-1">Add to Mints</button>
+          <button onClick={onAdd} className="btn-ghost flex-1">Track in MintGuard</button>
         </div>
         <div className="flex gap-2">
-          <button onClick={onSave} className="btn-ghost flex-1">Save</button>
+          <button onClick={onAdd} className="btn-ghost flex-1">Copy Mint</button>
           <button onClick={onShare} className="btn-ghost flex-1 flex items-center justify-center gap-1.5">
             <Share2 size={13} />Share
           </button>
@@ -1169,6 +1302,38 @@ function Metric({ label, value, tone = 'text-accent' }) {
       <div className={`text-lg font-bold ${tone}`}>{value}</div>
       <div className="section-label mt-1 mb-0 text-[10px]">{label}</div>
     </div>
+  )
+}
+
+function MintSchedule({ project }) {
+  const stages = projectSchedule(project)
+  if (!stages.length) return null
+  return (
+    <details className="mt-4 rounded-2xl border border-border bg-surface2/70 p-3" open>
+      <summary className="cursor-pointer font-semibold text-sm">Mint schedule</summary>
+      <div className="mt-3 space-y-2">
+        {stages.slice(0, 8).map((stage, index) => (
+          <div key={`${stage.stage_name || index}-${stage.start_time || index}`} className="rounded-xl border border-border bg-surface px-3 py-2">
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <div className="font-semibold">{stage.stage_name || `Stage ${index + 1}`}</div>
+                <div className="text-xs text-muted">{stage.access_type || 'Unknown access'} · {stage.status || 'needs review'}</div>
+              </div>
+              <div className="text-right text-sm font-mono text-accent">
+                {stage.price_label || 'Price TBA'}
+              </div>
+            </div>
+            <div className="mt-2 grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs text-muted">
+              <div>Starts: {stage.start_time ? formatTime({ mint_date: stage.start_time }) : 'OpenSea did not expose exact start time'}</div>
+              <div>Ends: {stage.end_time ? formatTime({ mint_date: stage.end_time }) : 'OpenSea did not expose exact end time'}</div>
+              <div>Limit: {stage.wallet_limit || 'Not exposed'}</div>
+              <div>Eligibility: {stage.eligibility || 'Not exposed'}</div>
+            </div>
+            {stage.price_note && <div className="mt-2 text-xs text-accent3">{stage.price_note}</div>}
+          </div>
+        ))}
+      </div>
+    </details>
   )
 }
 
@@ -1259,7 +1424,7 @@ function Field({ label, value, onChange, placeholder = '', required = false }) {
   )
 }
 
-function DetailDrawer({ project, isAdmin, onClose, onAdd, onSave, onStatus, onRate, onShare, ratingBusy }) {
+function DetailDrawer({ project, isAdmin, onClose, onAdd, onStatus, onRate, onShare, ratingBusy }) {
   const launchReady = isLaunchReadyCalendarProject(project)
   const needsReview = !launchReady || (project.source_confidence || project.mint_date_confidence || 'low') === 'low'
   const quality = Number(project.quality_score || calendarQualityScore(project))
@@ -1309,7 +1474,7 @@ function DetailDrawer({ project, isAdmin, onClose, onAdd, onSave, onStatus, onRa
             </div>
           )}
           <Info label="Mint time" value={formatTime(project)} />
-          <Info label="Mint price" value={project.mint_price || 'TBA'} />
+          <Info label="Mint price" value={displayProjectPrice(project)} />
           <Info label="Mint type" value={project.mint_type || 'unknown'} />
           <Info label="Contract" value={project.contract_address || 'Not detected yet'} mono />
           <Info label="Source confidence" value={confidenceExplanation(project)} />
@@ -1319,18 +1484,20 @@ function DetailDrawer({ project, isAdmin, onClose, onAdd, onSave, onStatus, onRa
           <Info label="What is missing" value={[
             !project.image_url ? 'project image' : null,
             !project.website_url && !project.mint_url && !project.source_url ? 'official link' : null,
-            !project.mint_price ? 'mint price' : null,
+            displayProjectPrice(project) === 'Price TBA' ? 'mint price' : null,
             !project.mint_time_confirmed ? 'confirmed mint time' : null,
           ].filter(Boolean).join(', ') || 'Core details available'} />
           <Info label="Strike Mode readiness" value={project.mint_time_confirmed ? 'Mint time confirmed. Still requires user opt-in and spend limits.' : 'Needs mint-time confirmation before Strike Mode.'} />
         </div>
 
+        <MintSchedule project={project} />
+
         <div className="flex flex-col sm:flex-row gap-2 mt-6">
           <button onClick={onAdd} className="btn-ghost flex-1">
-            Add to My Mints
+            Track in MintGuard
           </button>
-          <button onClick={onSave} className="btn-ghost flex-1">
-            Save
+          <button onClick={onAdd} className="btn-ghost flex-1">
+            Copy Mint
           </button>
           <button onClick={onShare} className="btn-primary flex-1 flex items-center justify-center gap-2">
             <Share2 size={14} />

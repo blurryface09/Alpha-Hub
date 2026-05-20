@@ -37,6 +37,16 @@ const CALENDAR_EXTENDED_FIELDS = [
   'community_name',
   'community_x_handle',
   'submitted_by_label',
+  'mint_status',
+  'mint_end_date',
+  'price_value',
+  'price_currency',
+  'price_label',
+  'price_note',
+  'price_confidence',
+  'stage_prices',
+  'mint_schedule',
+  'source_metadata',
 ]
 
 function calendarSchemaMissingResponse() {
@@ -108,6 +118,19 @@ function primaryWalletForUser(user) {
     .map(value => String(value).toLowerCase())
     .map(value => value.startsWith('web3:ethereum:') ? value.replace('web3:ethereum:', '') : value)
     .find(value => /^0x[a-f0-9]{40}$/.test(value)) || null
+}
+
+function walletCandidatesForUser(user) {
+  const primary = primaryWalletForUser(user)
+  return primary ? [primary] : []
+}
+
+function rowBelongsToUser(row, user) {
+  if (!row || !user) return false
+  if (row.user_id && row.user_id === user.id) return true
+  const wallets = walletCandidatesForUser(user)
+  const rowWallet = String(row.wallet_address || row.owner || row.wallet || '').toLowerCase()
+  return Boolean(rowWallet && wallets.includes(rowWallet))
 }
 
 function normalizeChain(chain) {
@@ -449,6 +472,67 @@ async function upsertProjectRelation(supabase, table, payload) {
     return { ...payload, localOnly: true }
   }
   throw error
+}
+
+async function safeDeleteProjectChildren(supabase, projectId, userId) {
+  const now = new Date().toISOString()
+  const attempts = [
+    {
+      wl_project_id: null,
+      strike_enabled: false,
+      strike_status: 'cancelled',
+      status: 'cancelled',
+      strike_error: 'MintGuard project removed',
+      updated_at: now,
+    },
+    {
+      wl_project_id: null,
+      status: 'cancelled',
+      updated_at: now,
+    },
+    {
+      wl_project_id: null,
+      updated_at: now,
+    },
+    {
+      wl_project_id: null,
+    },
+  ]
+
+  let lastError = null
+  for (const payload of attempts) {
+    const clean = Object.fromEntries(Object.entries(payload).filter(([, value]) => value !== undefined))
+    const { error } = await supabase
+      .from('mint_intents')
+      .update(clean)
+      .eq('wl_project_id', projectId)
+      .eq('user_id', userId)
+    if (!error) return
+    lastError = error
+    if (!isWriteShapeError(error)) break
+  }
+
+  if (lastError && !isWriteShapeError(lastError)) {
+    console.warn('MintGuard child cleanup warning:', lastError)
+  }
+}
+
+async function softArchiveMintGuardProject(supabase, projectId, user, project = null) {
+  const payloads = [
+    { status: 'archived', deleted_at: new Date().toISOString(), updated_at: new Date().toISOString() },
+    { status: 'cancelled', deleted_at: new Date().toISOString(), updated_at: new Date().toISOString() },
+    { status: 'cancelled', updated_at: new Date().toISOString() },
+  ]
+  let lastError = null
+  for (const payload of payloads) {
+    let query = supabase.from('wl_projects').update(payload).eq('id', projectId)
+    if (!isAdminUser(user) && project?.user_id) query = query.eq('user_id', project.user_id)
+    const { data, error } = await query.select().maybeSingle()
+    if (!error) return data || { id: projectId, ...payload }
+    lastError = error
+    if (!isWriteShapeError(error)) break
+  }
+  throw lastError || new Error('Archive failed')
 }
 
 async function getOptionalUser(req) {
@@ -798,6 +882,60 @@ export default async function handler(req, res) {
     } catch (error) {
       console.error('calendar copy-mint failed:', error)
       return res.status(500).json({ ok: false, error: 'Could not copy this mint. Please try again.' })
+    }
+  }
+
+  if (action === 'delete-mintguard') {
+    if (req.method !== 'POST') return res.status(405).json({ ok: false, error: 'Method not allowed' })
+    const user = await requireUser(req, res)
+    if (!user) return
+
+    const projectId = req.body?.projectId || req.body?.id || req.body?.wlProjectId
+    if (!projectId) return res.status(400).json({ ok: false, error: 'Project id is required' })
+
+    const supabase = createServiceClient()
+    try {
+      const { data: project, error: loadError } = await supabase
+        .from('wl_projects')
+        .select('*')
+        .eq('id', projectId)
+        .maybeSingle()
+
+      if (loadError) throw loadError
+      if (!project) return res.status(404).json({ ok: false, error: 'MintGuard project not found' })
+      if (!isAdminUser(user) && !rowBelongsToUser(project, user)) {
+        return res.status(403).json({ ok: false, error: 'You can only delete your own MintGuard projects' })
+      }
+
+      await safeDeleteProjectChildren(supabase, projectId, project.user_id || user.id)
+
+      let deleteQuery = supabase.from('wl_projects').delete().eq('id', projectId)
+      if (!isAdminUser(user) && project.user_id) deleteQuery = deleteQuery.eq('user_id', project.user_id)
+      const deleted = await deleteQuery.select().maybeSingle()
+      if (!deleted.error) {
+        console.log('MintGuard project deleted', { projectId, userId: user.id, mode: 'hard' })
+        return res.status(200).json({ ok: true, deleted: true, mode: 'hard', project: deleted.data || project })
+      }
+
+      console.warn('MintGuard hard delete failed, trying archive', {
+        projectId,
+        userId: user.id,
+        code: deleted.error?.code,
+        message: deleted.error?.message,
+      })
+
+      const archived = await softArchiveMintGuardProject(supabase, projectId, user, project)
+      console.log('MintGuard project archived', { projectId, userId: user.id, mode: 'archive' })
+      return res.status(200).json({ ok: true, deleted: true, mode: 'archive', project: archived || project })
+    } catch (error) {
+      console.error('MintGuard delete failed:', {
+        projectId,
+        userId: user?.id,
+        code: error?.code,
+        message: error?.message,
+        details: error?.details,
+      })
+      return res.status(500).json({ ok: false, error: 'Could not delete this project. Please try again.' })
     }
   }
 
