@@ -476,45 +476,34 @@ async function upsertProjectRelation(supabase, table, payload) {
 
 async function safeDeleteProjectChildren(supabase, projectId, userId) {
   const now = new Date().toISOString()
-  const attempts = [
-    {
-      wl_project_id: null,
-      strike_enabled: false,
-      strike_status: 'cancelled',
-      status: 'cancelled',
-      strike_error: 'MintGuard project removed',
-      updated_at: now,
-    },
-    {
-      wl_project_id: null,
-      status: 'cancelled',
-      updated_at: now,
-    },
-    {
-      wl_project_id: null,
-      updated_at: now,
-    },
-    {
-      wl_project_id: null,
-    },
+
+  // Null out wl_project_id in mint_intents (FK blocker if present)
+  const intentAttempts = [
+    { wl_project_id: null, strike_enabled: false, strike_status: 'cancelled', status: 'cancelled', strike_error: 'MintGuard project removed', updated_at: now },
+    { wl_project_id: null, status: 'cancelled', updated_at: now },
+    { wl_project_id: null, updated_at: now },
+    { wl_project_id: null },
   ]
 
   let lastError = null
-  for (const payload of attempts) {
+  for (const payload of intentAttempts) {
     const clean = Object.fromEntries(Object.entries(payload).filter(([, value]) => value !== undefined))
     const { error } = await supabase
       .from('mint_intents')
       .update(clean)
       .eq('wl_project_id', projectId)
       .eq('user_id', userId)
-    if (!error) return
+    if (!error) { lastError = null; break }
     lastError = error
     if (!isWriteShapeError(error)) break
   }
-
   if (lastError && !isWriteShapeError(lastError)) {
-    console.warn('MintGuard child cleanup warning:', lastError)
+    console.warn('MintGuard intent cleanup warning:', lastError)
   }
+
+  // Null out project_id in mint_log (FK blocker if present — table may or may not have FK)
+  await supabase.from('mint_log').update({ project_id: null }).eq('project_id', projectId).eq('user_id', userId)
+    .catch(() => null)
 }
 
 async function softArchiveMintGuardProject(supabase, projectId, user, project = null) {

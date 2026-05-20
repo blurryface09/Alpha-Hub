@@ -316,11 +316,13 @@ export default function MintGuardPage() {
       try {
         data = await directInsert('wl_projects', insertData)
       } catch (schemaError) {
-        if (!String(schemaError.message || '').includes('schema cache')) throw schemaError
+        const msg = String(schemaError.message || '').toLowerCase()
+        const isSchemaIssue = msg.includes('schema cache') || msg.includes('column') || msg.includes('does not exist') || msg.includes('42703')
+        if (!isSchemaIssue) throw schemaError
         const fallbackData = { ...insertData }
         OPTIONAL_PROJECT_FIELDS.forEach((field) => delete fallbackData[field])
         data = await directInsert('wl_projects', fallbackData)
-        console.warn('Saved project without optional automint safety columns. Apply the automint schema migration before launch.')
+        console.warn('Saved project without optional columns — run the automint schema migration.')
       }
       setProjects(prev => [data, ...prev])
       toast.success(`${data.name} added!`, { id: 'save-project' })
