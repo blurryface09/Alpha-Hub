@@ -108,9 +108,11 @@ const MINT_MODES = [
 ]
 
 const CHAINS = [
-  { val: 'eth',  label: 'Ethereum' },
-  { val: 'base', label: 'Base' },
-  { val: 'bnb',  label: 'BNB Chain' },
+  { val: 'eth',         label: 'Ethereum' },
+  { val: 'base',        label: 'Base' },
+  { val: 'bnb',         label: 'BNB Chain' },
+  { val: 'sepolia',     label: 'Sepolia (testnet)' },
+  { val: 'base-sepolia',label: 'Base Sepolia (testnet)' },
 ]
 
 // ── Strike Mode blockers ──────────────────────────────────────────────────────
