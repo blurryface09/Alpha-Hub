@@ -246,10 +246,15 @@ export default function AddProjectModal({ onAdd, onClose, initialValues = {}, pe
       // URL-only fallback (no API response)
       const mT = trimmed.match(/(?:twitter|x)\.com\/([^/?#]+)/)
       const mO = trimmed.match(/opensea\.io\/collection\/([^/?#]+)/)
+      const isContract = /^0x[a-fA-F0-9]{40}$/i.test(trimmed)
       const name = mT ? mT[1]
         : mO ? mO[1].replace(/-/g, ' ').replace(/\b\w/g, c => c.toUpperCase())
         : ''
-      setForm(makeForm({ source_url: trimmed, name }))
+      setForm(makeForm({
+        source_url: trimmed,
+        name,
+        ...(isContract && { contract_address: trimmed, source_type: 'contract' }),
+      }))
       setMeta(null)
       setStep(2)
     } finally {

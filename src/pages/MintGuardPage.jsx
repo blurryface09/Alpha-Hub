@@ -286,12 +286,14 @@ export default function MintGuardPage() {
     const insertData = {
       name: projectData.name || 'Unnamed',
       source_url: projectData.source_url || null,
-      source_type: projectData.source_type || 'website',
+      source_type: ['website', 'url', 'twitter', 'x', 'opensea', 'calendar', 'contract', 'whale_copy', 'alchemy', 'zora', 'community', 'admin'].includes(projectData.source_type)
+        ? projectData.source_type : 'website',
       chain: projectData.chain || 'eth',
       contract_address: projectData.contract_address || null,
       mint_date: mintDate,
       mint_price: projectData.mint_price || null,
-      wl_type: projectData.wl_type || 'UNKNOWN',
+      wl_type: ['UNKNOWN', 'GTD', 'FCFS', 'PUBLIC', 'RAFFLE', 'FREE', 'PAID', 'ALLOWLIST', 'WL'].includes(projectData.wl_type)
+        ? projectData.wl_type : 'UNKNOWN',
       mint_mode: projectData.mint_mode || 'confirm',
       automint_enabled: projectData.automint_enabled ?? false,
       max_mint: projectData.max_mint || 1,
