@@ -11,6 +11,11 @@ import {
   recordExecutionOptimization,
   rpcTimeoutMs,
 } from '../api/_lib/execution-optimizer.js'
+import {
+  classifyTxError,
+  recordTxState,
+  waitForReceiptWithRecovery,
+} from './lib/tx-resilience.js'
 
 // ── New lib modules (loaded dynamically so engine still starts if files are missing) ──
 let FLAGS = null
@@ -298,6 +303,8 @@ async function legacyProcessIntent(supabase, queuedIntent) {
   let prepareLatencyMs = null
   let executionProfile = null
   let chain = normalizeChain(intent.chain)
+  let currentNonce = null
+  let txHash = null
 
   try {
     await insertEvent(supabase, intent, 'preparing', 'Strike worker is preparing the mint.')
@@ -369,14 +376,24 @@ async function legacyProcessIntent(supabase, queuedIntent) {
       transport: http(selectedRpc.url, { timeout: rpcTimeoutMs(executionProfile, 10000) }),
     })
 
-    const txHash = await walletClient.sendTransaction({
+    currentNonce = await publicClient.getTransactionCount({ address: account.address, blockTag: 'pending' })
+    txHash = await walletClient.sendTransaction({
       to: prepared.to,
       data: prepared.data,
       value: BigInt(prepared.value || '0'),
       gas: prepared.gas ? BigInt(prepared.gas) : undefined,
+      nonce: currentNonce,
     })
 
     await recordAttempt(supabase, intent, 'submitted', { tx_hash: txHash })
+    await recordTxState(supabase, intent, 'pending', {
+      txHash,
+      chain,
+      nonce: currentNonce,
+      gas: prepared.gas,
+      reason: 'legacy_worker_submission',
+      message: 'Transaction submitted and waiting for confirmation.',
+    })
     await recordExecutionOptimization(supabase, {
       intent,
       chain,
@@ -395,38 +412,46 @@ async function legacyProcessIntent(supabase, queuedIntent) {
       updated_at: new Date().toISOString(),
     }).eq('id', intent.id).throwOnError()
     await insertEvent(supabase, intent, 'submitted', 'Strike transaction submitted.', { txHash })
-    try {
-      const confirmationStartedAt = Date.now()
-      const receipt = await publicClient.waitForTransactionReceipt({
-        hash: txHash,
-        confirmations: 1,
-        timeout: confirmationTimeoutMs(executionProfile),
-      })
+    const recovery = await waitForReceiptWithRecovery({
+      supabase,
+      intent,
+      publicClient,
+      txHash,
+      chain,
+      nonce: currentNonce,
+      walletAddress: account.address,
+      timeoutMs: confirmationTimeoutMs(executionProfile),
+    })
+    if (recovery.status === 'confirmed') {
+      const receipt = recovery.receipt
       await recordAttempt(supabase, intent, 'confirmed', { tx_hash: txHash, gas_used: receipt?.gasUsed?.toString?.() })
       await insertEvent(supabase, intent, 'confirmed', 'Strike transaction confirmed.', {
         txHash,
-        confirmationMs: Date.now() - confirmationStartedAt,
+        confirmationMs: recovery.latencyMs,
       })
       await recordExecutionOptimization(supabase, {
         intent,
         chain,
         contractAddress: intent.contract_address,
         status: 'confirmed',
-        confirmationMs: Date.now() - confirmationStartedAt,
+        confirmationMs: recovery.latencyMs,
         gasUsed: receipt?.gasUsed?.toString?.() || prepared.gas,
         functionName: prepared.functionName,
         functionSource: prepared.source,
         rpcLabel: selectedRpc.label,
       })
-    } catch (confirmationError) {
-      await insertEvent(supabase, intent, 'submitted', 'Transaction submitted. Confirmation is still pending.', {
-        txHash,
-        error: String(confirmationError?.message || confirmationError).slice(0, 180),
-      }).catch(() => null)
     }
     legacyLog('submitted', intent.id, txHash)
   } catch (error) {
     const message = String(error?.shortMessage || error?.message || 'Strike execution failed.').slice(0, 240)
+    await recordTxState(supabase, intent, classifyTxError(error) === 'dropped' ? 'dropped' : 'recovering', {
+      txHash,
+      chain,
+      nonce: currentNonce,
+      error: message,
+      reason: classifyTxError(error),
+      message: 'Transaction recovery recorded after execution failure.',
+    }).catch(() => null)
     await recordExecutionOptimization(supabase, {
       intent,
       chain,

@@ -54,6 +54,9 @@ create table if not exists public.mint_intents (
   simulation_status text,
   simulation_error text,
   last_state text,
+  tx_resilience_state text,
+  replacement_tx_hash text,
+  last_nonce integer,
   status text default 'draft',
   tx_hash text,
   created_at timestamptz default now(),
@@ -85,6 +88,9 @@ alter table public.mint_attempts add column if not exists rpc_label text;
 alter table public.mint_attempts add column if not exists latency_ms numeric;
 alter table public.mint_attempts add column if not exists confirmation_ms numeric;
 alter table public.mint_attempts add column if not exists function_name text;
+alter table public.mint_intents add column if not exists tx_resilience_state text;
+alter table public.mint_intents add column if not exists replacement_tx_hash text;
+alter table public.mint_intents add column if not exists last_nonce integer;
 
 create table if not exists public.mint_execution_events (
   id uuid primary key default gen_random_uuid(),

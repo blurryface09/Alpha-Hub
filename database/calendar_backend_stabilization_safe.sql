@@ -458,6 +458,15 @@ using (public.alpha_hub_is_admin())
 with check (public.alpha_hub_is_admin());
 
 -- Execution optimization memory used by the Strike worker and mint preparation engine.
+alter table if exists public.mint_intents add column if not exists tx_resilience_state text;
+alter table if exists public.mint_intents add column if not exists replacement_tx_hash text;
+alter table if exists public.mint_intents add column if not exists last_nonce integer;
+alter table if exists public.mint_attempts add column if not exists metadata jsonb default '{}'::jsonb;
+alter table if exists public.mint_attempts add column if not exists gas_used numeric;
+alter table if exists public.mint_attempts add column if not exists rpc_label text;
+alter table if exists public.mint_attempts add column if not exists latency_ms numeric;
+alter table if exists public.mint_attempts add column if not exists confirmation_ms numeric;
+
 create table if not exists public.execution_optimization_profiles (
   id uuid primary key default gen_random_uuid(),
   chain text not null,
