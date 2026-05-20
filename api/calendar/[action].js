@@ -502,8 +502,9 @@ async function safeDeleteProjectChildren(supabase, projectId, userId) {
   }
 
   // Null out project_id in mint_log (FK blocker if present — table may or may not have FK)
-  await supabase.from('mint_log').update({ project_id: null }).eq('project_id', projectId).eq('user_id', userId)
-    .catch(() => null)
+  try {
+    await supabase.from('mint_log').update({ project_id: null }).eq('project_id', projectId).eq('user_id', userId)
+  } catch (_) {}
 }
 
 async function softArchiveMintGuardProject(supabase, projectId, user, project = null) {
@@ -871,6 +872,56 @@ export default async function handler(req, res) {
     } catch (error) {
       console.error('calendar copy-mint failed:', error)
       return res.status(500).json({ ok: false, error: 'Could not copy this mint. Please try again.' })
+    }
+  }
+
+  if (action === 'save-mintguard') {
+    if (req.method !== 'POST') return res.status(405).json({ ok: false, error: 'Method not allowed' })
+    const user = await requireUser(req, res)
+    if (!user) return
+
+    const d = req.body || {}
+    if (!d.name?.trim()) return res.status(400).json({ ok: false, error: 'Project name is required' })
+
+    const VALID_WL_TYPES = ['UNKNOWN', 'GTD', 'FCFS', 'PUBLIC', 'RAFFLE', 'FREE', 'PAID', 'ALLOWLIST', 'WL']
+    const VALID_SOURCE_TYPES = ['website', 'url', 'twitter', 'x', 'opensea', 'calendar', 'contract', 'whale_copy', 'alchemy', 'zora', 'community', 'admin']
+    const supabase = createServiceClient()
+    try {
+      const row = await insertMintGuardProject(supabase, {
+        user_id: user.id,
+        name: d.name.trim(),
+        source_url: d.source_url || null,
+        source_type: VALID_SOURCE_TYPES.includes(d.source_type) ? d.source_type : 'website',
+        chain: d.chain || 'eth',
+        contract_address: d.contract_address?.trim() || null,
+        mint_date: d.mint_date || null,
+        mint_price: d.mint_price || null,
+        wl_type: VALID_WL_TYPES.includes(d.wl_type) ? d.wl_type : 'UNKNOWN',
+        mint_mode: d.mint_mode || 'confirm',
+        automint_enabled: Boolean(d.automint_enabled),
+        max_mint: parseInt(d.max_mint) || 1,
+        gas_limit: parseInt(d.gas_limit) || 200000,
+        max_mint_price: d.max_mint_price || null,
+        max_gas_fee: d.max_gas_fee || null,
+        max_total_spend: d.max_total_spend || null,
+        mint_time_confirmed: Boolean(d.mint_date),
+        execution_status: 'queued',
+        notes: d.notes || null,
+        status: d.mint_status === 'live_now' ? 'live' : d.mint_status === 'ended' ? 'missed' : 'upcoming',
+      })
+      console.log('MintGuard project saved', { userId: user.id, name: d.name, chain: d.chain })
+      return res.status(200).json({ ok: true, project: row })
+    } catch (error) {
+      console.error('save-mintguard failed:', {
+        userId: user.id,
+        name: d.name,
+        chain: d.chain,
+        code: error?.code,
+        message: error?.message,
+        details: error?.details,
+        hint: error?.hint,
+      })
+      return res.status(500).json({ ok: false, error: error?.message || 'Could not save this project. Please try again.' })
     }
   }
 

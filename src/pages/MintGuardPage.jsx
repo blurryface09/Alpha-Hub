@@ -283,47 +283,18 @@ export default function MintGuardPage() {
       projectData.mint_date ||
       (mintStatusDetected === 'live_now' ? new Date().toISOString() : null)
 
-    const insertData = {
-      name: projectData.name || 'Unnamed',
-      source_url: projectData.source_url || null,
-      source_type: ['website', 'url', 'twitter', 'x', 'opensea', 'calendar', 'contract', 'whale_copy', 'alchemy', 'zora', 'community', 'admin'].includes(projectData.source_type)
-        ? projectData.source_type : 'website',
-      chain: projectData.chain || 'eth',
-      contract_address: projectData.contract_address || null,
-      mint_date: mintDate,
-      mint_price: projectData.mint_price || null,
-      wl_type: ['UNKNOWN', 'GTD', 'FCFS', 'PUBLIC', 'RAFFLE', 'FREE', 'PAID', 'ALLOWLIST', 'WL'].includes(projectData.wl_type)
-        ? projectData.wl_type : 'UNKNOWN',
-      mint_mode: projectData.mint_mode || 'confirm',
-      automint_enabled: projectData.automint_enabled ?? false,
-      max_mint: projectData.max_mint || 1,
-      gas_limit: projectData.gas_limit || 200000,
-      max_mint_price: projectData.max_mint_price || null,
-      max_gas_fee: projectData.max_gas_fee || null,
-      max_total_spend: projectData.max_total_spend || null,
-      mint_time_source: projectData.mint_time_source || null,
-      mint_time_confidence: projectData.mint_time_confidence || null,
-      mint_time_confirmed: projectData.mint_time_confirmed ?? Boolean(mintDate),
-      mint_time_confirmed_at: projectData.mint_time_confirmed_at || null,
-      execution_status: 'queued',
-      notes: projectData.notes || null,
-      user_id: user.id,
-      status: dbStatus,
-    }
     toast.loading('Saving...', { id: 'save-project' })
     try {
-      let data
-      try {
-        data = await directInsert('wl_projects', insertData)
-      } catch (schemaError) {
-        const msg = String(schemaError.message || '').toLowerCase()
-        const isSchemaIssue = msg.includes('schema cache') || msg.includes('column') || msg.includes('does not exist') || msg.includes('42703')
-        if (!isSchemaIssue) throw schemaError
-        const fallbackData = { ...insertData }
-        OPTIONAL_PROJECT_FIELDS.forEach((field) => delete fallbackData[field])
-        data = await directInsert('wl_projects', fallbackData)
-        console.warn('Saved project without optional columns — run the automint schema migration.')
-      }
+      const token = await getAuthToken()
+      if (!token) throw new Error('Not authenticated — please sign in again')
+      const response = await fetch('/api/calendar/save-mintguard', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ ...projectData, mint_date: mintDate, mint_status: mintStatusDetected }),
+      })
+      const result = await response.json().catch(() => ({}))
+      if (!response.ok || result?.ok === false) throw new Error(result?.error || `Save failed (${response.status})`)
+      const data = result.project
       setProjects(prev => [data, ...prev])
       toast.success(`${data.name} added!`, { id: 'save-project' })
       setShowAddModal(false)
