@@ -22,6 +22,17 @@ const SUPPORTED_EXECUTION_CHAINS = new Set(['eth', 'base', 'apechain', 'bnb', 's
 const AUTO_STRIKE_ENABLED = String(process.env.AUTO_STRIKE_ENABLED || '').toLowerCase() === 'true'
 const ALPHA_VAULT_ENABLED = String(process.env.ALPHA_VAULT_ENABLED || '').toLowerCase() === 'true'
 const MINT_NAMES = ['mint', 'publicMint', 'mintPublic', 'allowlistMint', 'presaleMint', 'purchase', 'claim', 'buy', 'safeMint', 'mintNFT', 'freeMint']
+
+// SeaDrop: OpenSea's public mint router — NFT contracts that use SeaDrop can only be minted
+// via the SeaDrop contract calling mintPublic(nftContract, feeRecipient, minterIfNotPayer, qty)
+const SEADROP_ADDRESS = '0x00005EA00Ac477B1030CE78506496e8C2dE24bf5'
+const SEADROP_ABI = parseAbi([
+  'function mintPublic(address nftContract, address feeRecipient, address minterIfNotPayer, uint256 quantity) payable',
+  'function getAllowedFeeRecipients(address nftContract) view returns (address[])',
+  'function getPublicDrop(address nftContract) view returns (uint80 mintPrice, uint48 startTime, uint48 endTime, uint16 maxTotalMintableByWallet, uint16 feeBps, bool restrictFeeRecipients)',
+])
+// Known reliable OpenSea fee recipient — fallback if on-chain query fails
+const SEADROP_FEE_RECIPIENT_FALLBACK = '0x0000a26b00c1F0DF003000390027140000fAa719'
 const RPC_URLS = {
   eth: process.env.ETH_RPC_URL || 'https://ethereum.publicnode.com',
   base: process.env.BASE_RPC_URL || 'https://mainnet.base.org',
@@ -277,6 +288,28 @@ export function fallbackCandidates(quantity, walletAddress) {
   }))
 }
 
+function isSeaDropContract(abi) {
+  return Array.isArray(abi) && abi.some(fn => fn?.type === 'function' && fn.name === 'mintSeaDrop')
+}
+
+async function buildSeaDropCandidates(nftContract, quantity, walletAddress, client) {
+  const [feeResult, dropResult] = await Promise.allSettled([
+    client.readContract({ address: SEADROP_ADDRESS, abi: SEADROP_ABI, functionName: 'getAllowedFeeRecipients', args: [nftContract] }),
+    client.readContract({ address: SEADROP_ADDRESS, abi: SEADROP_ABI, functionName: 'getPublicDrop', args: [nftContract] }),
+  ])
+  const feeRecipients = feeResult.status === 'fulfilled' ? feeResult.value : []
+  const feeRecipient = feeRecipients[0] || SEADROP_FEE_RECIPIENT_FALLBACK
+  const mintPrice = dropResult.status === 'fulfilled' ? BigInt(dropResult.value.mintPrice || 0n) : 0n
+  const totalValue = mintPrice * quantity
+  console.log('[mint-benchmark] seadrop_detected', { nftContract: nftContract.slice(0, 10), feeRecipient: feeRecipient.slice(0, 10), mintPrice: mintPrice.toString() })
+  const data = encodeFunctionData({
+    abi: SEADROP_ABI,
+    functionName: 'mintPublic',
+    args: [nftContract, feeRecipient, '0x0000000000000000000000000000000000000000', quantity],
+  })
+  return [{ abi: SEADROP_ABI, functionName: 'mintPublic', args: [nftContract, feeRecipient, '0x0000000000000000000000000000000000000000', quantity], source: 'seadrop', toOverride: SEADROP_ADDRESS, valueOverride: totalValue, data }]
+}
+
 // _clientOverride: inject a mock viem publicClient for testing
 // _supabase: optional supabase client for cache persistence (fire-and-forget)
 export async function prepareMintTransaction(body, _clientOverride = null, _supabase = null) {
@@ -390,6 +423,15 @@ export async function prepareMintTransaction(body, _clientOverride = null, _supa
 
     if (!code || code === '0x') throw new Error('No contract exists at this address on the selected chain.')
 
+    // Protocol detection: SeaDrop contracts must be minted via the SeaDrop router
+    let protocolCandidates = []
+    if (isSeaDropContract(verifiedAbi)) {
+      protocolCandidates = await buildSeaDropCandidates(contract, quantity, walletAddress, activeRpc).catch(e => {
+        console.log('[mint-benchmark] seadrop_setup_fail', { error: String(e.message || '').slice(0, 80) })
+        return []
+      })
+    }
+
     // Deduplicate: skip fallback candidates whose function name is already covered by verified ABI
     const abiCandidates = candidatesFromAbi(verifiedAbi, quantity, walletAddress)
     const abiNames = new Set(abiCandidates.map(c => c.functionName))
@@ -399,10 +441,12 @@ export async function prepareMintTransaction(body, _clientOverride = null, _supa
       const idx = allFallbacks.findIndex(c => c.functionName === hintedFunction)
       if (idx > 0) allFallbacks = [allFallbacks[idx], ...allFallbacks.filter((_, i) => i !== idx)]
     }
-    const candidates = [...abiCandidates, ...allFallbacks]
+    // Protocol candidates (e.g. SeaDrop) go first — they're the exact correct call
+    const candidates = [...protocolCandidates, ...abiCandidates, ...allFallbacks]
     console.log('[mint-benchmark] candidates', {
       chain,
       contract: contract.slice(0, 10),
+      protocolCount: protocolCandidates.length,
       abiCount: abiCandidates.length,
       fallbackCount: allFallbacks.length,
       total: candidates.length,
@@ -414,14 +458,17 @@ export async function prepareMintTransaction(body, _clientOverride = null, _supa
     for (const candidate of candidates) {
       attemptCount++
       try {
-        const data = encodeFunctionData({
+        // Protocol candidates (SeaDrop etc.) pre-compute data and override to/value
+        const data = candidate.data || encodeFunctionData({
           abi: candidate.abi,
           functionName: candidate.functionName,
           args: candidate.args,
         })
+        const txTo = candidate.toOverride || contract
+        const txValue = candidate.valueOverride !== undefined ? candidate.valueOverride : value
         // Parallel: estimateGas + getGasPrice (getGasPrice only needed when spend limit set)
         const [gasResult, gasPriceResult] = await Promise.allSettled([
-          activeRpc.estimateGas({ account: walletAddress, to: contract, data, value }),
+          activeRpc.estimateGas({ account: walletAddress, to: txTo, data, value: txValue }),
           maxSpend ? activeRpc.getGasPrice().catch(() => 0n) : Promise.resolve(0n),
         ])
         if (gasResult.status === 'rejected') {
@@ -438,7 +485,7 @@ export async function prepareMintTransaction(body, _clientOverride = null, _supa
         }
         const gas = gasFromProfile(gasResult.value, executionProfile)
         const gasPrice = gasPriceResult.status === 'fulfilled' ? gasPriceResult.value : 0n
-        if (maxSpend && (value + gas * gasPrice) > maxSpend) throw new Error('max_spend_exceeded')
+        if (maxSpend && (txValue + gas * gasPrice) > maxSpend) throw new Error('max_spend_exceeded')
         const latencyMs = Date.now() - t0
         console.log('[mint-benchmark] success', {
           duration_ms: latencyMs, chain, contract: contract.slice(0, 10),
@@ -447,7 +494,7 @@ export async function prepareMintTransaction(body, _clientOverride = null, _supa
         })
         recordLatency(contract, chain, latencyMs)
         const result = {
-          to: contract, data, value: value.toString(), chainId, gas: gas.toString(),
+          to: txTo, data, value: txValue.toString(), chainId, gas: gas.toString(),
           functionName: candidate.functionName,
           argsSummary: candidate.args.map(arg => typeof arg === 'bigint' ? arg.toString() : String(arg)),
           source: candidate.source,
