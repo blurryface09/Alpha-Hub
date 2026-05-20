@@ -68,6 +68,12 @@ try {
   renewLease   = leaseMod.renewLease
 } catch { /* lib not available */ }
 
+let prewarmIntent = null
+try {
+  const prewarmMod = await import('./lib/prewarmer.js')
+  prewarmIntent = prewarmMod.prewarmIntent
+} catch { /* lib not available */ }
+
 let reconcileQueue = null
 try {
   const recoveryMod = await import('./lib/recovery.js')
@@ -460,6 +466,24 @@ async function tick(supabase) {
             ms_until_execute: msUntil,
             execute_at: intent.strike_execute_at,
           })
+          if (prewarmIntent) {
+            prewarmIntent(supabase, intent).then(result => {
+              if (result.ok) {
+                workerLog('prewarm', 'Prewarm succeeded', {
+                  intent_id:    intent.id,
+                  fn:           result.functionName,
+                  cache_hit:    result.cacheHit,
+                  latency_ms:   result.latencyMs,
+                  confidence:   result.confidence,
+                })
+              } else {
+                workerWarn('prewarm', 'Prewarm failed (non-fatal)', {
+                  intent_id: intent.id,
+                  error:     result.error,
+                })
+              }
+            }).catch(() => null)
+          }
         }
       }
     } catch (err) {

@@ -155,13 +155,16 @@ export async function executeIntent(supabase, queuedIntent) {
 
       // Step 5: Prewarm logging
       if (flagEnabled('PREWARM_ENABLED') && isInPrewarmWindow(executeAt, nowMs)) {
+        const prewarmed = !!intent.call_data
         log.info('prewarm', 'Intent is in prewarm window', {
           ms_until_execute: remaining,
+          prewarmed,
           wallet_loaded: true,
           gas_prepared: true,
         })
-        await insertEvent(supabase, intent, 'prewarm', 'Wallet and gas prewarmed.', {
+        await insertEvent(supabase, intent, 'prewarm', prewarmed ? 'Call data precomputed — executor will skip detection at T=0.' : 'Wallet and gas prewarmed.', {
           ms_until_execute: remaining,
+          prewarmed,
           gas_strategy: gasStrategy,
         })
       }
