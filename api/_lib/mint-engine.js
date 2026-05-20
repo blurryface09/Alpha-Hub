@@ -127,7 +127,8 @@ function safeMessage(error) {
   if (msg.includes('rpc') || msg.includes('http request failed') || msg.includes('fetch failed') || msg.includes('network error')) return 'RPC connection failed. Please retry in a moment.'
   if (msg.includes('max_spend_exceeded')) return 'Mint skipped because max spend was exceeded.'
   if (msg.includes('insufficient funds')) return 'The mint wallet does not have enough funds.'
-  if (msg.includes('execution reverted') || msg.includes('revert')) return 'Mint simulation failed. The transaction was not sent.'
+  if (msg.includes('seadrop mint not active')) return error?.message || 'This mint is not currently active.'
+  if (msg.includes('execution reverted') || msg.includes('revert')) return 'Mint simulation failed — contract rejected the transaction. The mint may be closed or require an allowlist.'
   if (msg.includes('function') || msg.includes('selector')) return 'Unknown mint function. Use the official mint site or add contract details.'
   if (msg.includes('chain')) return 'Wrong chain for this mint.'
   return 'Mint preparation failed. Nothing was sent.'
@@ -299,9 +300,27 @@ async function buildSeaDropCandidates(nftContract, quantity, walletAddress, clie
   ])
   const feeRecipients = feeResult.status === 'fulfilled' ? feeResult.value : []
   const feeRecipient = feeRecipients[0] || SEADROP_FEE_RECIPIENT_FALLBACK
-  const mintPrice = dropResult.status === 'fulfilled' ? BigInt(dropResult.value.mintPrice || 0n) : 0n
+  const drop = dropResult.status === 'fulfilled' ? dropResult.value : null
+  const mintPrice = drop ? BigInt(drop.mintPrice || 0n) : 0n
   const totalValue = mintPrice * quantity
-  console.log('[mint-benchmark] seadrop_detected', { nftContract: nftContract.slice(0, 10), feeRecipient: feeRecipient.slice(0, 10), mintPrice: mintPrice.toString() })
+  const now = BigInt(Math.floor(Date.now() / 1000))
+  const startTime = drop ? BigInt(drop.startTime || 0n) : 0n
+  const endTime = drop ? BigInt(drop.endTime || 0n) : 0n
+  const isActive = startTime > 0n && startTime <= now && (endTime === 0n || endTime > now)
+  console.log('[mint-benchmark] seadrop_detected', {
+    nftContract: nftContract.slice(0, 10),
+    feeRecipient: feeRecipient.slice(0, 10),
+    mintPrice: mintPrice.toString(),
+    startTime: startTime.toString(),
+    endTime: endTime.toString(),
+    nowTs: now.toString(),
+    isActive,
+    feeRecipientCount: feeRecipients.length,
+  })
+  if (!isActive) {
+    const reason = startTime === 0n ? 'Public drop not configured' : startTime > now ? `Mint starts at ${new Date(Number(startTime) * 1000).toISOString()}` : `Mint ended at ${new Date(Number(endTime) * 1000).toISOString()}`
+    throw new Error(`SeaDrop mint not active: ${reason}`)
+  }
   const data = encodeFunctionData({
     abi: SEADROP_ABI,
     functionName: 'mintPublic',
