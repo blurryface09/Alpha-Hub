@@ -227,14 +227,30 @@ export function argsForInputs(inputs = [], quantity, walletAddress) {
 
 export function candidatesFromAbi(abi, quantity, walletAddress) {
   if (!Array.isArray(abi)) return []
-  return abi
-    .filter(fn => fn?.type === 'function' && MINT_NAMES.some(name => String(fn.name || '').toLowerCase() === name.toLowerCase()))
-    .map(fn => {
-      const args = argsForInputs(fn.inputs || [], quantity, walletAddress)
-      if (!args) return null
-      return { abi, functionName: fn.name, args, source: 'verified_abi' }
+  const results = []
+  for (const fn of abi) {
+    if (fn?.type !== 'function') continue
+    const nameMatch = MINT_NAMES.some(n => String(fn.name || '').toLowerCase() === n.toLowerCase())
+    if (!nameMatch) continue
+    const args = argsForInputs(fn.inputs || [], quantity, walletAddress)
+    if (args === null) {
+      console.log('[mint-benchmark] abi_candidate_skip', {
+        fn: fn.name,
+        inputs: (fn.inputs || []).map(i => i.type),
+        reason: 'argsForInputs_null',
+      })
+      continue
+    }
+    results.push({ abi, functionName: fn.name, args, source: 'verified_abi' })
+  }
+  // Log the first few non-mint function names so we can spot naming mismatches
+  const allFnNames = abi.filter(f => f?.type === 'function').map(f => f.name)
+  if (results.length === 0) {
+    console.log('[mint-benchmark] abi_no_candidates', {
+      allFunctions: allFnNames.slice(0, 20),
     })
-    .filter(Boolean)
+  }
+  return results
 }
 
 export function fallbackCandidates(quantity, walletAddress) {
