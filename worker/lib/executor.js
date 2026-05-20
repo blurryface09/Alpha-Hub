@@ -163,16 +163,7 @@ export async function executeIntent(supabase, queuedIntent) {
       }).catch(() => null)
     }
 
-    // ── Step 2: Load wallet ─────────────────────────────────────────────────
-    log.info('prepare', 'Loading execution wallet')
-    wallet = await loadExecutionWallet(supabase, intent, FLAGS, transport)
-
-    // ── Step 3: Estimate gas ────────────────────────────────────────────────
-    const gasStrategy = intent.gas_strategy || 'balanced'
-    log.info('gas', 'Estimating gas', { strategy: gasStrategy })
-    gasParams = await estimateGas(publicClient, gasStrategy, 0)
-
-    // ── Step 4: Timing check ────────────────────────────────────────────────
+    // ── Step 2: Timing check (before loading wallet/gas to avoid wasted RPC calls) ──
     const nowMs = Date.now()
     const executeAt = intent.strike_execute_at
       ? new Date(intent.strike_execute_at).getTime()
@@ -185,19 +176,16 @@ export async function executeIntent(supabase, queuedIntent) {
         execute_at: intent.strike_execute_at,
       })
 
-      // Step 5: Prewarm logging
+      // Prewarm logging
       if (flagEnabled('PREWARM_ENABLED') && isInPrewarmWindow(executeAt, nowMs)) {
         const prewarmed = !!intent.call_data
         log.info('prewarm', 'Intent is in prewarm window', {
           ms_until_execute: remaining,
           prewarmed,
-          wallet_loaded: true,
-          gas_prepared: true,
         })
-        await insertEvent(supabase, intent, 'prewarm', prewarmed ? 'Call data precomputed — executor will skip detection at T=0.' : 'Wallet and gas prewarmed.', {
+        await insertEvent(supabase, intent, 'prewarm', prewarmed ? 'Call data precomputed — executor will skip detection at T=0.' : 'Approaching execution window.', {
           ms_until_execute: remaining,
           prewarmed,
-          gas_strategy: gasStrategy,
         })
       }
 
@@ -208,7 +196,16 @@ export async function executeIntent(supabase, queuedIntent) {
       return
     }
 
-    // ── Step 6: Live execution gate ─────────────────────────────────────────
+    // ── Step 3: Load wallet ─────────────────────────────────────────────────
+    log.info('prepare', 'Loading execution wallet')
+    wallet = await loadExecutionWallet(supabase, intent, FLAGS, transport)
+
+    // ── Step 4: Estimate gas ────────────────────────────────────────────────
+    const gasStrategy = intent.gas_strategy || 'balanced'
+    log.info('gas', 'Estimating gas', { strategy: gasStrategy })
+    gasParams = await estimateGas(publicClient, gasStrategy, 0)
+
+    // ── Step 5: Live execution gate ─────────────────────────────────────────
     if (!flagEnabled('LIVE_EXECUTION_ENABLED')) {
       if (flagEnabled('DRY_RUN_LOGGING')) {
         await dryRunIntent(intent, gasParams, wallet)

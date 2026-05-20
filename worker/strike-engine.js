@@ -111,7 +111,7 @@ try {
 
 // ── Config ────────────────────────────────────────────────────────────────────
 
-const LOOP_MS = Number(process.env.STRIKE_WORKER_INTERVAL_MS || 15000)
+const LOOP_MS = Number(process.env.STRIKE_WORKER_INTERVAL_MS || 2000)
 const BATCH_SIZE = Number(process.env.STRIKE_WORKER_BATCH_SIZE || 3)
 const RUN_ONCE = String(process.env.STRIKE_WORKER_RUN_ONCE || '').toLowerCase() === 'true'
 
@@ -320,36 +320,58 @@ async function legacyProcessIntent(supabase, queuedIntent) {
     const rpcCandidates = orderRpcCandidates(chain, executionProfile, CHAIN_RPCS[chain] || [])
     if (!rpcCandidates.length) throw new Error('Strike RPC is not configured for this chain.')
 
-    let lastPrepareError = null
-    for (const candidate of rpcCandidates) {
+    // Fast path: use prewarmed call_data + gas_limit if available (skips RPC function detection)
+    if (intent.call_data) {
+      selectedRpc = rpcCandidates[0]
       const startedAt = Date.now()
-      try {
-        prepared = await prepareMintTransaction({
-          ...intent,
-          walletAddress: account.address,
-          mintPrice: intent.max_mint_price || '0',
-          maxTotalSpend: intent.max_total_spend,
-          rpcUrl: candidate.url,
-          rpcLabel: candidate.label,
-          executionProfile,
-        })
-        selectedRpc = candidate
-        prepareLatencyMs = Date.now() - startedAt
-        break
-      } catch (error) {
-        lastPrepareError = error
-        await recordExecutionOptimization(supabase, {
-          intent,
-          chain,
-          contractAddress: intent.contract_address,
-          status: 'failed',
-          latencyMs: Date.now() - startedAt,
-          errorMessage: String(error?.message || error).slice(0, 180),
-          rpcLabel: candidate.label,
-        })
+      prepared = {
+        to: intent.contract_address,
+        data: intent.call_data,
+        value: '0',
+        gas: intent.gas_limit || null,
+        functionName: intent.function_name || 'prewarmed',
+        source: 'prewarm_cache',
+        optimized: Boolean(executionProfile?.success_count),
+        readinessBoost: 0,
       }
+      prepareLatencyMs = Date.now() - startedAt
+      workerLog('prewarm', 'Using prewarmed call_data — skipping function detection', {
+        intent_id: intent.id,
+        gas: intent.gas_limit,
+        rpc: selectedRpc?.label,
+      })
+    } else {
+      let lastPrepareError = null
+      for (const candidate of rpcCandidates) {
+        const startedAt = Date.now()
+        try {
+          prepared = await prepareMintTransaction({
+            ...intent,
+            walletAddress: account.address,
+            mintPrice: intent.max_mint_price || '0',
+            maxTotalSpend: intent.max_total_spend,
+            rpcUrl: candidate.url,
+            rpcLabel: candidate.label,
+            executionProfile,
+          })
+          selectedRpc = candidate
+          prepareLatencyMs = Date.now() - startedAt
+          break
+        } catch (error) {
+          lastPrepareError = error
+          await recordExecutionOptimization(supabase, {
+            intent,
+            chain,
+            contractAddress: intent.contract_address,
+            status: 'failed',
+            latencyMs: Date.now() - startedAt,
+            errorMessage: String(error?.message || error).slice(0, 180),
+            rpcLabel: candidate.label,
+          })
+        }
+      }
+      if (!prepared || !selectedRpc) throw lastPrepareError || new Error('Strike preparation failed.')
     }
-    if (!prepared || !selectedRpc) throw lastPrepareError || new Error('Strike preparation failed.')
     if (prepared.optimized || executionProfile?.success_count) {
       await insertEvent(supabase, intent, 'optimized', 'Execution profile loaded for this contract.', {
         ...optimizationTelemetry(executionProfile, {

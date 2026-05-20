@@ -230,19 +230,16 @@ async function prepareMintTransaction(project, account) {
 
 async function simulatePreparedTransaction(project, account, publicClient, prepared) {
   const started = Date.now()
-  await publicClient.call({
-    account: account.address,
-    to: prepared.to,
-    data: prepared.data,
-    value: prepared.value,
-  })
-  const gas = await publicClient.estimateGas({
-    account: account.address,
-    to: prepared.to,
-    data: prepared.data,
-    value: prepared.value,
-  })
-  const gasPrice = await publicClient.getGasPrice()
+  // estimateGas already simulates the call — parallel fetch gas + price
+  const [gas, gasPrice] = await Promise.all([
+    publicClient.estimateGas({
+      account: account.address,
+      to: prepared.to,
+      data: prepared.data,
+      value: prepared.value,
+    }),
+    publicClient.getGasPrice(),
+  ])
   return {
     gas,
     gasPrice,
