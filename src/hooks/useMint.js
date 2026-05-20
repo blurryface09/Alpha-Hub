@@ -150,9 +150,10 @@ export function useMint() {
         })
       } else {
         const firstErr = firstResult?.error || ''
+        const serverReason = firstResult?.reason || ''
         if (!isFunctionNotFound(firstErr)) {
           // Non-function-detection error — surface immediately with context
-          console.debug('[mint-exec] error', { stage: 'prepare', reason: firstErr, httpStatus: firstResponse.status })
+          console.debug('[mint-exec] error', { stage: 'prepare', reason: firstErr, serverReason, httpStatus: firstResponse.status })
           throw new Error(classifyMintError(firstErr || 'Mint preparation failed'))
         }
         // API could not detect function — probe each candidate name explicitly
@@ -169,7 +170,7 @@ export function useMint() {
             if (!res.ok || result?.ok === false || !result?.preparedTransaction) {
               const errMsg = result?.error || ''
               if (isFunctionNotFound(errMsg)) continue
-              console.debug('[mint-exec] error', { stage: 'candidate_probe', fn: funcName, reason: errMsg })
+              console.debug('[mint-exec] error', { stage: 'candidate_probe', fn: funcName, reason: errMsg, serverReason: result?.reason || '' })
               throw new Error(classifyMintError(errMsg || 'Mint preparation failed'))
             }
             prepared = result

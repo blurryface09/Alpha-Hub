@@ -215,8 +215,12 @@ export function fallbackCandidates(quantity, walletAddress) {
     { sig: 'function presaleMint(uint256 quantity) payable', name: 'presaleMint', args: [quantity] },
     { sig: 'function purchase(uint256 numberOfTokens) payable', name: 'purchase', args: [quantity] },
     { sig: 'function claim(uint256 quantity) payable', name: 'claim', args: [quantity] },
+    { sig: 'function mintNFT(uint256 quantity) payable', name: 'mintNFT', args: [quantity] },
+    { sig: 'function freeMint(uint256 quantity) payable', name: 'freeMint', args: [quantity] },
     { sig: 'function mint() payable', name: 'mint', args: [] },
     { sig: 'function claim() payable', name: 'claim', args: [] },
+    { sig: 'function mintNFT() payable', name: 'mintNFT', args: [] },
+    { sig: 'function freeMint() payable', name: 'freeMint', args: [] },
     { sig: 'function safeMint(address to) payable', name: 'safeMint', args: [walletAddress] },
   ].map(item => ({
     abi: parseAbi([item.sig]),
@@ -241,6 +245,7 @@ export async function prepareMintTransaction(body, _clientOverride = null, _supa
   const rpcLabel = body.rpcLabel || body.rpc_label || rpcLabelForUrl(chain, rpcUrl || RPC_URLS[chain])
   const client = _clientOverride || publicClient(chain, rpcUrl, executionProfile)
   if (!client) throw new Error('Mint preparation needs RPC configured for this chain.')
+  const hintedFunction = body.functionName || body.function_name || null
 
   const quantity = BigInt(Math.max(1, Number(body.quantity || body.max_mint || 1)))
   const value = parseEther(cleanPrice(body.mintPrice || body.mint_price || body.price)) * quantity
@@ -316,16 +321,20 @@ export async function prepareMintTransaction(body, _clientOverride = null, _supa
   // Deduplicate: skip fallback candidates whose function name is already covered by verified ABI
   const abiCandidates = candidatesFromAbi(verifiedAbi, quantity, walletAddress)
   const abiNames = new Set(abiCandidates.map(c => c.functionName))
-  const candidates = [
-    ...abiCandidates,
-    ...fallbackCandidates(quantity, walletAddress).filter(c => !abiNames.has(c.functionName)),
-  ]
+  let allFallbacks = fallbackCandidates(quantity, walletAddress).filter(c => !abiNames.has(c.functionName))
+  // If caller hinted a specific function name, promote it to the front of the fallback list
+  if (hintedFunction) {
+    const idx = allFallbacks.findIndex(c => c.functionName === hintedFunction)
+    if (idx > 0) allFallbacks = [allFallbacks[idx], ...allFallbacks.filter((_, i) => i !== idx)]
+  }
+  const candidates = [...abiCandidates, ...allFallbacks]
   console.log('[mint-benchmark] candidates', {
     chain,
     contract: contract.slice(0, 10),
     abiCount: abiCandidates.length,
-    fallbackCount: candidates.length - abiCandidates.length,
+    fallbackCount: allFallbacks.length,
     total: candidates.length,
+    hint: hintedFunction || null,
   })
 
   let lastError = null
@@ -387,14 +396,17 @@ export async function prepareMintTransaction(body, _clientOverride = null, _supa
     }
   }
 
-  console.log('[mint-benchmark] all_candidates_failed', {
+  const rawReason = String(lastError?.shortMessage || lastError?.message || lastError || 'unknown')
+  console.error('[mint-benchmark] all_candidates_failed', {
     duration_ms: Date.now() - t0,
     chain,
     contract: contract.slice(0, 10),
     attempts: attemptCount,
-    failure_reason: String(lastError?.message || lastError || '').slice(0, 100),
+    failure_reason: rawReason.slice(0, 200),
   })
-  throw new Error(safeMessage(lastError))
+  const err = new Error(safeMessage(lastError))
+  err.rawReason = rawReason
+  throw err
 }
 
 function intentPayload(user, body, status = 'draft') {
@@ -644,6 +656,11 @@ export async function handleMintAction(req, res, action) {
           executionProfile: optimizationProfile,
         }, null, supabase)
       } catch (error) {
+        const rawReason = error.rawReason || error.shortMessage || error.message || String(error)
+        console.error('[mint-engine] prepare_failed', {
+          chain, contract: contract?.slice?.(0, 12),
+          reason: rawReason.slice(0, 200),
+        })
         await recordExecutionOptimization(supabase, {
           chain,
           contractAddress: contract,
@@ -651,7 +668,7 @@ export async function handleMintAction(req, res, action) {
           latencyMs: Date.now() - prepareStartedAt,
           errorMessage: safeMessage(error),
         })
-        return res.status(400).json(safeError(safeMessage(error)))
+        return res.status(400).json({ ...safeError(safeMessage(error)), reason: rawReason.slice(0, 300) })
       }
       const prepareLatencyMs = Date.now() - prepareStartedAt
       const row = await insertOptional(supabase, 'mint_intents', intentPayload(user, body, 'prepared'))
