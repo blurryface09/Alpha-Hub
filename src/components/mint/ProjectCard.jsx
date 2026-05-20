@@ -1,10 +1,11 @@
-import React, { useState } from 'react'
+import React, { useEffect, useState } from 'react'
 import LiveMintFeed from './LiveMintFeed'
 import EditProjectModal from './EditProjectModal'
 import { motion } from 'framer-motion'
 import { Zap, Trash2, Clock, ChevronDown, ChevronUp, ToggleLeft, ToggleRight, ExternalLink, RefreshCw, Twitter, AlertCircle, Gift, Bell, BellOff, Lock } from 'lucide-react'
 import toast from 'react-hot-toast'
 import { fetchProjectIntel } from '../../lib/ai'
+import { supabase } from '../../lib/supabase'
 import { useAuthStore, useMonitorStore } from '../../store/index.js'
 import { useReadiness } from '../../hooks/useReadiness'
 import { ExecutionReadyBadge, ReadinessPanel } from './ExecutionReadyBadge'
@@ -112,6 +113,117 @@ function Countdown({ mintDate, onLive, isAuto }) {
   return React.createElement("span", {
     className: "font-mono text-xs " + (timeLeft === "LIVE NOW" ? "text-green animate-pulse" : "text-accent3")
   }, timeLeft)
+}
+
+function ExecutionHistoryPanel({ project, expanded }) {
+  const [history, setHistory] = useState({ loading: false, intent: null, events: [], attempts: [] })
+
+  useEffect(function() {
+    let active = true
+
+    async function loadHistory() {
+      if (!expanded || !project?.id) return
+      setHistory(prev => ({ ...prev, loading: true }))
+      try {
+        const { data: intents, error: intentError } = await supabase
+          .from('mint_intents')
+          .select('id,status,last_state,tx_hash,contract_address,chain,created_at,updated_at')
+          .eq('wl_project_id', project.id)
+          .order('created_at', { ascending: false })
+          .limit(1)
+
+        if (intentError || !intents?.[0]) {
+          if (active) setHistory({ loading: false, intent: null, events: [], attempts: [] })
+          return
+        }
+
+        const intent = intents[0]
+        const [{ data: events }, { data: attempts }] = await Promise.all([
+          supabase
+            .from('mint_execution_events')
+            .select('state,message,metadata,created_at')
+            .eq('intent_id', intent.id)
+            .order('created_at', { ascending: false })
+            .limit(6),
+          supabase
+            .from('mint_attempts')
+            .select('status,tx_hash,error_message,created_at')
+            .or(`intent_id.eq.${intent.id},mint_intent_id.eq.${intent.id}`)
+            .order('created_at', { ascending: false })
+            .limit(4),
+        ])
+
+        if (active) setHistory({ loading: false, intent, events: events || [], attempts: attempts || [] })
+      } catch {
+        if (active) setHistory({ loading: false, intent: null, events: [], attempts: [] })
+      }
+    }
+
+    loadHistory()
+    return function() { active = false }
+  }, [expanded, project?.id])
+
+  if (!expanded) return null
+  const optimized = history.events.some(event => event.state === 'optimized')
+
+  return (
+    <div className="border-t border-border pt-3">
+      <div className="flex items-center justify-between mb-2">
+        <div className="flex items-center gap-2">
+          {React.createElement(Zap, { size: 12, className: optimized ? 'text-green' : 'text-accent' })}
+          <span className="text-xs font-mono text-muted uppercase tracking-wider">Execution history</span>
+        </div>
+        {optimized && <span className="badge badge-green text-[10px]">Optimized</span>}
+      </div>
+
+      {history.loading && <div className="text-xs text-muted">Loading execution memory...</div>}
+
+      {!history.loading && !history.intent && (
+        <div className="text-xs text-muted2">No execution history yet. Alpha Hub will optimize after real attempts.</div>
+      )}
+
+      {!history.loading && history.intent && (
+        <div className="space-y-2">
+          <div className="bg-surface2 rounded-lg p-2.5 text-xs">
+            <div className="flex items-center justify-between gap-2">
+              <span className="text-muted">Latest state</span>
+              <span className="font-mono text-text">{history.intent.last_state || history.intent.status}</span>
+            </div>
+            {history.intent.tx_hash && (
+              <div className="mt-1 flex items-center justify-between gap-2">
+                <span className="text-muted">Tx</span>
+                <span className="font-mono text-accent">{history.intent.tx_hash.slice(0, 10)}...</span>
+              </div>
+            )}
+          </div>
+
+          {history.events.length > 0 && (
+            <div className="space-y-1.5">
+              {history.events.slice(0, 4).map((event, index) => (
+                <div key={`${event.state}-${event.created_at}-${index}`} className="flex items-start gap-2 text-xs">
+                  <span className={`mt-1 h-1.5 w-1.5 rounded-full ${event.state === 'failed' ? 'bg-accent2' : event.state === 'optimized' ? 'bg-green' : 'bg-accent'}`} />
+                  <div className="min-w-0">
+                    <div className="text-text">{event.message || event.state}</div>
+                    <div className="text-[10px] text-muted">{new Date(event.created_at).toLocaleString()}</div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {history.attempts.length > 0 && (
+            <div className="flex flex-wrap gap-1.5">
+              {history.attempts.map((attempt, index) => (
+                <span key={`${attempt.status}-${attempt.created_at}-${index}`} className="text-[10px] border border-border2 rounded px-2 py-1 text-muted">
+                  {attempt.status}
+                </span>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  )
 }
 
 export default function ProjectCard({ project, isMinting, isDeleting, onMint, onDelete, onStatusUpdate, onMintModeToggle, onEdit, onReplay }) {
@@ -277,6 +389,8 @@ export default function ProjectCard({ project, isMinting, isDeleting, onMint, on
               onRefresh={readiness.refresh}
             />
           )}
+
+          <ExecutionHistoryPanel project={project} expanded={expanded} />
 
           <div className="border-t border-border pt-3">
             <div className="flex items-center justify-between mb-2">

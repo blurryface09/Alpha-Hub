@@ -450,7 +450,15 @@ export default function CalendarPage() {
       })
       const data = await res.json().catch(() => ({}))
       if (!res.ok || data?.ok === false) throw new Error(data.error || 'Could not prepare mint')
-      setConsoleSteps(['Preparing project', 'Detecting phase', 'Checking contract', 'Preparing transaction', 'Simulating mint', selectedMode === 'strike' ? 'Watching mint window' : 'Gas locked'])
+      setConsoleSteps([
+        'Preparing project',
+        'Detecting phase',
+        'Checking contract',
+        'Preparing transaction',
+        'Simulating mint',
+        ...(data.optimized ? ['Optimized'] : []),
+        selectedMode === 'strike' ? 'Watching mint window' : 'Gas locked',
+      ])
       toast.success(data.message || `${MINT_MODES[selectedMode]?.label || 'Mint'} prepared.`)
     } catch (error) {
       setConsoleSteps(prev => [...prev, 'Failed'])

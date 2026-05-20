@@ -164,7 +164,12 @@ export function useMint() {
         chain: tx.chainId,
       })
 
-      toast.loading('Ready. Check your wallet to confirm.', { id: 'mint-tx' })
+      toast.loading(
+        prepared.optimized
+          ? 'Optimized route ready. Check your wallet to confirm.'
+          : 'Ready. Check your wallet to confirm.',
+        { id: 'mint-tx' },
+      )
       const tSubmit = Date.now()
       const txHash = await sendTransactionAsync({
         to: tx.to,

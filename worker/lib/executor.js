@@ -12,6 +12,12 @@ import { isReadyToExecute, isInPrewarmWindow, msUntilExecute } from './timing.js
 import { loadExecutionWallet } from './wallet.js'
 import { withRetry, classifyError, nonceTracker } from './retry.js'
 import { claimIntent, transitionIntent, INTENT_STATES } from './queue.js'
+import {
+  confirmationTimeoutMs,
+  loadExecutionProfile,
+  optimizationTelemetry,
+  recordExecutionOptimization,
+} from '../../api/_lib/execution-optimizer.js'
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -109,27 +115,46 @@ export async function dryRunIntent(intent, gasParams, wallet) {
 export async function executeIntent(supabase, queuedIntent) {
   const startMs = Date.now()
   const log = createLogger(queuedIntent.id, queuedIntent.user_id)
+  let intent = null
+  let chainKey = normaliseChain(queuedIntent.chain)
+  let executionProfile = null
+  let rpcLabel = null
+  let gasParams = null
+  let wallet = null
+  let txHash = null
 
   // ── Step 1: Atomic claim ──────────────────────────────────────────────────
   log.info('claim', 'Attempting to claim intent')
-  const intent = await claimIntent(supabase, queuedIntent.id)
+  intent = await claimIntent(supabase, queuedIntent.id)
   if (!intent) {
     log.warn('claim', 'Intent already claimed by another worker — skipping')
     return
   }
 
-  const chainKey = normaliseChain(intent.chain)
+  chainKey = normaliseChain(intent.chain)
+  const rpcUrls = getRpcUrls(chainKey)
+  executionProfile = await loadExecutionProfile(supabase, {
+    chain: chainKey,
+    contractAddress: intent.contract_address || intent.mint_contract_address || intent.to,
+  })
+  rpcLabel = executionProfile?.best_rpc || (rpcUrls[0] ? `${chainKey}_rpc` : null)
   const transport = createViemTransport(chainKey)
   const publicClient = createPublicClient({
     chain: buildChainDescriptor(chainKey),
     transport,
   })
 
-  let gasParams = null
-  let wallet = null
-
   try {
     await insertEvent(supabase, intent, 'preparing', 'Strike worker: preparing execution')
+    if (executionProfile?.success_count) {
+      await insertEvent(supabase, intent, 'optimized', 'Execution profile loaded for this contract.', {
+        ...optimizationTelemetry(executionProfile, {
+          chain: chainKey,
+          contractAddress: intent.contract_address || intent.mint_contract_address || intent.to,
+          bestRpc: rpcLabel,
+        }),
+      }).catch(() => null)
+    }
 
     // ── Step 2: Load wallet ─────────────────────────────────────────────────
     log.info('prepare', 'Loading execution wallet')
@@ -221,7 +246,7 @@ export async function executeIntent(supabase, queuedIntent) {
     let currentGasParams = { ...gasParams }
     let pendingTxHash = null
 
-    const txHash = await withRetry(
+    txHash = await withRetry(
       async (attempt) => {
         // Escalate gas on retries
         if (attempt > 0 && flagEnabled('GAS_ESCALATION_ENABLED')) {
@@ -289,6 +314,17 @@ export async function executeIntent(supabase, queuedIntent) {
     // ── Step 9: Success ─────────────────────────────────────────────────────
     const latencyMs = Date.now() - startMs
     await recordAttempt(supabase, intent, 'submitted', { tx_hash: txHash })
+    await recordExecutionOptimization(supabase, {
+      intent,
+      chain: chainKey,
+      contractAddress: intent.contract_address || intent.mint_contract_address || intent.to,
+      status: 'submitted',
+      latencyMs,
+      gasUsed: baseTx.gas?.toString?.(),
+      functionName: intent.function_name || intent.mint_function || null,
+      functionSource: intent.function_source || 'strike_engine',
+      rpcLabel,
+    })
     await transitionIntent(supabase, intent.id, INTENT_STATES.EXECUTING, INTENT_STATES.SUCCESS, {
       tx_hash: txHash,
       strike_enabled: false,
@@ -304,6 +340,43 @@ export async function executeIntent(supabase, queuedIntent) {
       chain: chainKey,
     })
 
+    try {
+      const confirmationStartedAt = Date.now()
+      const receipt = await publicClient.waitForTransactionReceipt({
+        hash: txHash,
+        confirmations: 1,
+        timeout: confirmationTimeoutMs(executionProfile),
+      })
+      const confirmationMs = Date.now() - confirmationStartedAt
+      await recordAttempt(supabase, intent, 'confirmed', {
+        tx_hash: txHash,
+        gas_used: receipt?.gasUsed?.toString?.(),
+        confirmation_ms: confirmationMs,
+        rpc_label: rpcLabel,
+      }).catch(() => null)
+      await insertEvent(supabase, intent, 'confirmed', 'Strike transaction confirmed.', {
+        tx_hash: txHash,
+        confirmation_ms: confirmationMs,
+      }).catch(() => null)
+      await recordExecutionOptimization(supabase, {
+        intent,
+        chain: chainKey,
+        contractAddress: intent.contract_address || intent.mint_contract_address || intent.to,
+        status: 'confirmed',
+        latencyMs,
+        confirmationMs,
+        gasUsed: receipt?.gasUsed?.toString?.(),
+        functionName: intent.function_name || intent.mint_function || null,
+        functionSource: intent.function_source || 'strike_engine',
+        rpcLabel,
+      })
+    } catch (confirmationError) {
+      await insertEvent(supabase, intent, 'submitted', 'Transaction submitted. Confirmation is still pending.', {
+        tx_hash: txHash,
+        error: String(confirmationError?.message || confirmationError).slice(0, 180),
+      }).catch(() => null)
+    }
+
   } catch (err) {
     // ── Step 10: Final failure ──────────────────────────────────────────────
     const message = String(err?.shortMessage || err?.message || 'Strike execution failed.').slice(0, 240)
@@ -316,6 +389,16 @@ export async function executeIntent(supabase, queuedIntent) {
       latency_ms: latencyMs,
     })
 
+    await recordExecutionOptimization(supabase, {
+      intent,
+      chain: chainKey,
+      contractAddress: intent?.contract_address || intent?.mint_contract_address || intent?.to,
+      status: 'failed',
+      latencyMs,
+      gasUsed: gasParams?.gas?.toString?.(),
+      rpcLabel,
+      errorMessage: message,
+    })
     await recordAttempt(supabase, intent, 'failed', { error_message: message }).catch(() => null)
     await supabase.from('mint_intents').update({
       status: INTENT_STATES.FAILED,

@@ -8,6 +8,15 @@ import {
   recordLatency, getPrewarmStatus,
 } from './contract-cache.js'
 import { computeReadiness } from './readiness.js'
+import {
+  gasFromProfile,
+  loadExecutionProfile,
+  optimizationTelemetry,
+  readinessBoostFromProfile,
+  recordExecutionOptimization,
+  rpcLabelForUrl,
+  rpcTimeoutMs,
+} from './execution-optimizer.js'
 
 const SUPPORTED_EXECUTION_CHAINS = new Set(['eth', 'base', 'apechain', 'bnb'])
 const AUTO_STRIKE_ENABLED = String(process.env.AUTO_STRIKE_ENABLED || '').toLowerCase() === 'true'
@@ -113,10 +122,10 @@ function chainObject(chain) {
   }
 }
 
-function publicClient(chain) {
-  const url = RPC_URLS[chain]
+function publicClient(chain, rpcUrl, executionProfile) {
+  const url = rpcUrl || RPC_URLS[chain]
   if (!url) return null
-  return createPublicClient({ chain: chainObject(chain), transport: http(url, { timeout: 9000 }) })
+  return createPublicClient({ chain: chainObject(chain), transport: http(url, { timeout: rpcTimeoutMs(executionProfile, 9000) }) })
 }
 
 function cleanPrice(value) {
@@ -223,7 +232,10 @@ export async function prepareMintTransaction(body, _clientOverride = null, _supa
   const walletAddress = body.walletAddress || body.wallet_address || body.account
   if (!contract || !isAddress(contract, { strict: false })) throw new Error('Contract address is required for Fast Mint.')
   if (!walletAddress || !isAddress(walletAddress, { strict: false })) throw new Error('Connect wallet before preparing this mint.')
-  const client = _clientOverride || publicClient(chain)
+  const executionProfile = body.executionProfile || body.execution_profile || null
+  const rpcUrl = body.rpcUrl || body.rpc_url || null
+  const rpcLabel = body.rpcLabel || body.rpc_label || rpcLabelForUrl(chain, rpcUrl || RPC_URLS[chain])
+  const client = _clientOverride || publicClient(chain, rpcUrl, executionProfile)
   if (!client) throw new Error('Mint preparation needs RPC configured for this chain.')
 
   const quantity = BigInt(Math.max(1, Number(body.quantity || body.max_mint || 1)))
@@ -243,7 +255,7 @@ export async function prepareMintTransaction(body, _clientOverride = null, _supa
           maxSpend ? client.getGasPrice().catch(() => 0n) : Promise.resolve(0n),
         ])
         if (gasResult.status === 'fulfilled') {
-          const gas = gasResult.value
+          const gas = gasFromProfile(gasResult.value, executionProfile)
           const gasPrice = gasPriceResult.status === 'fulfilled' ? gasPriceResult.value : 0n
           if (maxSpend && (value + gas * gasPrice) > maxSpend) throw new Error('max_spend_exceeded')
           const latencyMs = Date.now() - t0
@@ -256,7 +268,18 @@ export async function prepareMintTransaction(body, _clientOverride = null, _supa
             to: contract, data, value: value.toString(), chainId, gas: gas.toString(),
             functionName: fastCandidate.functionName,
             argsSummary: fastCandidate.args.map(a => typeof a === 'bigint' ? a.toString() : String(a)),
-            source: 'cache', cacheHit: true, latencyMs,
+            source: 'cache',
+            cacheHit: true,
+            latencyMs,
+            executionState: executionProfile?.success_count ? 'Optimized' : 'Prepared',
+            optimized: Boolean(executionProfile?.success_count),
+            readinessBoost: readinessBoostFromProfile(executionProfile),
+            rpcLabel,
+            gasProfile: executionProfile ? {
+              min: executionProfile.min_gas,
+              avg: executionProfile.avg_gas,
+              max: executionProfile.max_gas,
+            } : null,
           }
           setCachedExecution(contract, chain, result, _supabase)
           return result
@@ -327,7 +350,7 @@ export async function prepareMintTransaction(body, _clientOverride = null, _supa
         })
         continue
       }
-      const gas = gasResult.value
+      const gas = gasFromProfile(gasResult.value, executionProfile)
       const gasPrice = gasPriceResult.status === 'fulfilled' ? gasPriceResult.value : 0n
       if (maxSpend && (value + gas * gasPrice) > maxSpend) throw new Error('max_spend_exceeded')
       const latencyMs = Date.now() - t0
@@ -340,7 +363,18 @@ export async function prepareMintTransaction(body, _clientOverride = null, _supa
         to: contract, data, value: value.toString(), chainId, gas: gas.toString(),
         functionName: candidate.functionName,
         argsSummary: candidate.args.map(arg => typeof arg === 'bigint' ? arg.toString() : String(arg)),
-        source: candidate.source, cacheHit: false, latencyMs,
+        source: candidate.source,
+        cacheHit: false,
+        latencyMs,
+        executionState: executionProfile?.success_count ? 'Optimized' : 'Prepared',
+        optimized: Boolean(executionProfile?.success_count),
+        readinessBoost: readinessBoostFromProfile(executionProfile),
+        rpcLabel,
+        gasProfile: executionProfile ? {
+          min: executionProfile.min_gas,
+          avg: executionProfile.avg_gas,
+          max: executionProfile.max_gas,
+        } : null,
       }
       setCachedExecution(contract, chain, result, _supabase)
       return result
@@ -526,7 +560,17 @@ export async function handleMintAction(req, res, action) {
         .eq('intent_id', intentId)
         .order('created_at', { ascending: true })
       const attempts = await loadAttempts(supabase, intentId)
-      return res.status(200).json({ ok: true, intent, events: events || [], attempts })
+      const optimizationProfile = await loadExecutionProfile(supabase, {
+        chain: intent.chain,
+        contractAddress: intent.contract_address,
+      })
+      return res.status(200).json({
+        ok: true,
+        intent,
+        events: events || [],
+        attempts,
+        optimization: optimizationProfile ? optimizationTelemetry(optimizationProfile) : null,
+      })
     }
 
     if (action === 'prewarm') {
@@ -587,26 +631,60 @@ export async function handleMintAction(req, res, action) {
       if (!SUPPORTED_EXECUTION_CHAINS.has(chain)) return res.status(400).json(safeError('This chain is discovery-only for now.'))
       const contract = body.contractAddress || body.contract_address
       if (contract && !isAddress(contract)) return res.status(400).json(safeError('This contract address does not look right.'))
+      const optimizationProfile = await loadExecutionProfile(supabase, { chain, contractAddress: contract })
       let preparedTransaction
+      const prepareStartedAt = Date.now()
       try {
-        preparedTransaction = await prepareMintTransaction(body, null, supabase)
+        preparedTransaction = await prepareMintTransaction({
+          ...body,
+          executionProfile: optimizationProfile,
+        }, null, supabase)
       } catch (error) {
+        await recordExecutionOptimization(supabase, {
+          chain,
+          contractAddress: contract,
+          status: 'failed',
+          latencyMs: Date.now() - prepareStartedAt,
+          errorMessage: safeMessage(error),
+        })
         return res.status(400).json(safeError(safeMessage(error)))
       }
+      const prepareLatencyMs = Date.now() - prepareStartedAt
       const row = await insertOptional(supabase, 'mint_intents', intentPayload(user, body, 'prepared'))
       const intentId = row.id || `local-${Date.now()}`
       // Parallel DB inserts — order not load-bearing for display
-      await Promise.all([
+      const eventWrites = [
         logEvent(supabase, intentId, user.id, 'preparing'),
         logEvent(supabase, intentId, user.id, 'phase'),
         logEvent(supabase, intentId, user.id, 'checking'),
         logEvent(supabase, intentId, user.id, 'prepared'),
-      ])
+      ]
+      if (preparedTransaction.optimized) {
+        eventWrites.push(logEvent(supabase, intentId, user.id, 'optimized', 'Optimized from previous execution history.', {
+          readinessBoost: preparedTransaction.readinessBoost,
+          gasProfile: preparedTransaction.gasProfile,
+          bestRpc: optimizationProfile?.best_rpc || preparedTransaction.rpcLabel,
+        }))
+      }
+      await Promise.all(eventWrites)
+      await recordExecutionOptimization(supabase, {
+        intent: { ...row, id: intentId, user_id: user.id },
+        chain,
+        contractAddress: contract,
+        status: 'prepared',
+        latencyMs: prepareLatencyMs,
+        gasUsed: preparedTransaction.gas,
+        functionName: preparedTransaction.functionName,
+        functionSource: preparedTransaction.source,
+        rpcLabel: preparedTransaction.rpcLabel,
+      })
       return res.status(200).json({
         ok: true,
         intent: { ...row, id: intentId },
         mode: body.mode || row.execution_mode || 'safe',
         preparedTransaction,
+        optimized: preparedTransaction.optimized,
+        optimization: optimizationProfile ? optimizationTelemetry(optimizationProfile) : null,
         message: 'Mint prepared and simulated. Confirm in your wallet when ready.',
       })
     }

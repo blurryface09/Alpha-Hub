@@ -456,3 +456,34 @@ on public.calendar_sync_runs
 for all
 using (public.alpha_hub_is_admin())
 with check (public.alpha_hub_is_admin());
+
+-- Execution optimization memory used by the Strike worker and mint preparation engine.
+create table if not exists public.execution_optimization_profiles (
+  id uuid primary key default gen_random_uuid(),
+  chain text not null,
+  contract_key text not null,
+  contract_address text,
+  contract_type text,
+  best_rpc text,
+  best_function_path text,
+  success_count integer default 0,
+  failure_count integer default 0,
+  success_rate numeric default 0,
+  avg_latency_ms numeric,
+  avg_confirmation_ms numeric,
+  min_gas numeric,
+  max_gas numeric,
+  avg_gas numeric,
+  retry_profile jsonb default '{}'::jsonb,
+  successful_pattern jsonb default '{}'::jsonb,
+  last_success_at timestamptz,
+  last_failure_at timestamptz,
+  created_at timestamptz default now(),
+  updated_at timestamptz default now(),
+  unique(chain, contract_key)
+);
+
+create index if not exists execution_optimization_profiles_chain_idx
+on public.execution_optimization_profiles(chain, updated_at desc);
+
+alter table public.execution_optimization_profiles enable row level security;
