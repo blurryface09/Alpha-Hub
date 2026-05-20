@@ -23,12 +23,20 @@ const AUTO_STRIKE_ENABLED = String(process.env.AUTO_STRIKE_ENABLED || '').toLowe
 const ALPHA_VAULT_ENABLED = String(process.env.ALPHA_VAULT_ENABLED || '').toLowerCase() === 'true'
 const MINT_NAMES = ['mint', 'publicMint', 'mintPublic', 'allowlistMint', 'presaleMint', 'purchase', 'claim', 'buy', 'safeMint']
 const RPC_URLS = {
-  eth: process.env.ETH_RPC_URL || 'https://eth.llamarpc.com',
+  eth: process.env.ETH_RPC_URL || 'https://ethereum.publicnode.com',
   base: process.env.BASE_RPC_URL || 'https://mainnet.base.org',
   apechain: process.env.APECHAIN_RPC_URL || '',
   bnb: process.env.BNB_RPC_URL || 'https://bsc-dataseed.binance.org',
   sepolia: process.env.SEPOLIA_RPC_URL || 'https://ethereum-sepolia-rpc.publicnode.com',
   'base-sepolia': process.env.BASE_SEPOLIA_RPC_URL || 'https://sepolia.base.org',
+}
+// Fallback RPC URLs tried in order when the primary fails with a network/HTTP error
+const RPC_FALLBACKS = {
+  eth:  ['https://cloudflare-eth.com', 'https://eth.drpc.org', 'https://1rpc.io/eth'],
+  base: ['https://base.drpc.org', 'https://1rpc.io/base'],
+  bnb:  ['https://bsc-dataseed1.binance.org', 'https://bsc-dataseed2.binance.org'],
+  sepolia: ['https://sepolia.drpc.org', 'https://1rpc.io/sepolia'],
+  'base-sepolia': ['https://base-sepolia.drpc.org'],
 }
 const EXPLORER_CHAIN_NAMES = {
   eth: 'Ethereum',
@@ -105,7 +113,7 @@ function safeMessage(error) {
   if (msg.includes('contract address')) return 'Contract address is needed for Fast or Strike Mint.'
   if (msg.includes('connect wallet')) return 'Connect wallet before preparing this mint.'
   if (msg.includes('no contract exists')) return 'No contract exists at this address on the selected chain.'
-  if (msg.includes('rpc')) return 'Mint preparation needs a working RPC for this chain.'
+  if (msg.includes('rpc') || msg.includes('http request failed') || msg.includes('fetch failed') || msg.includes('network error')) return 'RPC connection failed. Please retry in a moment.'
   if (msg.includes('max_spend_exceeded')) return 'Mint skipped because max spend was exceeded.'
   if (msg.includes('insufficient funds')) return 'The mint wallet does not have enough funds.'
   if (msg.includes('execution reverted') || msg.includes('revert')) return 'Mint simulation failed. The transaction was not sent.'
@@ -124,6 +132,11 @@ function chainObject(chain) {
       : { name: 'Ether', symbol: 'ETH', decimals: 18 },
     rpcUrls: { default: { http: [RPC_URLS[chain]].filter(Boolean) } },
   }
+}
+
+function isRpcFailure(error) {
+  const msg = String(error?.message || error || '').toLowerCase()
+  return msg.includes('http request failed') || msg.includes('fetch failed') || msg.includes('network error') || msg.includes('econnrefused') || msg.includes('etimedout')
 }
 
 function publicClient(chain, rpcUrl, executionProfile) {
@@ -302,98 +315,131 @@ export async function prepareMintTransaction(body, _clientOverride = null, _supa
     }
   }
 
-  // Full path: bytecode existence check + verified ABI fetch (parallel, independent)
-  const t1 = Date.now()
-  const [code, verifiedAbi] = await Promise.all([
-    client.getBytecode({ address: contract }),
-    fetchVerifiedAbi(contract, chain).catch(() => null),
-  ])
-  console.log('[mint-benchmark] abi+bytecode', {
-    duration_ms: Date.now() - t1,
-    chain,
-    contract: contract.slice(0, 10),
-    hasVerifiedAbi: Boolean(verifiedAbi),
-    cacheSkipped: Boolean(cachedExec),
-  })
-
-  if (!code || code === '0x') throw new Error('No contract exists at this address on the selected chain.')
-
-  // Deduplicate: skip fallback candidates whose function name is already covered by verified ABI
-  const abiCandidates = candidatesFromAbi(verifiedAbi, quantity, walletAddress)
-  const abiNames = new Set(abiCandidates.map(c => c.functionName))
-  let allFallbacks = fallbackCandidates(quantity, walletAddress).filter(c => !abiNames.has(c.functionName))
-  // If caller hinted a specific function name, promote it to the front of the fallback list
-  if (hintedFunction) {
-    const idx = allFallbacks.findIndex(c => c.functionName === hintedFunction)
-    if (idx > 0) allFallbacks = [allFallbacks[idx], ...allFallbacks.filter((_, i) => i !== idx)]
-  }
-  const candidates = [...abiCandidates, ...allFallbacks]
-  console.log('[mint-benchmark] candidates', {
-    chain,
-    contract: contract.slice(0, 10),
-    abiCount: abiCandidates.length,
-    fallbackCount: allFallbacks.length,
-    total: candidates.length,
-    hint: hintedFunction || null,
-  })
+  // Build ordered list of RPC clients to try: primary first, then fallbacks
+  const primaryUrl = rpcUrl || RPC_URLS[chain]
+  const fallbackUrls = _clientOverride ? [] : (RPC_FALLBACKS[chain] || []).filter(u => u !== primaryUrl)
+  const rpcQueue = _clientOverride
+    ? [{ activeClient: _clientOverride, url: 'injected' }]
+    : [primaryUrl, ...fallbackUrls].filter(Boolean).map(url => ({ activeClient: publicClient(chain, url, executionProfile), url }))
 
   let lastError = null
   let attemptCount = 0
-  for (const candidate of candidates) {
-    attemptCount++
+
+  for (const { activeClient: activeRpc, url: activeUrl } of rpcQueue) {
+    if (!activeRpc) continue
+
+    // Full path: bytecode existence check + verified ABI fetch (parallel, independent)
+    const t1 = Date.now()
+    let code, verifiedAbi
     try {
-      const data = encodeFunctionData({
-        abi: candidate.abi,
-        functionName: candidate.functionName,
-        args: candidate.args,
-      })
-      // Parallel: estimateGas + getGasPrice (getGasPrice only needed when spend limit set)
-      const [gasResult, gasPriceResult] = await Promise.allSettled([
-        client.estimateGas({ account: walletAddress, to: contract, data, value }),
-        maxSpend ? client.getGasPrice().catch(() => 0n) : Promise.resolve(0n),
+      ;[code, verifiedAbi] = await Promise.all([
+        activeRpc.getBytecode({ address: contract }),
+        fetchVerifiedAbi(contract, chain).catch(() => null),
       ])
-      if (gasResult.status === 'rejected') {
-        lastError = gasResult.reason
-        console.log('[mint-benchmark] candidate_fail', {
-          chain,
-          contract: contract.slice(0, 10),
-          fn: candidate.functionName,
-          source: candidate.source,
-          error: String(gasResult.reason?.message || gasResult.reason || '').slice(0, 80),
-        })
+    } catch (rpcErr) {
+      if (isRpcFailure(rpcErr)) {
+        console.log('[mint-benchmark] rpc_fail_fallback', { url: activeUrl.slice(0, 40), error: String(rpcErr.message || '').slice(0, 80) })
+        lastError = rpcErr
         continue
       }
-      const gas = gasFromProfile(gasResult.value, executionProfile)
-      const gasPrice = gasPriceResult.status === 'fulfilled' ? gasPriceResult.value : 0n
-      if (maxSpend && (value + gas * gasPrice) > maxSpend) throw new Error('max_spend_exceeded')
-      const latencyMs = Date.now() - t0
-      console.log('[mint-benchmark] success', {
-        duration_ms: latencyMs, chain, contract: contract.slice(0, 10),
-        fn: candidate.functionName, source: candidate.source, gas: gas.toString(), attempts: attemptCount,
-      })
-      recordLatency(contract, chain, latencyMs)
-      const result = {
-        to: contract, data, value: value.toString(), chainId, gas: gas.toString(),
-        functionName: candidate.functionName,
-        argsSummary: candidate.args.map(arg => typeof arg === 'bigint' ? arg.toString() : String(arg)),
-        source: candidate.source,
-        cacheHit: false,
-        latencyMs,
-        executionState: executionProfile?.success_count ? 'Optimized' : 'Prepared',
-        optimized: Boolean(executionProfile?.success_count),
-        readinessBoost: readinessBoostFromProfile(executionProfile),
-        rpcLabel,
-        gasProfile: executionProfile ? {
-          min: executionProfile.min_gas,
-          avg: executionProfile.avg_gas,
-          max: executionProfile.max_gas,
-        } : null,
-      }
-      setCachedExecution(contract, chain, result, _supabase)
-      return result
-    } catch (error) {
-      lastError = error
+      throw rpcErr
     }
+
+    console.log('[mint-benchmark] abi+bytecode', {
+      duration_ms: Date.now() - t1,
+      chain,
+      contract: contract.slice(0, 10),
+      rpc: activeUrl.replace(/^https?:\/\//, '').slice(0, 30),
+      hasVerifiedAbi: Boolean(verifiedAbi),
+      cacheSkipped: Boolean(cachedExec),
+    })
+
+    if (!code || code === '0x') throw new Error('No contract exists at this address on the selected chain.')
+
+    // Deduplicate: skip fallback candidates whose function name is already covered by verified ABI
+    const abiCandidates = candidatesFromAbi(verifiedAbi, quantity, walletAddress)
+    const abiNames = new Set(abiCandidates.map(c => c.functionName))
+    let allFallbacks = fallbackCandidates(quantity, walletAddress).filter(c => !abiNames.has(c.functionName))
+    // If caller hinted a specific function name, promote it to the front of the fallback list
+    if (hintedFunction) {
+      const idx = allFallbacks.findIndex(c => c.functionName === hintedFunction)
+      if (idx > 0) allFallbacks = [allFallbacks[idx], ...allFallbacks.filter((_, i) => i !== idx)]
+    }
+    const candidates = [...abiCandidates, ...allFallbacks]
+    console.log('[mint-benchmark] candidates', {
+      chain,
+      contract: contract.slice(0, 10),
+      abiCount: abiCandidates.length,
+      fallbackCount: allFallbacks.length,
+      total: candidates.length,
+      hint: hintedFunction || null,
+      rpc: activeUrl.replace(/^https?:\/\//, '').slice(0, 30),
+    })
+
+    let rpcHadNetworkError = false
+    for (const candidate of candidates) {
+      attemptCount++
+      try {
+        const data = encodeFunctionData({
+          abi: candidate.abi,
+          functionName: candidate.functionName,
+          args: candidate.args,
+        })
+        // Parallel: estimateGas + getGasPrice (getGasPrice only needed when spend limit set)
+        const [gasResult, gasPriceResult] = await Promise.allSettled([
+          activeRpc.estimateGas({ account: walletAddress, to: contract, data, value }),
+          maxSpend ? activeRpc.getGasPrice().catch(() => 0n) : Promise.resolve(0n),
+        ])
+        if (gasResult.status === 'rejected') {
+          lastError = gasResult.reason
+          if (isRpcFailure(gasResult.reason)) { rpcHadNetworkError = true; break }
+          console.log('[mint-benchmark] candidate_fail', {
+            chain,
+            contract: contract.slice(0, 10),
+            fn: candidate.functionName,
+            source: candidate.source,
+            error: String(gasResult.reason?.message || gasResult.reason || '').slice(0, 80),
+          })
+          continue
+        }
+        const gas = gasFromProfile(gasResult.value, executionProfile)
+        const gasPrice = gasPriceResult.status === 'fulfilled' ? gasPriceResult.value : 0n
+        if (maxSpend && (value + gas * gasPrice) > maxSpend) throw new Error('max_spend_exceeded')
+        const latencyMs = Date.now() - t0
+        console.log('[mint-benchmark] success', {
+          duration_ms: latencyMs, chain, contract: contract.slice(0, 10),
+          fn: candidate.functionName, source: candidate.source, gas: gas.toString(), attempts: attemptCount,
+          rpc: activeUrl.replace(/^https?:\/\//, '').slice(0, 30),
+        })
+        recordLatency(contract, chain, latencyMs)
+        const result = {
+          to: contract, data, value: value.toString(), chainId, gas: gas.toString(),
+          functionName: candidate.functionName,
+          argsSummary: candidate.args.map(arg => typeof arg === 'bigint' ? arg.toString() : String(arg)),
+          source: candidate.source,
+          cacheHit: false,
+          latencyMs,
+          executionState: executionProfile?.success_count ? 'Optimized' : 'Prepared',
+          optimized: Boolean(executionProfile?.success_count),
+          readinessBoost: readinessBoostFromProfile(executionProfile),
+          rpcLabel: rpcLabelForUrl(chain, activeUrl),
+          gasProfile: executionProfile ? {
+            min: executionProfile.min_gas,
+            avg: executionProfile.avg_gas,
+            max: executionProfile.max_gas,
+          } : null,
+        }
+        setCachedExecution(contract, chain, result, _supabase)
+        return result
+      } catch (error) {
+        lastError = error
+        if (isRpcFailure(error)) { rpcHadNetworkError = true; break }
+      }
+    }
+
+    // If this RPC had a network error, try the next fallback; otherwise candidates are exhausted
+    if (!rpcHadNetworkError) break
+    console.log('[mint-benchmark] rpc_retry', { failedUrl: activeUrl.slice(0, 40), remaining: rpcQueue.length - rpcQueue.indexOf({ activeClient: activeRpc, url: activeUrl }) - 1 })
   }
 
   const rawReason = String(lastError?.shortMessage || lastError?.message || lastError || 'unknown')
