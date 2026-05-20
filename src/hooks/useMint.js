@@ -13,27 +13,44 @@ const CHAIN_MAP = {
 
 const MINT_FUNCTIONS = ['mint', 'publicMint', 'mintPublic', 'safeMint', 'mintNFT', 'claim', 'freeMint']
 
+// Returns { text, fault } — fault is 'collection' | 'wallet' | 'app'
 function classifyMintError(message) {
   const msg = (message || '').toLowerCase()
+
+  // Collection-side: mint is closed, not active, or gated
+  if (msg.includes('not currently active') || msg.includes('not open') || msg.includes('seadrop mint not active')) {
+    return { text: 'This mint is not currently open. Check the project\'s official page for the live schedule.', fault: 'collection' }
+  }
+  if (msg.includes('simulation failed') || msg.includes('contract rejected') || msg.includes('execution reverted') || msg.includes('reverted')) {
+    return { text: 'The contract rejected the transaction. This mint may be closed, not started yet, or require an allowlist.', fault: 'collection' }
+  }
+  if (msg.includes('unknown mint function') || msg.includes('not found') || msg.includes('no function')) {
+    return { text: 'Could not find a standard mint function on this contract. Try minting from the official site.', fault: 'collection' }
+  }
+  if (msg.includes('no contract exists')) {
+    return { text: 'No contract found at this address on the selected chain. Check the contract address in your project settings.', fault: 'collection' }
+  }
+
+  // Wallet-side: user action or funds
   if (msg.includes('insufficient funds') || msg.includes('insufficient_funds')) {
-    return 'Not enough ETH for mint + gas'
+    return { text: 'Not enough ETH in your wallet for this mint + gas fees.', fault: 'wallet' }
   }
-  if (msg.includes('execution reverted') || msg.includes('reverted')) {
-    return 'Contract rejected transaction. Mint may be closed or you are not eligible.'
+  if (msg.includes('user rejected') || msg.includes('user denied') || msg.includes('cancelled')) {
+    return { text: 'Transaction cancelled in wallet.', fault: 'wallet' }
   }
-  if (msg.includes('nonce too low') || msg.includes('nonce')) {
-    return 'Nonce error. Refresh and try again.'
+  if (msg.includes('nonce')) {
+    return { text: 'Nonce conflict — refresh the page and try again.', fault: 'wallet' }
   }
-  if (msg.includes('gas') && (msg.includes('estimation failed') || msg.includes('estimate'))) {
-    return 'Gas estimation failed. Try increasing gas limit manually.'
+
+  // App/infra-side: our connectivity or chain issues
+  if (msg.includes('rpc') || msg.includes('connection failed') || msg.includes('timeout') || msg.includes('timed out')) {
+    return { text: 'Connection error. Please retry in a moment.', fault: 'app' }
   }
-  if (msg.includes('user rejected') || msg.includes('user denied')) {
-    return 'Transaction cancelled in wallet.'
+  if (msg.includes('gas estimation failed') || msg.includes('could not estimate')) {
+    return { text: 'Gas estimation failed. Try setting a manual gas limit in Edit.', fault: 'app' }
   }
-  if (msg.includes('timeout') || msg.includes('timed out')) {
-    return 'Request timed out. Check your connection and try again.'
-  }
-  return message
+
+  return { text: message || 'Mint failed. Please try again.', fault: 'app' }
 }
 
 function isFunctionNotFound(msg) {
@@ -153,8 +170,9 @@ export function useMint() {
         const serverReason = firstResult?.reason || ''
         if (!isFunctionNotFound(firstErr)) {
           // Non-function-detection error — surface immediately with context
-          console.debug('[mint-exec] error', { stage: 'prepare', reason: firstErr, serverReason, httpStatus: firstResponse.status })
-          throw new Error(classifyMintError(firstErr || 'Mint preparation failed'))
+          const classified = classifyMintError(firstErr || 'Mint preparation failed')
+          console.debug('[mint-exec] error', { stage: 'prepare', reason: firstErr, serverReason, fault: classified.fault, httpStatus: firstResponse.status })
+          throw Object.assign(new Error(classified.text), { fault: classified.fault })
         }
         // API could not detect function — probe each candidate name explicitly
         for (const funcName of MINT_FUNCTIONS) {
@@ -170,8 +188,9 @@ export function useMint() {
             if (!res.ok || result?.ok === false || !result?.preparedTransaction) {
               const errMsg = result?.error || ''
               if (isFunctionNotFound(errMsg)) continue
-              console.debug('[mint-exec] error', { stage: 'candidate_probe', fn: funcName, reason: errMsg, serverReason: result?.reason || '' })
-              throw new Error(classifyMintError(errMsg || 'Mint preparation failed'))
+              const classified = classifyMintError(errMsg || 'Mint preparation failed')
+              console.debug('[mint-exec] error', { stage: 'candidate_probe', fn: funcName, reason: errMsg, serverReason: result?.reason || '', fault: classified.fault })
+              throw Object.assign(new Error(classified.text), { fault: classified.fault })
             }
             prepared = result
             console.debug('[mint-exec] candidate_ok', { fn: funcName, duration_ms: Date.now() - benchStart })
@@ -240,13 +259,17 @@ export function useMint() {
       return { success: true, txHash }
 
     } catch (e) {
-      const msg = classifyMintError(e.shortMessage || e.message || 'Transaction failed')
+      const classified = e.fault
+        ? { text: e.message, fault: e.fault }
+        : classifyMintError(e.shortMessage || e.message || 'Transaction failed')
+      const { text: msg, fault } = classified
       console.debug('[mint-exec] error', {
         stage: 'execution',
         reason: msg.slice(0, 120),
+        fault,
         duration_ms: Date.now() - benchStart,
       })
-      toast.error(msg, { id: 'mint-tx', duration: 6000 })
+      toast.error(msg, { id: 'mint-tx', duration: fault === 'collection' ? 10000 : 6000 })
 
       if (userId) {
         try {
@@ -261,7 +284,7 @@ export function useMint() {
           })
         } catch {}
       }
-      return { success: false, error: msg }
+      return { success: false, error: msg, fault }
     }
   }
 

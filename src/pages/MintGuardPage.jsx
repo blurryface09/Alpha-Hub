@@ -60,6 +60,7 @@ export default function MintGuardPage() {
   const [initialChain, setInitialChain] = useState('eth')
   const [confirmMint, setConfirmMint] = useState(null) // project to confirm mint for
   const [mintingId, setMintingId] = useState(null)
+  const [mintErrors, setMintErrors] = useState({}) // { [projectId]: { text, fault } }
   const [telegramChatId, setTelegramChatId] = useState(null)
   const [userToken, setUserToken] = useState(null)
   const [upgradeRequired, setUpgradeRequired] = useState(null)
@@ -528,9 +529,11 @@ export default function MintGuardPage() {
     if (liveChatId && project.mint_mode === 'auto') {
       notifyTelegram(tgProject, 'auto', liveToken)
     }
+    setMintErrors(prev => { const n = { ...prev }; delete n[project.id]; return n })
     try {
       const result = await mintHook(project, user.id)
       if (result?.success) {
+        setMintErrors(prev => { const n = { ...prev }; delete n[project.id]; return n })
         await supabase.from('wl_projects').update({ status: 'minted' }).eq('id', project.id)
         setProjects(prev => prev.map(p => p.id === project.id ? { ...p, status: 'minted' } : p))
         await supabase.from('notifications').insert({
@@ -543,6 +546,7 @@ export default function MintGuardPage() {
         // Telegram success alert
         notifyTelegram({ ...tgProject, tx_hash: result.txHash }, 'success', liveToken)
       } else if (result && !result.success) {
+        setMintErrors(prev => ({ ...prev, [project.id]: { text: result.error, fault: result.fault || 'app' } }))
         await supabase.from('notifications').insert({
           user_id: user.id,
           type: 'mint_failed',
@@ -714,18 +718,42 @@ export default function MintGuardPage() {
         <div className="space-y-3">
           <AnimatePresence>
             {filtered.map(project => (
-              <ProjectCard
-                key={project.id}
-                project={project}
-                isMinting={mintingId === project.id}
-                isDeleting={deletingId === project.id}
-                onMint={(isAuto) => handleMint(project, isAuto)}
-                onDelete={() => handleDelete(project.id)}
-                onStatusUpdate={(s) => handleStatusUpdate(project.id, s)}
-                onMintModeToggle={() => handleMintModeToggle(project)}
-                onEdit={(updates) => handleEditProject(project.id, updates)}
-                onReplay={() => handleOpenReplay(project)}
-              />
+              <div key={project.id}>
+                <ProjectCard
+                  project={project}
+                  isMinting={mintingId === project.id}
+                  isDeleting={deletingId === project.id}
+                  onMint={(isAuto) => handleMint(project, isAuto)}
+                  onDelete={() => handleDelete(project.id)}
+                  onStatusUpdate={(s) => handleStatusUpdate(project.id, s)}
+                  onMintModeToggle={() => handleMintModeToggle(project)}
+                  onEdit={(updates) => handleEditProject(project.id, updates)}
+                  onReplay={() => handleOpenReplay(project)}
+                />
+                {mintErrors[project.id] && (
+                  <div className={`mx-1 -mt-1 rounded-b-xl px-4 py-2.5 flex items-start gap-2.5 text-sm border-t ${
+                    mintErrors[project.id].fault === 'collection'
+                      ? 'bg-amber-950/60 border-amber-800/40 text-amber-200'
+                      : mintErrors[project.id].fault === 'wallet'
+                      ? 'bg-orange-950/60 border-orange-800/40 text-orange-200'
+                      : 'bg-red-950/60 border-red-800/40 text-red-200'
+                  }`}>
+                    <span className="mt-0.5 shrink-0 text-base">
+                      {mintErrors[project.id].fault === 'collection' ? '📋' : mintErrors[project.id].fault === 'wallet' ? '👛' : '⚠️'}
+                    </span>
+                    <div className="flex-1 min-w-0">
+                      <span className="font-semibold mr-1">
+                        {mintErrors[project.id].fault === 'collection' ? 'Collection issue:' : mintErrors[project.id].fault === 'wallet' ? 'Wallet issue:' : 'App error:'}
+                      </span>
+                      {mintErrors[project.id].text}
+                    </div>
+                    <button
+                      onClick={() => setMintErrors(prev => { const n = { ...prev }; delete n[project.id]; return n })}
+                      className="shrink-0 opacity-50 hover:opacity-100 transition-opacity text-lg leading-none"
+                    >×</button>
+                  </div>
+                )}
+              </div>
             ))}
           </AnimatePresence>
         </div>
