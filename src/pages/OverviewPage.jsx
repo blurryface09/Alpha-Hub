@@ -178,16 +178,37 @@ export default function OverviewPage() {
       at: n.created_at,
     }))
 
-    const whaleEvents = activity.slice(0, 12).map((a, index) => ({
-      id: `whale-${a.id || a.tx_hash || index}`,
-      type: a.is_mint ? 'whale_mint' : 'whale_move',
-      title: `${a.wallet_label || a.wallet_address?.slice(0, 10) || 'Wallet'} ${a.method_name || 'activity'}`,
-      message: `${a.value_eth ?? 0} ${a.chain === 'bnb' ? 'BNB' : 'ETH'} on ${(a.chain || 'eth').toUpperCase()}`,
-      at: a.timestamp || a.created_at,
-    }))
+    const whaleEvents = activity
+      .slice(0, 20)
+      .sort((a, b) => {
+        const ethA = parseFloat(a.value_eth || 0)
+        const ethB = parseFloat(b.value_eth || 0)
+        const timeA = new Date(a.timestamp || a.created_at).getTime()
+        const timeB = new Date(b.timestamp || b.created_at).getTime()
+        // Within same hour, sort by ETH value descending
+        if (Math.abs(timeA - timeB) < 60 * 60 * 1000) return ethB - ethA
+        return timeB - timeA
+      })
+      .slice(0, 12)
+      .map((a, index) => ({
+        id: `whale-${a.id || a.tx_hash || index}`,
+        type: a.is_mint ? 'whale_mint' : 'whale_move',
+        title: `${a.wallet_label || a.wallet_address?.slice(0, 10) || 'Wallet'} ${a.method_name || 'activity'}`,
+        message: `${a.value_eth ?? 0} ${a.chain === 'bnb' ? 'BNB' : 'ETH'} on ${(a.chain || 'eth').toUpperCase()}`,
+        at: a.timestamp || a.created_at,
+      }))
 
+    const now = Date.now()
     const mintEvents = projects
-      .filter((p) => ['upcoming', 'live'].includes(p.status))
+      .filter((p) => {
+        if (p.status === 'live') {
+          // Verify the project is actually recent — skip stale "live" entries
+          if (!p.mint_date) return true
+          const age = now - new Date(p.mint_date).getTime()
+          return age < 8 * 60 * 60 * 1000
+        }
+        return p.status === 'upcoming'
+      })
       .slice(0, 8)
       .map((p) => ({
         id: `project-${p.id}`,

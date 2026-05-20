@@ -85,7 +85,8 @@ export function isActiveMintCalendarProject(project) {
   if (!project.mint_date) return false
   const date = new Date(project.mint_date).getTime()
   const now = Date.now()
-  return confirmed && date <= now && date > now - 12 * 60 * 60 * 1000
+  const windowMs = highConf ? 6 * 60 * 60 * 1000 : 2 * 60 * 60 * 1000
+  return confirmed && date <= now && date > now - windowMs
 }
 
 export function computeDisplayStatus(project) {
@@ -139,4 +140,24 @@ export function mintGuardEligible(project) {
   if (!project?.contract_address) return false
   if (['community', 'admin'].includes(project.source) && hasUsefulProjectName(project)) return true
   return isLaunchReadyCalendarProject(project) && calendarQualityScore(project) >= 50
+}
+
+export function freshnessBonus(project) {
+  const ts = project.updated_at || project.last_seen_at || project.first_seen_at
+  if (!ts) return 0
+  const ageHours = (Date.now() - new Date(ts).getTime()) / 3600000
+  if (ageHours < 1) return 40
+  if (ageHours < 6) return 25
+  if (ageHours < 24) return 12
+  if (ageHours < 72) return 4
+  return 0
+}
+
+export function isStaleCalendarProject(project) {
+  if (!project) return true
+  if (project.mint_status === 'ended' || project.status === 'ended') return true
+  if (!project.mint_date) return false
+  const mintPassed = Date.now() - new Date(project.mint_date).getTime() > 24 * 60 * 60 * 1000
+  if (!mintPassed) return false
+  return project.mint_status !== 'live_now'
 }

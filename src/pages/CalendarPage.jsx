@@ -12,9 +12,11 @@ import { useSubscription } from '../hooks/useSubscription'
 import { friendlyError } from '../lib/errors'
 import {
   calendarQualityScore,
+  freshnessBonus,
   isActiveMintCalendarProject,
   isLaunchReadyCalendarProject,
   isRawCalendarDiscovery,
+  isStaleCalendarProject,
   mintGuardEligible,
 } from '../lib/calendarQuality'
 import { MINT_MODES, MINT_PHASES, recommendMintMode } from '../lib/mintModes'
@@ -50,10 +52,15 @@ function chainIdFor(chain) {
 function scoreFor(project, tab) {
   const sourcePriority = { admin: 500, community: 450, opensea: 350, alchemy: 330, zora: 300, onchain: 0 }[project.source] || 100
   const quality = Number(project.quality_score || calendarQualityScore(project))
-  if (tab === 'hidden-gems') return project.hidden_gem_score || 0
+  const fresh = freshnessBonus(project)
+  const userBoost = userInteractionBoost(project)
+  if (tab === 'hidden-gems') return (project.hidden_gem_score || 0) + fresh + userBoost
   if (tab === 'new-contracts') return (project.first_seen_at ? new Date(project.first_seen_at).getTime() : 0) + quality
-  if (tab === 'minting-now') return sourcePriority + quality + (project.mint_count || project.hype_score || 0)
-  return sourcePriority + quality + (project.hype_score || project.whale_interest_score || 0)
+  if (tab === 'minting-now') return sourcePriority + quality + (project.mint_count || project.hype_score || 0) + fresh
+  // Trending: amplify whale interest score when strong signal
+  const whaleRaw = project.whale_interest_score || 0
+  const whaleBoost = whaleRaw >= 70 ? whaleRaw * 2 : whaleRaw >= 40 ? whaleRaw * 1.4 : whaleRaw
+  return sourcePriority + quality + (project.hype_score || 0) + whaleBoost + fresh + userBoost
 }
 
 function isLive(project) {
@@ -64,12 +71,15 @@ function isLive(project) {
   // Only trusted sources can use 'medium' confidence as confirmed
   const trustedSource = ['opensea', 'alchemy', 'admin', 'community'].includes(project.source)
   const confidence = project.mint_date_confidence || project.source_confidence || 'low'
-  const confirmed = ['high', 'manual', 'confirmed'].includes(confidence) ||
-    (confidence === 'medium' && trustedSource)
+  const highConf = ['high', 'manual', 'confirmed'].includes(confidence)
+  const confirmed = highConf || (confidence === 'medium' && trustedSource)
   if (!confirmed) return false
   const date = new Date(project.mint_date).getTime()
   const now = Date.now()
-  return date <= now && date > now - 12 * 60 * 60 * 1000
+  if (date > now) return false
+  // High confidence: 6h live window. Medium trusted: 2h to reduce false positives.
+  const windowMs = highConf ? 6 * 60 * 60 * 1000 : 2 * 60 * 60 * 1000
+  return date > now - windowMs
 }
 
 function friendlyMintStatus(project) {
@@ -89,6 +99,8 @@ function tabFilter(project, tab) {
   const quality = Number(project.quality_score || calendarQualityScore(project))
   if (tab === 'new-contracts') return raw || project.status === 'pending_review' || !project.mint_date
   if (tab === 'minting-now') return isActiveMintCalendarProject(project) && (quality >= 60 || project.source_confidence === 'high' || ['admin', 'community'].includes(project.source))
+  // Drop ended/stale projects from trending and hidden-gems
+  if (isStaleCalendarProject(project)) return false
   if (!isLaunchReadyCalendarProject(project)) return false
   if (tab === 'hidden-gems') return quality >= 50 && ((project.hidden_gem_score || 0) >= (project.hype_score || 0) || (project.hype_score || 0) < 45)
   return quality >= 60
@@ -204,6 +216,59 @@ function timeAgo(value) {
   return `${Math.floor(hours / 24)}d ago`
 }
 
+const PROJECTS_CACHE_KEY = 'alphahub:calendar:projects'
+const PROJECTS_CACHE_TTL = 5 * 60 * 1000
+
+function loadProjectsCache() {
+  try {
+    const raw = sessionStorage.getItem(PROJECTS_CACHE_KEY)
+    if (!raw) return null
+    const { data, ts } = JSON.parse(raw)
+    if (Date.now() - ts > PROJECTS_CACHE_TTL) return null
+    return data
+  } catch { return null }
+}
+
+function saveProjectsCache(data) {
+  try {
+    sessionStorage.setItem(PROJECTS_CACHE_KEY, JSON.stringify({ data, ts: Date.now() }))
+  } catch {}
+}
+
+function trackProjectView(projectId) {
+  try {
+    const raw = localStorage.getItem('alphahub:calendar:views')
+    const views = raw ? JSON.parse(raw) : {}
+    views[projectId] = (views[projectId] || 0) + 1
+    localStorage.setItem('alphahub:calendar:views', JSON.stringify(views))
+  } catch {}
+}
+
+function readProjectViews(projectId) {
+  try {
+    const raw = localStorage.getItem('alphahub:calendar:views')
+    if (!raw) return 0
+    return JSON.parse(raw)[projectId] || 0
+  } catch { return 0 }
+}
+
+function userInteractionBoost(project) {
+  const rating = readLocalRating(project.id)
+  const views = readProjectViews(project.id)
+  if (!rating && !views) return 0
+  const ratingBoost = rating ? (rating >= 4 ? 25 : rating >= 3 ? 12 : 0) : 0
+  const viewBoost = views >= 3 ? 8 : views >= 1 ? 3 : 0
+  return ratingBoost + viewBoost
+}
+
+function confidenceExplanation(project) {
+  const conf = project.source_confidence || project.mint_date_confidence || 'low'
+  const src = sourceLabel(project.source)
+  if (conf === 'high') return `Verified by ${src}. Contract, timing, and source are confirmed — lowest-risk to act on.`
+  if (conf === 'medium') return `Sourced from ${src}. Key details detected but not all fields confirmed. Check official links before minting.`
+  return `Signal detected but not fully verified. Confirm contract, timing, and official links before acting on this project.`
+}
+
 export default function CalendarPage() {
   const { shareCode } = useParams()
   const { user } = useAuthStore()
@@ -211,8 +276,11 @@ export default function CalendarPage() {
   const { plan } = useSubscription()
   const isAdmin = isConnected && address?.toLowerCase() === ADMIN_WALLET
   const [activeTab, setActiveTab] = useState('trending')
-  const [projects, setProjects] = useState([])
-  const [loading, setLoading] = useState(true)
+  const [projects, setProjects] = useState(() => {
+    const cached = loadProjectsCache()
+    return cached ? mergeLocalRatings(cached) : []
+  })
+  const [loading, setLoading] = useState(() => !loadProjectsCache())
   const [schemaMissing, setSchemaMissing] = useState(false)
   const [status, setStatus] = useState(null)
   const [syncing, setSyncing] = useState(false)
@@ -250,7 +318,8 @@ export default function CalendarPage() {
   const calendarNotReady = schemaMissing || status?.schemaMissing
 
   const fetchProjects = useCallback(async ({ silent = false } = {}) => {
-    if (!silent) setLoading(true)
+    const hasCached = Boolean(loadProjectsCache())
+    if (!silent && !hasCached) setLoading(true)
     try {
       let request = supabase
         .from('calendar_projects')
@@ -264,16 +333,17 @@ export default function CalendarPage() {
         const msg = `${error.message || ''}`.toLowerCase()
         if (msg.includes('schema') || msg.includes('relation') || msg.includes('does not exist')) {
           setSchemaMissing(true)
-          setProjects([])
+          if (!hasCached) setProjects([])
           return
         }
         throw error
       }
       setSchemaMissing(false)
+      saveProjectsCache(data || [])
       setProjects(mergeLocalRatings(data || []))
     } catch (error) {
       toast.error(friendlyError(error, 'Calendar could not refresh.'))
-      if (!silent) setProjects([])
+      if (!silent && !hasCached) setProjects([])
     } finally {
       if (!silent) setLoading(false)
     }
@@ -293,6 +363,11 @@ export default function CalendarPage() {
   useEffect(() => {
     fetchProjects()
     fetchStatus()
+    const interval = setInterval(() => {
+      fetchProjects({ silent: true })
+      fetchStatus()
+    }, 3 * 60 * 1000)
+    return () => clearInterval(interval)
   }, [fetchProjects, fetchStatus])
 
   const lastResumeRefresh = useRef(0)
@@ -308,6 +383,7 @@ export default function CalendarPage() {
   }, [fetchProjects])
 
   const visibleProjects = useMemo(() => {
+    const contractsSeen = new Set()
     return projects
       .filter(project => !shareCode || project.share_code?.toLowerCase() === shareCode.toLowerCase() || project.share_slug?.toLowerCase() === shareCode.toLowerCase())
       .filter(project => tabFilter(project, activeTab))
@@ -320,6 +396,13 @@ export default function CalendarPage() {
           .some(value => String(value).toLowerCase().includes(needle))
       })
       .sort((a, b) => scoreFor(b, activeTab) - scoreFor(a, activeTab))
+      .filter(project => {
+        const key = project.contract_address?.toLowerCase()
+        if (!key) return true
+        if (contractsSeen.has(key)) return false
+        contractsSeen.add(key)
+        return true
+      })
   }, [activeTab, chain, projects, query, shareCode])
 
   const runSync = async () => {
@@ -907,7 +990,7 @@ export default function CalendarPage() {
               project={project}
               tab={activeTab}
               isAdmin={isAdmin}
-              onOpen={() => setSelectedProject(project)}
+              onOpen={() => { setSelectedProject(project); trackProjectView(project.id) }}
               onAdd={() => addToMintGuard(project)}
               onSave={() => saveProject(project)}
               onStatus={status => updateStatus(project, status)}
@@ -965,13 +1048,13 @@ const ProjectCard = memo(function ProjectCard({ project, tab, isAdmin, onOpen, o
     <div className="card overflow-hidden p-4 hover:border-accent/40 hover:-translate-y-0.5 transition-all duration-200">
       {project.image_url && (
         <div className="mb-4 aspect-[16/7] overflow-hidden rounded-2xl border border-border bg-surface2">
-          <img src={project.image_url} alt={projectTitle(project)} className="h-full w-full object-cover" loading="lazy" />
+          <img src={project.image_url} alt={projectTitle(project)} className="h-full w-full object-cover" loading="lazy" decoding="async" />
         </div>
       )}
       <div className="flex items-start gap-4">
         <div className="w-14 h-14 rounded-lg bg-surface2 border border-border overflow-hidden flex items-center justify-center shrink-0">
           {project.image_url ? (
-            <img src={project.image_url} alt="" className="w-full h-full object-cover" />
+            <img src={project.image_url} alt="" className="w-full h-full object-cover" decoding="async" />
           ) : (
             <Sparkles size={22} className="text-accent" />
           )}
@@ -1011,23 +1094,22 @@ const ProjectCard = memo(function ProjectCard({ project, tab, isAdmin, onOpen, o
 
       <RatingControl rating={rating} ratingCount={ratingCount} onRate={onRate} busy={ratingBusy} />
 
-      <div className="flex flex-col sm:flex-row gap-2 mt-4">
-        <button onClick={onOpen} className="btn-primary flex-1">View Details</button>
-        <button onClick={onAdd} className="btn-ghost flex-1">
-          Add to My Mints
-        </button>
-        <button onClick={onSave} className="btn-ghost flex-1">
-          Save
-        </button>
-        <button onClick={onShare} className="btn-ghost flex-1 flex items-center justify-center gap-2">
-          <Share2 size={14} />
-          Share
-        </button>
-        {project.source_url && (
-          <a href={project.source_url} target="_blank" rel="noreferrer" className="btn-ghost flex items-center justify-center gap-2">
-            <ExternalLink size={13} />
-          </a>
-        )}
+      <div className="mt-4 space-y-2">
+        <div className="flex gap-2">
+          <button onClick={onOpen} className="btn-primary flex-1">View Details</button>
+          <button onClick={onAdd} className="btn-ghost flex-1">Add to Mints</button>
+        </div>
+        <div className="flex gap-2">
+          <button onClick={onSave} className="btn-ghost flex-1">Save</button>
+          <button onClick={onShare} className="btn-ghost flex-1 flex items-center justify-center gap-1.5">
+            <Share2 size={13} />Share
+          </button>
+          {project.source_url && (
+            <a href={project.source_url} target="_blank" rel="noreferrer" className="btn-ghost px-3 flex items-center justify-center" title="Open source">
+              <ExternalLink size={13} />
+            </a>
+          )}
+        </div>
       </div>
 
       {isAdmin && (
@@ -1188,7 +1270,7 @@ function DetailDrawer({ project, isAdmin, onClose, onAdd, onSave, onStatus, onRa
       <div className="w-full max-w-2xl bg-surface border-l border-border h-full overflow-y-auto">
         {project.image_url ? (
           <div className="h-52 bg-surface2">
-            <img src={project.image_url} alt={projectTitle(project)} className="h-full w-full object-cover" />
+            <img src={project.image_url} alt={projectTitle(project)} className="h-full w-full object-cover" decoding="async" />
           </div>
         ) : (
           <div className="h-36 bg-gradient-to-br from-accent/20 via-purple/10 to-accent2/10 flex items-center justify-center">
@@ -1230,7 +1312,7 @@ function DetailDrawer({ project, isAdmin, onClose, onAdd, onSave, onStatus, onRa
           <Info label="Mint price" value={project.mint_price || 'TBA'} />
           <Info label="Mint type" value={project.mint_type || 'unknown'} />
           <Info label="Contract" value={project.contract_address || 'Not detected yet'} mono />
-          <Info label="Source" value={`${sourceLabel(project.source)} · ${project.source_confidence || 'low'} confidence`} />
+          <Info label="Source confidence" value={confidenceExplanation(project)} />
           <Info label="Share code" value={project.share_code || 'Generated after migration'} mono />
           <Info label="Submitted by" value={project.submitted_by_label || project.community_name || project.community_x_handle || 'Alpha Hub source sync'} />
           <Info label="What Alpha Hub found" value={`Mint events: ${project.mint_count || 0}. Holders/supply signal: ${project.holder_count ?? 'unknown'}. Hidden gem score: ${project.hidden_gem_score || 0}. Hype score: ${project.hype_score || 0}.`} />
