@@ -18,7 +18,7 @@ import {
   rpcTimeoutMs,
 } from './execution-optimizer.js'
 
-const SUPPORTED_EXECUTION_CHAINS = new Set(['eth', 'base', 'apechain', 'bnb'])
+const SUPPORTED_EXECUTION_CHAINS = new Set(['eth', 'base', 'apechain', 'bnb', 'sepolia', 'base-sepolia'])
 const AUTO_STRIKE_ENABLED = String(process.env.AUTO_STRIKE_ENABLED || '').toLowerCase() === 'true'
 const ALPHA_VAULT_ENABLED = String(process.env.ALPHA_VAULT_ENABLED || '').toLowerCase() === 'true'
 const MINT_NAMES = ['mint', 'publicMint', 'mintPublic', 'allowlistMint', 'presaleMint', 'purchase', 'claim', 'buy', 'safeMint']
@@ -27,12 +27,16 @@ const RPC_URLS = {
   base: process.env.BASE_RPC_URL || 'https://mainnet.base.org',
   apechain: process.env.APECHAIN_RPC_URL || '',
   bnb: process.env.BNB_RPC_URL || 'https://bsc-dataseed.binance.org',
+  sepolia: process.env.SEPOLIA_RPC_URL || 'https://rpc.sepolia.org',
+  'base-sepolia': process.env.BASE_SEPOLIA_RPC_URL || 'https://sepolia.base.org',
 }
 const EXPLORER_CHAIN_NAMES = {
   eth: 'Ethereum',
   base: 'Base',
   apechain: 'ApeChain',
   bnb: 'BNB Chain',
+  sepolia: 'Sepolia',
+  'base-sepolia': 'Base Sepolia',
 }
 
 const EVENT_MESSAGES = {

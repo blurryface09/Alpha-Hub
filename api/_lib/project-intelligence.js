@@ -14,10 +14,16 @@ const CHAIN_IDS = {
   bsc: 56,
   solana: 0,
   sol: 0,
+  sepolia: 11155111,
+  'base-sepolia': 84532,
+  basesepolia: 84532,
 }
 
 export function normalizeChain(value = '') {
   const text = String(value || '').toLowerCase()
+  // Testnet chains must be checked before their mainnet aliases (base-sepolia before base)
+  if (text === 'sepolia' || text === '11155111') return 'sepolia'
+  if (text === 'base-sepolia' || text === 'basesepolia' || text === '84532') return 'base-sepolia'
   if (text.includes('base')) return 'base'
   if (text.includes('ape')) return 'apechain'
   if (text.includes('bnb') || text.includes('bsc')) return 'bnb'
