@@ -21,7 +21,7 @@ import {
 const SUPPORTED_EXECUTION_CHAINS = new Set(['eth', 'base', 'apechain', 'bnb', 'sepolia', 'base-sepolia'])
 const AUTO_STRIKE_ENABLED = String(process.env.AUTO_STRIKE_ENABLED || '').toLowerCase() === 'true'
 const ALPHA_VAULT_ENABLED = String(process.env.ALPHA_VAULT_ENABLED || '').toLowerCase() === 'true'
-const MINT_NAMES = ['mint', 'publicMint', 'mintPublic', 'allowlistMint', 'presaleMint', 'purchase', 'claim', 'buy', 'safeMint']
+const MINT_NAMES = ['mint', 'publicMint', 'mintPublic', 'allowlistMint', 'presaleMint', 'purchase', 'claim', 'buy', 'safeMint', 'mintNFT', 'freeMint']
 const RPC_URLS = {
   eth: process.env.ETH_RPC_URL || 'https://ethereum.publicnode.com',
   base: process.env.BASE_RPC_URL || 'https://mainnet.base.org',
@@ -193,18 +193,36 @@ function isAddressInput(input) {
   return String(input?.type || '') === 'address'
 }
 
+function defaultForType(type) {
+  const t = String(type || '')
+  if (/^uint/.test(t) || /^int/.test(t)) return 0n
+  if (t === 'address') return '0x0000000000000000000000000000000000000000'
+  if (t === 'bool') return false
+  if (t === 'string') return ''
+  if (/^bytes/.test(t)) return '0x'  // bytes, bytes32, bytes calldata, etc.
+  if (t.endsWith('[]')) return []
+  return null  // tuple or unknown — can't safely guess
+}
+
 export function argsForInputs(inputs = [], quantity, walletAddress) {
   if (!inputs.length) return []
-  if (inputs.length === 1) {
-    if (isUint(inputs[0])) return [quantity]
-    if (isAddressInput(inputs[0])) return [walletAddress]
+  // Build args type-by-type, substituting quantity for the first uint and walletAddress for address
+  let usedQuantity = false
+  const args = []
+  for (const input of inputs) {
+    const t = String(input?.type || '')
+    if (/^uint/.test(t) || /^int/.test(t)) {
+      args.push(usedQuantity ? 0n : quantity)
+      usedQuantity = true
+    } else if (t === 'address') {
+      args.push(walletAddress)
+    } else {
+      const def = defaultForType(t)
+      if (def === null) return null  // tuple or unknown composite — skip this function
+      args.push(def)
+    }
   }
-  if (inputs.length === 2) {
-    if (isAddressInput(inputs[0]) && isUint(inputs[1])) return [walletAddress, quantity]
-    if (isUint(inputs[0]) && isAddressInput(inputs[1])) return [quantity, walletAddress]
-    if (isUint(inputs[0]) && isUint(inputs[1])) return [quantity, 0n]
-  }
-  return null
+  return args
 }
 
 export function candidatesFromAbi(abi, quantity, walletAddress) {
