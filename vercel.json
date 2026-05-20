@@ -14,6 +14,7 @@
     { "source": "/api/eth-price",    "destination": "/api/etherscan?tool=eth-price" },
     { "source": "/api/ai-analysis", "destination": "/api/etherscan?tool=ai-analysis" },
     { "source": "/api/intelligence/detect-project", "destination": "/api/calendar/detect-project" },
+    { "source": "/api/mint/readiness", "destination": "/api/calendar/mint-readiness" },
     { "source": "/api/mint/prewarm", "destination": "/api/calendar/mint-prewarm" },
     { "source": "/api/mint/prepare", "destination": "/api/calendar/mint-prepare" },
     { "source": "/api/mint/enable-strike", "destination": "/api/calendar/mint-enable-strike" },

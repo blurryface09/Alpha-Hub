@@ -6,7 +6,8 @@ import { Zap, Trash2, Clock, ChevronDown, ChevronUp, ToggleLeft, ToggleRight, Ex
 import toast from 'react-hot-toast'
 import { fetchProjectIntel } from '../../lib/ai'
 import { useAuthStore, useMonitorStore } from '../../store/index.js'
-import { usePrewarm } from '../../hooks/usePrewarm'
+import { useReadiness } from '../../hooks/useReadiness'
+import { ExecutionReadyBadge, ReadinessPanel } from './ExecutionReadyBadge'
 
 // ── Strike state badge ────────────────────────────────────────────────────────
 
@@ -121,7 +122,7 @@ export default function ProjectCard({ project, isMinting, isDeleting, onMint, on
   const mintPrice = displayMintPrice(project.mint_price)
   const { user } = useAuthStore()
   const { watchedProjects, follow, unfollow, loading: watchLoading } = useMonitorStore()
-  const prewarm = usePrewarm(project.contract_address ? project : {})
+  const readiness = useReadiness(project.contract_address ? project : null)
   const watchId = project.calendar_project_id || project.id
   const isWatching = watchedProjects.has(watchId)
 
@@ -166,14 +167,7 @@ export default function ProjectCard({ project, isMinting, isDeleting, onMint, on
                 {project.notes?.includes('Needs review') && (
                   <span className="badge badge-yellow text-[10px]">Needs Review</span>
                 )}
-                {prewarm.ready && (
-                  <span
-                    title={`Execution ready -- ${prewarm.functionName} cached (${prewarm.confidence}% confidence)`}
-                    className="badge text-[10px] border-green/25 text-green bg-green/8"
-                  >
-                    <Zap size={9} className="inline mr-0.5" />warmed
-                  </span>
-                )}
+                <ExecutionReadyBadge readiness={readiness} loading={readiness.loading} />
                 {intel && intel.wl_giveaway_likely && (
                   <span className="badge badge-green text-[10px] animate-pulse-slow">WL GIVEAWAY</span>
                 )}
@@ -272,6 +266,14 @@ export default function ProjectCard({ project, isMinting, isDeleting, onMint, on
               <div className="text-xs text-muted bg-surface2 rounded-lg p-2">{project.notes}</div>
             )}
           </div>
+
+          {project.contract_address && (
+            <ReadinessPanel
+              readiness={readiness}
+              loading={readiness.loading}
+              onRefresh={readiness.refresh}
+            />
+          )}
 
           <div className="border-t border-border pt-3">
             <div className="flex items-center justify-between mb-2">

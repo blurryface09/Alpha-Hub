@@ -7,6 +7,7 @@ import {
   getCachedExecution, setCachedExecution, loadCachedExecution,
   recordLatency, getPrewarmStatus,
 } from './contract-cache.js'
+import { computeReadiness } from './readiness.js'
 
 const SUPPORTED_EXECUTION_CHAINS = new Set(['eth', 'base', 'apechain', 'bnb'])
 const AUTO_STRIKE_ENABLED = String(process.env.AUTO_STRIKE_ENABLED || '').toLowerCase() === 'true'
@@ -502,7 +503,7 @@ async function loadVault(supabase, userId) {
 }
 
 export async function handleMintAction(req, res, action) {
-  const allowed = new Set(['prepare', 'prewarm', 'enable-strike', 'stop', 'execute', 'confirm', 'status', 'strike-simulate', 'strike-replay', 'strike-rerun'])
+  const allowed = new Set(['prepare', 'prewarm', 'readiness', 'enable-strike', 'stop', 'execute', 'confirm', 'status', 'strike-simulate', 'strike-replay', 'strike-rerun'])
   if (!allowed.has(action)) return res.status(404).json(safeError('Unknown mint action.'))
 
   const user = await requireUser(req, res)
@@ -554,6 +555,29 @@ export async function handleMintAction(req, res, action) {
         // Prewarm failure is non-fatal — return current (empty) status
       }
       return res.status(200).json({ ok: true, cached: false, prewarm: getPrewarmStatus(contract, chain) })
+    }
+
+    if (action === 'readiness') {
+      if (req.method !== 'POST') return res.status(405).json(safeError('Method not allowed.'))
+      const body     = req.body || {}
+      const chain    = normalizeChain(body.chain)
+      const contract = normalizeOptionalText(body.contractAddress || body.contract_address)
+
+      const readiness = computeReadiness(contract, chain)
+
+      // Auto-trigger background prewarm when stale or function not yet detected
+      if (contract && SUPPORTED_EXECUTION_CHAINS.has(chain) &&
+          (readiness.staleCache || !readiness.checks.function_cached?.pass)) {
+        prepareMintTransaction({
+          chain,
+          contractAddress: contract,
+          walletAddress:   '0x0000000000000000000000000000000000000001',
+          mintPrice:       body.mintPrice || '0',
+          quantity:        Number(body.quantity) || 1,
+        }, null, supabase).catch(() => null)
+      }
+
+      return res.status(200).json({ ok: true, readiness })
     }
 
     if (action === 'prepare') {

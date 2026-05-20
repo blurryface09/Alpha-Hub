@@ -146,6 +146,16 @@ export function getExecutionConfidence(contract, chain) {
   return Math.min(100, score)
 }
 
+export function isStaleCached(contract, chain) {
+  const entry = execCache.get(cacheKey(contract, chain))
+  if (!entry) return false
+  return (Date.now() - entry.at) >= 6 * 60 * 60 * 1000
+}
+
+export function invalidateCachedExecution(contract, chain) {
+  execCache.delete(cacheKey(contract, chain))
+}
+
 export function getPrewarmStatus(contract, chain) {
   const exec       = contract ? execCache.get(cacheKey(contract, chain)) : null
   const confidence = getExecutionConfidence(contract, chain)
