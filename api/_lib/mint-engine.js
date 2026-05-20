@@ -2,6 +2,11 @@ import { createPublicClient, encodeFunctionData, http, isAddress, parseAbi, pars
 import { createServiceClient, requireUser } from './auth.js'
 import { rateLimit, sendRateLimit } from './redis.js'
 import { chainIdFor, normalizeChain, normalizePhase, recommendMode } from './project-intelligence.js'
+import {
+  getCachedAbi, setCachedAbi,
+  getCachedExecution, setCachedExecution, loadCachedExecution,
+  recordLatency, getPrewarmStatus,
+} from './contract-cache.js'
 
 const SUPPORTED_EXECUTION_CHAINS = new Set(['eth', 'base', 'apechain', 'bnb'])
 const AUTO_STRIKE_ENABLED = String(process.env.AUTO_STRIKE_ENABLED || '').toLowerCase() === 'true'
@@ -125,6 +130,9 @@ function spendLimitWei(body) {
 }
 
 async function fetchVerifiedAbi(contractAddress, chain) {
+  const cached = getCachedAbi(contractAddress, chain)
+  if (cached) return cached
+
   const apiKey = process.env.ETHERSCAN_API_KEY || process.env.VITE_ETHERSCAN_API_KEY || ''
   if (!apiKey) return null
   const chainId = chainIdFor(chain)
@@ -140,7 +148,9 @@ async function fetchVerifiedAbi(contractAddress, chain) {
     const response = await fetch(url, { signal: controller.signal })
     const data = await response.json()
     if (data?.status === '1' && data?.result && !String(data.result).includes('not verified')) {
-      return JSON.parse(data.result)
+      const abi = JSON.parse(data.result)
+      setCachedAbi(contractAddress, chain, abi)
+      return abi
     }
   } finally {
     clearTimeout(timer)
@@ -203,7 +213,8 @@ export function fallbackCandidates(quantity, walletAddress) {
 }
 
 // _clientOverride: inject a mock viem publicClient for testing
-export async function prepareMintTransaction(body, _clientOverride = null) {
+// _supabase: optional supabase client for cache persistence (fire-and-forget)
+export async function prepareMintTransaction(body, _clientOverride = null, _supabase = null) {
   const t0 = Date.now()
   const chain = normalizeChain(body.chain)
   const chainId = chainIdFor(chain)
@@ -218,7 +229,47 @@ export async function prepareMintTransaction(body, _clientOverride = null) {
   const value = parseEther(cleanPrice(body.mintPrice || body.mint_price || body.price)) * quantity
   const maxSpend = spendLimitWei(body)
 
-  // Parallel: bytecode existence check + verified ABI fetch (independent)
+  // Cache fast path: if we know which function worked before, skip bytecode+ABI+iteration
+  const cachedExec = getCachedExecution(contract, chain)
+  if (cachedExec) {
+    // Prefer fallback candidate (reconstructs correct args for current quantity/wallet)
+    const fastCandidate = fallbackCandidates(quantity, walletAddress).find(c => c.functionName === cachedExec.functionName)
+    if (fastCandidate) {
+      try {
+        const data = encodeFunctionData({ abi: fastCandidate.abi, functionName: fastCandidate.functionName, args: fastCandidate.args })
+        const [gasResult, gasPriceResult] = await Promise.allSettled([
+          client.estimateGas({ account: walletAddress, to: contract, data, value }),
+          maxSpend ? client.getGasPrice().catch(() => 0n) : Promise.resolve(0n),
+        ])
+        if (gasResult.status === 'fulfilled') {
+          const gas = gasResult.value
+          const gasPrice = gasPriceResult.status === 'fulfilled' ? gasPriceResult.value : 0n
+          if (maxSpend && (value + gas * gasPrice) > maxSpend) throw new Error('max_spend_exceeded')
+          const latencyMs = Date.now() - t0
+          console.log('[mint-benchmark] cache_hit', {
+            duration_ms: latencyMs, chain, contract: contract.slice(0, 10),
+            fn: fastCandidate.functionName, successCount: cachedExec.successCount,
+          })
+          recordLatency(contract, chain, latencyMs)
+          const result = {
+            to: contract, data, value: value.toString(), chainId, gas: gas.toString(),
+            functionName: fastCandidate.functionName,
+            argsSummary: fastCandidate.args.map(a => typeof a === 'bigint' ? a.toString() : String(a)),
+            source: 'cache', cacheHit: true, latencyMs,
+          }
+          setCachedExecution(contract, chain, result, _supabase)
+          return result
+        }
+        // Gas estimation failed for cached function — fall through to full path (cache may be stale)
+        console.log('[mint-benchmark] cache_stale', { chain, contract: contract.slice(0, 10), fn: cachedExec.functionName })
+      } catch (cacheErr) {
+        if (String(cacheErr.message).includes('max_spend_exceeded')) throw cacheErr
+        console.log('[mint-benchmark] cache_fast_path_fail', { chain, error: String(cacheErr.message || '').slice(0, 80) })
+      }
+    }
+  }
+
+  // Full path: bytecode existence check + verified ABI fetch (parallel, independent)
   const t1 = Date.now()
   const [code, verifiedAbi] = await Promise.all([
     client.getBytecode({ address: contract }),
@@ -229,6 +280,7 @@ export async function prepareMintTransaction(body, _clientOverride = null) {
     chain,
     contract: contract.slice(0, 10),
     hasVerifiedAbi: Boolean(verifiedAbi),
+    cacheSkipped: Boolean(cachedExec),
   })
 
   if (!code || code === '0x') throw new Error('No contract exists at this address on the selected chain.')
@@ -277,25 +329,20 @@ export async function prepareMintTransaction(body, _clientOverride = null) {
       const gas = gasResult.value
       const gasPrice = gasPriceResult.status === 'fulfilled' ? gasPriceResult.value : 0n
       if (maxSpend && (value + gas * gasPrice) > maxSpend) throw new Error('max_spend_exceeded')
+      const latencyMs = Date.now() - t0
       console.log('[mint-benchmark] success', {
-        duration_ms: Date.now() - t0,
-        chain,
-        contract: contract.slice(0, 10),
-        fn: candidate.functionName,
-        source: candidate.source,
-        gas: gas.toString(),
-        attempts: attemptCount,
+        duration_ms: latencyMs, chain, contract: contract.slice(0, 10),
+        fn: candidate.functionName, source: candidate.source, gas: gas.toString(), attempts: attemptCount,
       })
-      return {
-        to: contract,
-        data,
-        value: value.toString(),
-        chainId,
-        gas: gas.toString(),
+      recordLatency(contract, chain, latencyMs)
+      const result = {
+        to: contract, data, value: value.toString(), chainId, gas: gas.toString(),
         functionName: candidate.functionName,
         argsSummary: candidate.args.map(arg => typeof arg === 'bigint' ? arg.toString() : String(arg)),
-        source: candidate.source,
+        source: candidate.source, cacheHit: false, latencyMs,
       }
+      setCachedExecution(contract, chain, result, _supabase)
+      return result
     } catch (error) {
       lastError = error
     }
@@ -455,7 +502,7 @@ async function loadVault(supabase, userId) {
 }
 
 export async function handleMintAction(req, res, action) {
-  const allowed = new Set(['prepare', 'enable-strike', 'stop', 'execute', 'confirm', 'status', 'strike-simulate', 'strike-replay', 'strike-rerun'])
+  const allowed = new Set(['prepare', 'prewarm', 'enable-strike', 'stop', 'execute', 'confirm', 'status', 'strike-simulate', 'strike-replay', 'strike-rerun'])
   if (!allowed.has(action)) return res.status(404).json(safeError('Unknown mint action.'))
 
   const user = await requireUser(req, res)
@@ -481,6 +528,34 @@ export async function handleMintAction(req, res, action) {
       return res.status(200).json({ ok: true, intent, events: events || [], attempts })
     }
 
+    if (action === 'prewarm') {
+      if (req.method !== 'POST') return res.status(405).json(safeError('Method not allowed.'))
+      const body = req.body || {}
+      const chain = normalizeChain(body.chain)
+      const contract = body.contractAddress || body.contract_address
+      if (!contract) return res.status(200).json({ ok: true, cached: false, prewarm: getPrewarmStatus(null, null) })
+      if (!SUPPORTED_EXECUTION_CHAINS.has(chain)) {
+        return res.status(200).json({ ok: true, cached: false, prewarm: { ready: false, confidence: 0, functionName: null } })
+      }
+      // Return immediately if already cached — no need to re-run
+      const existing = getPrewarmStatus(contract, chain)
+      if (existing.ready) {
+        return res.status(200).json({ ok: true, cached: true, prewarm: existing })
+      }
+      // Prewarm uses a placeholder wallet — just needs to detect the function
+      const prewarmWallet = body.walletAddress || '0x0000000000000000000000000000000000000001'
+      try {
+        await prepareMintTransaction(
+          { ...body, walletAddress: prewarmWallet, mintPrice: body.mintPrice || body.mint_price || '0' },
+          null,
+          supabase,
+        )
+      } catch {
+        // Prewarm failure is non-fatal — return current (empty) status
+      }
+      return res.status(200).json({ ok: true, cached: false, prewarm: getPrewarmStatus(contract, chain) })
+    }
+
     if (action === 'prepare') {
       if (req.method !== 'POST') return res.status(405).json(safeError('Method not allowed.'))
       const body = req.body || {}
@@ -490,7 +565,7 @@ export async function handleMintAction(req, res, action) {
       if (contract && !isAddress(contract)) return res.status(400).json(safeError('This contract address does not look right.'))
       let preparedTransaction
       try {
-        preparedTransaction = await prepareMintTransaction(body)
+        preparedTransaction = await prepareMintTransaction(body, null, supabase)
       } catch (error) {
         return res.status(400).json(safeError(safeMessage(error)))
       }
@@ -769,7 +844,7 @@ export async function handleMintAction(req, res, action) {
       await recordAttempt(supabase, intentId, user.id, 'wallet_confirmation_ready', { mode })
       let preparedTransaction
       try {
-        preparedTransaction = await prepareMintTransaction({ ...intent, walletAddress: req.body?.walletAddress, mode })
+        preparedTransaction = await prepareMintTransaction({ ...intent, walletAddress: req.body?.walletAddress, mode }, null, supabase)
       } catch (error) {
         return res.status(400).json(safeError(safeMessage(error)))
       }
