@@ -397,7 +397,10 @@ export default function StrikeReviewModal({ project, vault, onConfirmArm, onClos
               <p className="text-xs text-amber-200/70 leading-relaxed">
                 Strike Mode will execute transactions through Alpha Vault when the mint goes live.
                 Use a dedicated burner wallet. Set a max spend limit. Do not deposit more than you can afford to lose.
-                This arm is simulation-only — no real transactions will be sent until LIVE_EXECUTION_ENABLED is enabled.
+                {liveExecEnabled
+                  ? ' Live execution is active — real transactions will be sent when the mint opens.'
+                  : ' LIVE_EXECUTION_ENABLED is off — no real transactions will be sent until it is enabled.'
+                }
               </p>
             </div>
 

@@ -246,11 +246,16 @@ export default function MintGuardPage() {
       }, payload => {
         const updated = payload.new
         if (updated.telegram_mint_approved === true && updated.status !== 'minted') {
-          // Reset the flag first, then execute
           supabase.from('wl_projects').update({ telegram_mint_approved: null }).eq('id', updated.id)
           setProjects(prev => prev.map(p => p.id === updated.id
             ? { ...p, ...updated, telegram_mint_approved: null } : p))
-          // Execute the mint directly (skip confirm modal — user already confirmed in Telegram)
+          if (updated.mint_mode === 'auto') {
+            // Auto-mode projects execute via Alpha Vault on the server — the cron handles it.
+            // Calling the wallet path here would block on a browser wallet prompt that never comes.
+            toast.success(`${updated.name} — Strike Mode is armed, Alpha Vault will execute when ready.`)
+            return
+          }
+          // Confirm-mode: skip the confirm modal, user already said yes in Telegram
           executeMint({ ...updated })
         }
       })

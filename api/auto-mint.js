@@ -41,6 +41,13 @@ const CHAIN_CONFIG = {
   bnb:  { chain: bsc,     id: 56   },
 }
 
+const SEADROP_ADDRESS = '0x00005EA00Ac477B1030CE78506496e8C2dE24bf5'
+const SEADROP_ABI = parseAbi([
+  'function mintPublic(address nftContract, address feeRecipient, address minterIfNotPayer, uint256 quantity) payable',
+  'function getAllowedFeeRecipients(address nftContract) view returns (address[])',
+])
+const SEADROP_FEE_RECIPIENT_FALLBACK = '0x0000a26b00c1F0DF003000390027140000fAa719'
+
 const EXECUTION_STATUS = {
   QUEUED: 'queued',
   PREPARING: 'preparing',
@@ -182,14 +189,41 @@ async function prepareMintTransaction(project, account) {
 
   const verifiedAbi = await fetchVerifiedAbi(project.contract_address, chainCfg.id)
   if (verifiedAbi) {
-    const mintFn = findMintFn(verifiedAbi)
-    if (mintFn) {
+    // SeaDrop contracts expose mintPublic(address, address, address, uint256) — the call must
+    // go through the SeaDrop router, not the NFT contract directly.
+    const seadropFn = verifiedAbi.find(f =>
+      f.type === 'function' && f.name === 'mintPublic' &&
+      f.inputs?.length === 4 && f.inputs[0]?.type === 'address'
+    )
+    if (seadropFn) {
+      let feeRecipient = SEADROP_FEE_RECIPIENT_FALLBACK
+      try {
+        const seadropPc = createPublicClient({ chain: chainCfg.chain, transport: fallbackTransport(chainKey) })
+        const recipients = await seadropPc.readContract({
+          address: SEADROP_ADDRESS,
+          abi: SEADROP_ABI,
+          functionName: 'getAllowedFeeRecipients',
+          args: [project.contract_address],
+        })
+        if (recipients?.[0]) feeRecipient = recipients[0]
+      } catch {}
       attempts.push({
-        abi: verifiedAbi,
-        functionName: mintFn.name,
-        args: buildArgs(mintFn, quantity, account),
-        source: `abi.${mintFn.name}`,
+        abi: SEADROP_ABI,
+        to: SEADROP_ADDRESS,
+        functionName: 'mintPublic',
+        args: [project.contract_address, feeRecipient, account.address, quantity],
+        source: 'seadrop.mintPublic',
       })
+    } else {
+      const mintFn = findMintFn(verifiedAbi)
+      if (mintFn) {
+        attempts.push({
+          abi: verifiedAbi,
+          functionName: mintFn.name,
+          args: buildArgs(mintFn, quantity, account),
+          source: `abi.${mintFn.name}`,
+        })
+      }
     }
   }
 
@@ -213,7 +247,7 @@ async function prepareMintTransaction(project, account) {
         args: attempt.args,
       })
       return {
-        to: project.contract_address,
+        to: attempt.to ?? project.contract_address,
         data,
         value: totalValue,
         chainId: chainCfg.id,
@@ -257,6 +291,53 @@ function assertSpendWithinLimits(project, prepared, simulation) {
   if (maxMintPrice && prepared.value > maxMintPrice) throw new Error('max_spend_exceeded')
   if (maxGasFee && simulation.totalGasCost > maxGasFee) throw new Error('max_spend_exceeded')
   if (maxTotalSpend && simulation.totalCost > maxTotalSpend) throw new Error('max_spend_exceeded')
+}
+
+// ---- pending-confirmation recovery -----------------------------------------
+
+async function resolveSubmittedProject(project, chatId) {
+  const { data: pending } = await supabase
+    .from('mint_log')
+    .select('tx_hash')
+    .eq('project_id', project.id)
+    .eq('status', 'pending')
+    .order('executed_at', { ascending: false })
+    .limit(1)
+
+  const pendingTxHash = pending?.[0]?.tx_hash
+  if (!pendingTxHash) return // no pending TX on record — leave for manual retry
+
+  const chainCfg = CHAIN_CONFIG[project.chain || 'eth']
+  if (!chainCfg) return
+
+  try {
+    const pc = createPublicClient({ chain: chainCfg.chain, transport: fallbackTransport(project.chain || 'eth') })
+    const receipt = await Promise.race([
+      pc.getTransactionReceipt({ hash: pendingTxHash }),
+      new Promise((_, reject) => setTimeout(() => reject(new Error('lookup timeout')), 8000)),
+    ])
+
+    if (receipt?.status === 'success') {
+      await supabase.from('wl_projects').update({ status: 'minted' }).eq('id', project.id)
+      await markProject(project.id, { execution_status: EXECUTION_STATUS.CONFIRMED, confirmed_at: nowIso() })
+      await supabase.from('mint_log').update({ status: 'success' })
+        .eq('project_id', project.id).eq('tx_hash', pendingTxHash)
+      await tgNotify(chatId,
+        `✅ <b>Auto-Mint Confirmed (late): ${project.name}</b>\n\nTX: <code>${pendingTxHash.slice(0, 20)}...</code>`
+      )
+    } else if (receipt?.status === 'reverted') {
+      // TX reverted on-chain — clear the pending flag so the cron can retry
+      await supabase.from('wl_projects').update({ auto_mint_fired: false }).eq('id', project.id)
+      await supabase.from('mint_log').update({ status: 'failed', error_message: 'reverted on-chain' })
+        .eq('project_id', project.id).eq('tx_hash', pendingTxHash)
+      await tgNotify(chatId,
+        `❌ <b>Auto-Mint TX Reverted: ${project.name}</b>\n\nTX: <code>${pendingTxHash.slice(0, 20)}...</code>\nWill retry automatically.`
+      )
+    }
+    // null receipt = still pending — do nothing, check again next run
+  } catch {
+    // RPC lookup failed — leave as-is rather than risk double-fire
+  }
 }
 
 // ---- mint execution --------------------------------------------------------
@@ -336,18 +417,23 @@ export default async function handler(req, res) {
     return res.status(200).json({ ok: false, error: 'Supabase env vars missing' })
   }
 
-  // Find all live projects with auto-mint enabled and a contract address.
-  // Select * so new safety columns can be used when present without breaking older schemas.
-  const { data: projects, error } = await supabase
-    .from('wl_projects')
-    .select('*')
-    .eq('status', 'live')
-    .eq('mint_mode', 'auto')
-    .not('contract_address', 'is', null)
-    .neq('auto_mint_fired', true)  // don't double-fire
+  // Two queries: fresh projects ready to execute, plus previously-submitted projects
+  // that need an on-chain confirmation check before we consider re-execution.
+  const [{ data: freshProjects, error }, { data: pendingProjects }] = await Promise.all([
+    supabase.from('wl_projects').select('*')
+      .eq('status', 'live').eq('mint_mode', 'auto')
+      .not('contract_address', 'is', null)
+      .neq('auto_mint_fired', true),
+    supabase.from('wl_projects').select('*')
+      .eq('status', 'live').eq('mint_mode', 'auto')
+      .not('contract_address', 'is', null)
+      .eq('auto_mint_fired', true)
+      .eq('execution_status', EXECUTION_STATUS.SUBMITTED),
+  ])
 
   if (error) return res.status(200).json({ ok: false, error: error.message })
-  if (!projects?.length) return res.status(200).json({ ok: true, fired: 0 })
+  const projects = [...(freshProjects || []), ...(pendingProjects || [])]
+  if (!projects.length) return res.status(200).json({ ok: true, fired: 0 })
 
   const userIds = [...new Set(projects.map(p => p.user_id))]
 
@@ -375,7 +461,13 @@ export default async function handler(req, res) {
     const walletRow = walletMap[project.user_id]
     const chatId = chatMap[project.user_id]
 
-    if (project.automint_enabled === false) {
+    // Previously submitted — check on-chain rather than re-executing blindly
+    if (project.auto_mint_fired === true && project.execution_status === EXECUTION_STATUS.SUBMITTED) {
+      await resolveSubmittedProject(project, chatId)
+      continue
+    }
+
+    if (project.automint_enabled !== true) {
       await markProject(project.id, {
         execution_status: EXECUTION_STATUS.SKIPPED,
         execution_reason: 'automint_not_enabled',
@@ -383,7 +475,7 @@ export default async function handler(req, res) {
       continue
     }
 
-    if (project.mint_time_confirmed === false) {
+    if (project.mint_time_confirmed !== true) {
       await markProject(project.id, {
         execution_status: EXECUTION_STATUS.SKIPPED,
         execution_reason: 'mint_time_not_confirmed',
@@ -444,13 +536,25 @@ export default async function handler(req, res) {
       }
 
       if (!confirmed) {
-        await supabase.from('wl_projects').update({ auto_mint_fired: false }).eq('id', project.id)
+        // Keep auto_mint_fired=true — prevents blind re-execution on the next tick.
+        // Record the pending TX hash in mint_log so resolveSubmittedProject can check it.
+        try {
+          await supabase.from('mint_log').insert({
+            user_id: project.user_id,
+            project_id: project.id,
+            wallet_address: walletRow.wallet_address,
+            chain: project.chain || 'eth',
+            tx_hash: txHash,
+            status: 'pending',
+            executed_at: new Date().toISOString(),
+          })
+        } catch {}
         await markProject(project.id, {
           execution_status: EXECUTION_STATUS.SUBMITTED,
           execution_reason: 'confirmation_timeout',
         })
         await tgNotify(chatId,
-          `⏳ <b>TX submitted but unconfirmed: ${project.name}</b>\n\nTX: <code>${txHash.slice(0, 20)}...</code>\nCheck on-chain and mark manually if needed.`
+          `⏳ <b>TX submitted but unconfirmed: ${project.name}</b>\n\nTX: <code>${txHash.slice(0, 20)}...</code>\nAlpha will check confirmation on the next run.`
         )
         continue
       }
