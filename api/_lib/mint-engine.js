@@ -593,7 +593,7 @@ const OPTIONAL_INTENT_COLS = [
   'strike_status', 'strike_armed_at', 'strike_execute_at', 'strike_error',
   'vault_wallet_id', 'calendar_project_id', 'wl_project_id', 'chain_id',
   'mint_url', 'mint_phase', 'execution_mode', 'quantity',
-  'max_mint_price', 'max_gas_fee', 'max_total_spend', 'strike_enabled',
+  'max_mint_price', 'max_gas_fee', 'max_total_spend',
   'last_state', 'project_name',
 ]
 
