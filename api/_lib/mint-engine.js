@@ -609,8 +609,8 @@ async function insertOptional(supabase, table, row) {
   const { data: data2, error: error2 } = await supabase.from(table).insert(coreRow).select().single()
   if (!error2) return data2
   // Still failing — return localOnly so caller can surface the error cleanly
-  console.error('[mint-engine] insertOptional fallback also failed', { table, error: error2.message })
-  return { ...row, localOnly: true }
+  console.error('[mint-engine] insertOptional fallback also failed', { table, error: error2.message, coreKeys: Object.keys(coreRow) })
+  return { ...row, localOnly: true, _dbError: error2.message }
 }
 
 async function logEvent(supabase, intentId, userId, state, message, metadata = {}) {
@@ -902,7 +902,7 @@ export async function handleMintAction(req, res, action) {
           status: hasContract ? 'armed' : 'blocked',
         }, hasContract ? 'armed' : 'blocked'))
         intentId = created.id
-        if (!intentId || created.localOnly) return res.status(500).json(safeError('Could not create Strike mint session.'))
+        if (!intentId || created.localOnly) return res.status(500).json(safeError(`Could not create Strike mint session. DB: ${created._dbError || 'unknown error'}`))
       }
       const intent = await loadIntent(supabase, user.id, intentId)
       if (!intent) return res.status(404).json(safeError('Mint session not found.'))

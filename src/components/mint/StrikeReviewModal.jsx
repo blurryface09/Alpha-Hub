@@ -197,7 +197,7 @@ export default function StrikeReviewModal({ project, vault, onConfirmArm, onClos
     })
 
     return items
-  }, [project, vault])
+  }, [project, vault, simResult])
 
   const hardBlockers = checklist.filter(c => !c.ok && !c.warn)
   const canArm = hardBlockers.length === 0
