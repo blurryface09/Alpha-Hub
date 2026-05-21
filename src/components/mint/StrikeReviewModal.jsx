@@ -2,7 +2,7 @@ import React, { useState, useMemo } from 'react'
 import { AnimatePresence, motion } from 'framer-motion'
 import {
   Zap, X, Shield, AlertTriangle, CheckCircle, XCircle,
-  Clock, Cpu, Wifi, RefreshCw, ChevronRight, Lock,
+  Clock, Cpu, Wifi, RefreshCw, ChevronRight,
 } from 'lucide-react'
 import { getAuthToken } from '../../lib/supabase'
 
@@ -183,12 +183,17 @@ export default function StrikeReviewModal({ project, vault, onConfirmArm, onClos
       detail: notNeedsReview ? (project.status || 'ok') : 'Needs review — verify details before arming',
     })
 
+    const liveEnabled = simResult?.live_execution_enabled === true
     items.push({
       id: 'live_exec',
-      ok: false,
-      warn: true,
+      ok: liveEnabled,
+      warn: !liveEnabled,
       label: 'Live execution',
-      detail: 'LIVE_EXECUTION_ENABLED=false — simulation mode only',
+      detail: liveEnabled
+        ? 'LIVE_EXECUTION_ENABLED=true — live minting active'
+        : simResult
+          ? 'LIVE_EXECUTION_ENABLED=false — run simulation to check, or contact admin'
+          : 'Run simulation to check live execution status',
     })
 
     return items
@@ -225,13 +230,13 @@ export default function StrikeReviewModal({ project, vault, onConfirmArm, onClos
     }
   }
 
-  // ── Arm (simulation-only) ───────────────────────────────────────────────────
-  async function handleArm() {
+  // ── Arm ─────────────────────────────────────────────────────────────────────
+  async function handleArm(simulationOnly) {
     if (!canArm || arming) return
-    setArming(true)
+    setArming(simulationOnly ? 'sim' : 'live')
     setArmError(null)
     try {
-      await onConfirmArm(project, { simulationOnly: true })
+      await onConfirmArm(project, { simulationOnly })
       onClose()
     } catch (err) {
       setArmError(err.message)
@@ -239,6 +244,9 @@ export default function StrikeReviewModal({ project, vault, onConfirmArm, onClos
       setArming(false)
     }
   }
+
+  const liveExecEnabled = simResult?.live_execution_enabled === true
+  const canArmLive = canArm && liveExecEnabled && !simResult?.blockers?.length
 
   // ── Phase timeline (if simResult has events) ────────────────────────────────
   const timeline = simResult?.timeline ?? null
@@ -292,7 +300,7 @@ export default function StrikeReviewModal({ project, vault, onConfirmArm, onClos
                 <Row label="Gas strategy" value="Balanced (EIP-1559)"                       />
                 <Row label="RPC mode"     value={chainLabel(project.chain) + ' — auto failover'} />
                 <Row label="Retry policy" value="3× with exponential backoff"               />
-                <Row label="Execution"    value="LIVE_EXECUTION_ENABLED=false"              />
+                <Row label="Execution"    value={simResult?.live_execution_enabled ? 'LIVE_EXECUTION_ENABLED=true ✓' : 'LIVE_EXECUTION_ENABLED=false'} />
               </div>
             </Section>
 
@@ -418,24 +426,28 @@ export default function StrikeReviewModal({ project, vault, onConfirmArm, onClos
                 Cancel
               </button>
 
-              {/* Live arm — always locked */}
-              <button
-                disabled
-                title="LIVE_EXECUTION_ENABLED=false — live minting is disabled"
-                className="flex items-center gap-1.5 text-xs px-3 py-2 rounded-md border border-border2 text-muted opacity-40 cursor-not-allowed"
-              >
-                <Lock size={11} /> Arm Live
-              </button>
-
               {/* Simulation-only arm */}
               <button
-                onClick={handleArm}
+                onClick={() => handleArm(true)}
                 disabled={!canArm || arming}
                 className="flex items-center gap-1.5 text-xs px-3 py-2 rounded-md border border-purple-500/40 text-purple-300 bg-purple-500/8 hover:bg-purple-500/15 transition-all disabled:opacity-40 disabled:cursor-not-allowed"
               >
-                {arming
+                {arming === 'sim'
                   ? <><div className="spinner w-3 h-3" /> Arming…</>
-                  : <><Zap size={12} /> Arm (Sim only)</>
+                  : <><Cpu size={12} /> Arm Sim</>
+                }
+              </button>
+
+              {/* Live arm — enabled when LIVE_EXECUTION_ENABLED=true confirmed by simulation */}
+              <button
+                onClick={() => handleArm(false)}
+                disabled={!canArmLive || arming}
+                title={!liveExecEnabled ? 'Run simulation first — LIVE_EXECUTION_ENABLED must be true' : !canArm ? 'Fix blockers before arming live' : 'Arm Strike for live execution'}
+                className="flex items-center gap-1.5 text-xs px-3 py-2 rounded-md border border-amber-500/40 text-amber-300 bg-amber-500/8 hover:bg-amber-500/15 transition-all disabled:opacity-40 disabled:cursor-not-allowed"
+              >
+                {arming === 'live'
+                  ? <><div className="spinner w-3 h-3" /> Arming…</>
+                  : <><Zap size={12} /> Arm Live</>
                 }
               </button>
             </div>

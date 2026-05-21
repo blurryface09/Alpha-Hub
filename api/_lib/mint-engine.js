@@ -588,16 +588,29 @@ function intentPayload(user, body, status = 'draft') {
   })
 }
 
+// Columns that may not exist in older DB schemas — stripped on schema errors
+const OPTIONAL_INTENT_COLS = [
+  'strike_status', 'strike_armed_at', 'strike_execute_at', 'strike_error',
+  'vault_wallet_id', 'calendar_project_id', 'wl_project_id', 'chain_id',
+  'mint_url', 'mint_phase', 'execution_mode', 'quantity',
+  'max_mint_price', 'max_gas_fee', 'max_total_spend', 'strike_enabled',
+  'last_state', 'project_name',
+]
+
 async function insertOptional(supabase, table, row) {
-  logSanitizedPayload('Strike sanitized payload before insert', {
-    table,
-    ...row,
-  })
+  logSanitizedPayload('Strike sanitized payload before insert', { table, ...row })
   const { data, error } = await supabase.from(table).insert(row).select().single()
   if (!error) return data
   const msg = String(error.message || '').toLowerCase()
-  if (msg.includes('schema') || msg.includes('relation') || msg.includes('column')) return { ...row, localOnly: true }
-  throw error
+  if (!(msg.includes('schema') || msg.includes('column') || msg.includes('does not exist') || msg.includes('42703'))) throw error
+  // Schema mismatch — strip optional columns and retry with core fields only
+  console.warn('[mint-engine] insertOptional schema fallback', { table, error: error.message })
+  const coreRow = Object.fromEntries(Object.entries(row).filter(([k]) => !OPTIONAL_INTENT_COLS.includes(k)))
+  const { data: data2, error: error2 } = await supabase.from(table).insert(coreRow).select().single()
+  if (!error2) return data2
+  // Still failing — return localOnly so caller can surface the error cleanly
+  console.error('[mint-engine] insertOptional fallback also failed', { table, error: error2.message })
+  return { ...row, localOnly: true }
 }
 
 async function logEvent(supabase, intentId, userId, state, message, metadata = {}) {
