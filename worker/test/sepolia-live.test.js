@@ -13,7 +13,7 @@ import { createPublicClient, http } from 'viem'
 import { prepareMintTransaction } from '../../api/_lib/mint-engine.js'
 import { normalizeChain, chainIdFor } from '../../api/_lib/project-intelligence.js'
 
-const SEPOLIA_RPC = process.env.SEPOLIA_RPC_URL || 'https://rpc.sepolia.org'
+const SEPOLIA_RPC = process.env.SEPOLIA_RPC_URL || 'https://sepolia.drpc.org'
 const WALLET = '0x1111111111111111111111111111111111111111'
 
 // Known Sepolia ERC721 contracts — probed in order, first with bytecode is used

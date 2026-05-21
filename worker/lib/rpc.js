@@ -32,9 +32,9 @@ const PUBLIC_FALLBACKS = {
   ],
   apechain: [],
   sepolia: [
-    'https://rpc.sepolia.org',
+    'https://sepolia.drpc.org',
     'https://ethereum-sepolia-rpc.publicnode.com',
-    'https://rpc2.sepolia.org',
+    'https://1rpc.io/sepolia',
   ],
   'base-sepolia': [
     'https://sepolia.base.org',
