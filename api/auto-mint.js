@@ -393,8 +393,10 @@ async function executeMintServerSide(project, privateKey, chatId) {
 
 export default async function handler(req, res) {
   const cronSecret = process.env.CRON_SECRET
-  if (cronSecret && req.headers.authorization !== `Bearer ${cronSecret}`) {
-    return res.status(401).end()
+  if (cronSecret) {
+    const headerOk = req.headers.authorization === `Bearer ${cronSecret}`
+    const queryOk  = req.query?.secret === cronSecret
+    if (!headerOk && !queryOk) return res.status(401).end()
   }
 
   if (!AUTOMINT_ENABLED) {
