@@ -1,0 +1,25 @@
+name: Auto-Mint Cron
+
+on:
+  schedule:
+    # Runs every minute — GitHub Actions minimum is 1 minute
+    - cron: '* * * * *'
+  workflow_dispatch: {}
+
+jobs:
+  trigger:
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: Call auto-mint endpoint
+        run: |
+          STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
+            -X POST \
+            -H "Authorization: Bearer ${{ secrets.CRON_SECRET }}" \
+            -H "Content-Type: application/json" \
+            "${{ secrets.APP_URL }}/api/auto-mint")
+          echo "Response status: $STATUS"
+          if [ "$STATUS" -lt 200 ] || [ "$STATUS" -ge 500 ]; then
+            echo "Auto-mint endpoint returned $STATUS — failing job"
+            exit 1
+          fi
