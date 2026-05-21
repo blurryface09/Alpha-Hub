@@ -4,6 +4,10 @@
   "framework": "vite",
   "crons": [
     {
+      "path": "/api/auto-mint",
+      "schedule": "* * * * *"
+    },
+    {
       "path": "/api/cron-notify",
       "schedule": "0 0 * * *"
     }
