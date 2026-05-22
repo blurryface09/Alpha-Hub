@@ -490,6 +490,17 @@ export default function CalendarPage() {
   }, [])
 
   const mintNow = useCallback(async (project) => {
+    const live = isLive(project)
+    if (!live) {
+      const timeLeft = project.mint_date ? countdown(project) : null
+      const when = timeLeft ? `opens in ${timeLeft}` : 'date not confirmed yet'
+      toast(`Mint ${when} — added to MintGuard. Arm Strike Mode to auto-execute when it goes live.`, {
+        icon: '⏳',
+        duration: 5000,
+      })
+      await addToMintGuard(project)
+      return
+    }
     await addToMintGuard(project)
     navigate('/')
   }, [addToMintGuard, navigate])
