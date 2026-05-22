@@ -673,6 +673,102 @@ export async function prepareMintTransaction(body, _clientOverride = null, _supa
   throw err
 }
 
+// Validate execution path WITHOUT requiring gas estimation to succeed.
+// Used by strike-simulate to pre-arm before public mint opens.
+// Returns { prepared_execution_status, functionName, seaDropDrop, details }
+// Statuses: public_live | waiting_public_drop | allowlist_only | ready | unsupported_contract
+async function probeCapability(contract, chain, quantity, walletAddress, clientOverride = null) {
+  const client = clientOverride || publicClient(chain, null, null)
+  if (!client) return { prepared_execution_status: 'unsupported_contract', details: 'No RPC for chain' }
+
+  // Bytecode check
+  let code
+  try { code = await client.getBytecode({ address: contract }) } catch { /* network — treat as unknown */ }
+  if (!code || code === '0x') return { prepared_execution_status: 'unsupported_contract', details: 'No contract bytecode at address' }
+
+  // Fetch verified ABI in parallel with SeaDrop probe
+  const verifiedAbi = await fetchVerifiedAbi(contract, chain).catch(() => null)
+
+  const qty = BigInt(Math.max(1, Number(quantity || 1)))
+
+  // SeaDrop path: verified ABI confirms, or blind probe for unverified contracts
+  const isConfirmedSeaDrop = isSeaDropContract(verifiedAbi)
+  if (isConfirmedSeaDrop || !verifiedAbi) {
+    try {
+      const [feeResult, dropResult] = await Promise.allSettled([
+        client.readContract({ address: SEADROP_ADDRESS, abi: SEADROP_ABI, functionName: 'getAllowedFeeRecipients', args: [contract] }),
+        client.readContract({ address: SEADROP_ADDRESS, abi: SEADROP_ABI, functionName: 'getPublicDrop', args: [contract] }),
+      ])
+      const feeRecipients = feeResult.status === 'fulfilled' ? feeResult.value : []
+      const drop = dropResult.status === 'fulfilled' ? dropResult.value : null
+
+      if (isConfirmedSeaDrop || feeRecipients.length > 0 || drop) {
+        // This IS a SeaDrop contract — classify its state
+        const startTime = drop ? BigInt(drop.startTime || 0n) : 0n
+        const endTime = drop ? BigInt(drop.endTime || 0n) : 0n
+        const mintPrice = drop ? BigInt(drop.mintPrice || 0n) : 0n
+        const now = BigInt(Math.floor(Date.now() / 1000))
+        const isActive = startTime > 0n && startTime <= now && (endTime === 0n || endTime > now)
+
+        console.log('[capability-check]', {
+          contract: contract.slice(0, 10), chain,
+          seadrop: true, confirmed: isConfirmedSeaDrop,
+          startTime: startTime.toString(), endTime: endTime.toString(),
+          feeRecipientCount: feeRecipients.length, isActive,
+        })
+
+        if (isActive) {
+          return { prepared_execution_status: 'public_live', functionName: 'mintPublic', seaDropDrop: drop, details: 'SeaDrop public drop active' }
+        }
+        if (startTime === 0n && feeRecipients.length > 0) {
+          return { prepared_execution_status: 'allowlist_only', details: 'SeaDrop: no public drop, allowlist/signed phase only' }
+        }
+        if (startTime > now) {
+          return {
+            prepared_execution_status: 'waiting_public_drop',
+            functionName: 'mintPublic',
+            seaDropDrop: drop,
+            details: `SeaDrop public drop opens at ${new Date(Number(startTime) * 1000).toISOString()}`,
+            startTime: Number(startTime),
+            mintPrice: mintPrice.toString(),
+          }
+        }
+        // endTime in the past → ended; if confirmed SeaDrop treat as unsupported
+        if (isConfirmedSeaDrop) {
+          return { prepared_execution_status: 'unsupported_contract', details: 'SeaDrop public drop has ended' }
+        }
+        // Unverified: blind probe returned no useful state, fall through to standard detection
+      }
+    } catch (e) {
+      console.log('[capability-check] seadrop_probe_error', { contract: contract.slice(0, 10), err: String(e.message || '').slice(0, 80) })
+      if (isConfirmedSeaDrop) return { prepared_execution_status: 'unsupported_contract', details: 'SeaDrop state read failed' }
+    }
+  }
+
+  // Standard ERC721/ERC1155: can we build valid calldata?
+  const candidates = verifiedAbi
+    ? candidatesFromAbi(verifiedAbi, qty, walletAddress)
+    : fallbackCandidates(qty, walletAddress)
+
+  if (candidates.length > 0) {
+    // If we can construct calldata without gas estimation, execution path is ready
+    try {
+      const c = candidates[0]
+      const data = c.data || encodeFunctionData({ abi: c.abi, functionName: c.functionName, args: c.args })
+      console.log('[capability-check]', {
+        contract: contract.slice(0, 10), chain, seadrop: false,
+        abi_source: verifiedAbi ? 'verified' : 'fallback',
+        fn: c.functionName, calldata_prefix: data?.slice(0, 10),
+      })
+      return { prepared_execution_status: 'ready', functionName: c.functionName, details: `Calldata constructible via ${c.source}` }
+    } catch {
+      // encodeFunctionData failure — bad ABI candidate
+    }
+  }
+
+  return { prepared_execution_status: 'unsupported_contract', details: 'No constructible execution path found' }
+}
+
 function intentPayload(user, body, status = 'draft') {
   const chain = normalizeChain(body.chain)
   const phase = normalizePhase(body.phase || body.mintPhase)
@@ -1072,10 +1168,29 @@ export async function handleMintAction(req, res, action) {
       if (!SUPPORTED_EXECUTION_CHAINS.has(intent.chain)) return res.status(400).json(safeError('This chain is not supported for Strike Mode yet.'))
       try {
         await prepareMintTransaction({ ...intent, walletAddress: vault.address || vault.wallet_address })
+        console.log('[strike-prep]', { stage: 'arm_prepare_ok', contract: intent.contract_address?.slice(0, 12), chain: intent.chain })
       } catch (error) {
         const msg = error.rawReason ? error.message : safeMessage(error)
-        console.error('[mint-exec] strike_arm_failed', { stage: 'prepare', chain: intent.chain, contract: intent.contract_address?.slice(0, 12), real_error: (error.rawReason || error.message || '').slice(0, 200), user_message: msg })
-        return res.status(400).json(safeError(msg))
+        // Check if we can still pre-arm via capability probe (mint not open yet but path is valid)
+        try {
+          const armRpc = publicClient(intent.chain, RPC_URLS[intent.chain], null)
+          const armQty = BigInt(Math.max(1, Number(intent.quantity || 1)))
+          const armWallet = vault.address || vault.wallet_address || '0x0000000000000000000000000000000000000001'
+          const capability = await probeCapability(intent.contract_address, intent.chain, armQty, armWallet, armRpc)
+          console.log('[strike-prep]', {
+            stage: 'arm_capability_probe', contract: intent.contract_address?.slice(0, 12), chain: intent.chain,
+            prepared_status: capability.prepared_execution_status,
+          })
+          const armableStatuses = new Set(['waiting_public_drop', 'ready', 'public_live'])
+          if (!armableStatuses.has(capability.prepared_execution_status)) {
+            console.error('[mint-exec] strike_arm_failed', { stage: 'prepare', chain: intent.chain, contract: intent.contract_address?.slice(0, 12), real_error: (error.rawReason || error.message || '').slice(0, 200), user_message: msg, capability: capability.prepared_execution_status })
+            return res.status(400).json(safeError(msg))
+          }
+          // Allow arm — execution path is valid but mint is not live yet
+        } catch (probeErr) {
+          console.error('[mint-exec] strike_arm_failed', { stage: 'prepare', chain: intent.chain, contract: intent.contract_address?.slice(0, 12), real_error: (error.rawReason || error.message || '').slice(0, 200), user_message: msg })
+          return res.status(400).json(safeError(msg))
+        }
       }
       const strikeExecuteAt = body.strikeExecuteAt || body.strike_execute_at || body.mintDate || intent.mint_date || nowIso
       const armed = await updateStrikeIntent(supabase, intentId, user.id, {
@@ -1134,6 +1249,7 @@ export async function handleMintAction(req, res, action) {
       let functionName = null
       let estimatedGas = null
       let executionStatus = 'not_probed'
+      let preparedExecutionStatus = 'not_probed'
       if (!contract) {
         blockers.push('No contract address — add it in project settings')
       } else if (!isAddress(contract)) {
@@ -1141,6 +1257,7 @@ export async function handleMintAction(req, res, action) {
       } else if (!SUPPORTED_EXECUTION_CHAINS.has(chain)) {
         blockers.push(`Chain "${chain}" is not supported for Strike Mode`)
       } else {
+        let preparedExecStatus = 'not_probed'
         try {
           const prepared = await prepareMintTransaction({
             ...body,
@@ -1151,18 +1268,57 @@ export async function handleMintAction(req, res, action) {
           functionName = prepared.functionName
           estimatedGas = prepared.gas ? String(prepared.gas) : null
           executionStatus = 'live'
+          preparedExecStatus = 'public_live'
+          console.log('[strike-prep]', { stage: 'prepare_ok', contract: contract?.slice(0, 10), chain, fn: functionName })
         } catch (err) {
           const msg = err.rawReason ? err.message : safeMessage(err)
-          // Insufficient funds is a wallet issue, not a contract issue — contract IS open
+          // Insufficient funds = wallet issue, contract IS open
           if (msg.toLowerCase().includes('insufficient') || msg.toLowerCase().includes('top up')) {
             warnings.push('Vault balance may not cover this mint — top up before arming')
             contractValid = true
             executionStatus = 'live'
+            preparedExecStatus = 'public_live'
+            console.log('[strike-prep]', { stage: 'live_low_balance', contract: contract?.slice(0, 10), chain })
           } else {
-            blockers.push(msg)
+            // Gas estimation failed — probe capability without requiring live execution
             executionStatus = classifyExecutionStatus(err)
+            const rpcClient = publicClient(chain, RPC_URLS[chain], null)
+            const qty = BigInt(Math.max(1, Number(body.quantity || body.max_mint || 1)))
+            const stubWallet = walletAddress || '0x0000000000000000000000000000000000000001'
+            try {
+              const capability = await probeCapability(contract, chain, qty, stubWallet, rpcClient)
+              preparedExecStatus = capability.prepared_execution_status
+              functionName = capability.functionName || null
+              console.log('[strike-prep]', {
+                stage: 'capability_probe', contract: contract?.slice(0, 10), chain,
+                prepared_status: preparedExecStatus, fn: functionName, details: capability.details,
+              })
+              if (preparedExecStatus === 'waiting_public_drop') {
+                // Pre-arm allowed — public drop exists but hasn't opened yet
+                contractValid = true
+                executionStatus = 'not_started'
+                warnings.push(`Execution path ready — waiting for public mint to open${capability.startTime ? ` (${new Date(capability.startTime * 1000).toLocaleString()})` : ''}`)
+              } else if (preparedExecStatus === 'ready') {
+                // Calldata constructible — contract may just have simulation issues
+                contractValid = true
+                warnings.push('Contract execution path ready — mint may not be open yet. Strike will fire when live.')
+              } else if (preparedExecStatus === 'public_live') {
+                contractValid = true
+                executionStatus = 'live'
+              } else if (preparedExecStatus === 'allowlist_only') {
+                blockers.push('This mint is allowlist-only — no public drop is configured. Alpha Hub cannot execute this mint.')
+              } else {
+                // unsupported_contract or unknown
+                blockers.push(msg)
+              }
+            } catch (probeErr) {
+              console.log('[strike-prep]', { stage: 'capability_probe_error', err: String(probeErr.message || '').slice(0, 80) })
+              preparedExecStatus = 'not_probed'
+              blockers.push(msg)
+            }
           }
         }
+        preparedExecutionStatus = preparedExecStatus
       }
 
       // Chain RPC check
@@ -1201,6 +1357,7 @@ export async function handleMintAction(req, res, action) {
           warnings,
           live_execution_enabled: liveExecutionEnabled,
           execution_status: executionStatus,
+          prepared_execution_status: preparedExecutionStatus,
         },
       })
     }

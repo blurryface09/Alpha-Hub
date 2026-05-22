@@ -5,7 +5,7 @@ import {
   Clock, Cpu, Wifi, RefreshCw, ChevronRight,
 } from 'lucide-react'
 import { getAuthToken } from '../../lib/supabase'
-import { restrictionMessage, isExecutionBlocked } from '../../lib/mintRestrictions.js'
+import { restrictionMessage, isExecutionBlocked, isPreArmAllowed } from '../../lib/mintRestrictions.js'
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -96,22 +96,26 @@ export function strikeUiState(project, simResult) {
   if (project.mint_status === 'needs_review' || project.status === 'needs_review') return 'needs_review'
   if (!simResult) return 'ready'
   if (simResult.blockers?.length) return 'blocked'
+  // waiting_public_drop / ready = pre-armed, not blocked
+  const prepStatus = simResult.prepared_execution_status
+  if (prepStatus === 'waiting_public_drop') return 'waiting_prepared'
   if (!simResult.live_execution_enabled) return 'simulation_only'
   return 'ready'
 }
 
 const UI_STATE_LABELS = {
-  idle:            { label: 'Strike',          cls: 'border-border2 text-muted' },
-  ready:           { label: 'Ready',           cls: 'border-green/40 text-green' },
-  simulation_only: { label: 'Sim only',        cls: 'border-purple-500/40 text-purple-300' },
-  blocked:         { label: 'Blocked',         cls: 'border-red-500/30 text-red-400' },
-  needs_review:    { label: 'Needs review',    cls: 'border-amber-500/30 text-amber-400' },
-  armed:           { label: 'Armed',           cls: 'border-green/40 text-green' },
-  sim_armed:       { label: 'Sim armed',       cls: 'border-purple-500/40 text-purple-300' },
-  executing:       { label: 'Executing…',      cls: 'border-cyan-500/40 text-cyan-300' },
-  sim_executing:   { label: 'Sim running…',    cls: 'border-purple-500/40 text-purple-300' },
-  sim_passed:      { label: 'Sim passed',      cls: 'border-green/40 text-green' },
-  sim_failed:      { label: 'Sim failed',      cls: 'border-red-500/30 text-red-400' },
+  idle:             { label: 'Strike',              cls: 'border-border2 text-muted' },
+  ready:            { label: 'Ready',               cls: 'border-green/40 text-green' },
+  waiting_prepared: { label: 'Pre-armed',           cls: 'border-amber-500/40 text-amber-300' },
+  simulation_only:  { label: 'Sim only',            cls: 'border-purple-500/40 text-purple-300' },
+  blocked:          { label: 'Blocked',             cls: 'border-red-500/30 text-red-400' },
+  needs_review:     { label: 'Needs review',        cls: 'border-amber-500/30 text-amber-400' },
+  armed:            { label: 'Armed',               cls: 'border-green/40 text-green' },
+  sim_armed:        { label: 'Sim armed',           cls: 'border-purple-500/40 text-purple-300' },
+  executing:        { label: 'Executing…',          cls: 'border-cyan-500/40 text-cyan-300' },
+  sim_executing:    { label: 'Sim running…',        cls: 'border-purple-500/40 text-purple-300' },
+  sim_passed:       { label: 'Sim passed',          cls: 'border-green/40 text-green' },
+  sim_failed:       { label: 'Sim failed',          cls: 'border-red-500/30 text-red-400' },
 }
 
 export function UiStateBadge({ state }) {
@@ -198,19 +202,25 @@ export default function StrikeReviewModal({ project, vault, onConfirmArm, onClos
     })
 
     const execStatus = simResult?.execution_status || 'not_probed'
-    const execHardBlocked = isExecutionBlocked(execStatus)
-    const execWarn = !execHardBlocked && execStatus !== 'live'
-    const execDetail = execStatus === 'live'
+    const prepStatus = simResult?.prepared_execution_status || 'not_probed'
+    const execHardBlocked = isExecutionBlocked(execStatus) && !isPreArmAllowed(prepStatus)
+    const execWarn = !execHardBlocked && (execStatus !== 'live' || prepStatus === 'waiting_public_drop')
+    const execOk = execStatus === 'live' && prepStatus !== 'waiting_public_drop'
+    const execDetail = execOk
       ? 'Mint function responding — contract is open'
-      : execStatus === 'not_probed'
-        ? 'Run simulation to probe contract state'
-        : execStatus === 'not_started' || execStatus === 'public_not_started'
-          ? 'Public phase not open yet — Strike will fire when live'
-          : restrictionMessage(execStatus) || 'Probe error — check simulation output'
+      : prepStatus === 'waiting_public_drop'
+        ? (simResult?.warnings?.find(w => w.includes('waiting for public mint')) || 'Execution path ready — waiting for public mint to open')
+        : prepStatus === 'ready'
+          ? 'Execution path ready — Strike will fire when mint opens'
+          : execStatus === 'not_probed'
+            ? 'Run simulation to probe contract state'
+            : execStatus === 'not_started' || execStatus === 'public_not_started'
+              ? 'Public phase not open yet — Strike will fire when live'
+              : restrictionMessage(execStatus) || 'Probe error — check simulation output'
     items.push({
       id: 'exec_probe',
-      ok: execStatus === 'live',
-      warn: execWarn,
+      ok: execOk,
+      warn: execWarn && !execHardBlocked,
       label: 'Contract probe',
       detail: execDetail,
     })
