@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { useLocation } from 'react-router-dom'
-import { Plus, Shield, Sparkles, Wand2, Loader } from 'lucide-react'
+import { Plus, Shield, Sparkles, Wand2, Loader, ExternalLink } from 'lucide-react'
 import toast from 'react-hot-toast'
 import { supabase, directInsert, directUpdate, directDelete, getAuthToken } from '../lib/supabase'
 import { useMint } from '../hooks/useMint'
@@ -726,6 +726,16 @@ export default function MintGuardPage() {
                         {mintErrors[project.id].fault === 'collection' ? 'Collection issue:' : mintErrors[project.id].fault === 'wallet' ? 'Wallet issue:' : 'App error:'}
                       </span>
                       {mintErrors[project.id].text}
+                      {mintErrors[project.id].fault === 'collection' && (project.source_url || project.mint_url || project.website_url) && (
+                        <a
+                          href={project.source_url || project.mint_url || project.website_url}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="ml-2 inline-flex items-center gap-1 underline opacity-80 hover:opacity-100 whitespace-nowrap"
+                        >
+                          Open official mint <ExternalLink size={11} />
+                        </a>
+                      )}
                     </div>
                     <button
                       onClick={() => setMintErrors(prev => { const n = { ...prev }; delete n[project.id]; return n })}

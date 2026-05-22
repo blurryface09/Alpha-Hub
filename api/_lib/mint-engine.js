@@ -130,6 +130,7 @@ function safeMessage(error) {
   if (msg.includes('timeout') || msg.includes('timed out')) return 'Request timed out. Please try again.'
   if (msg.includes('nonce')) return 'Transaction nonce error — reset your wallet pending transactions and try again.'
   if (msg.includes('insufficient funds') || msg.includes('total cost') || msg.includes('exceeds the balance') || msg.includes('exceeds balance')) return 'Insufficient ETH — top up your wallet and try again.'
+  if (msg.includes('seadrop allowlist only') || (msg.includes('seadrop') && msg.includes('allowlist'))) return 'This mint is currently allowlist-only. Public mint is not active for this wallet.'
   if (msg.includes('seadrop mint not active') || msg.includes('public drop not configured') || msg.includes('not currently active')) return 'This mint is not currently active — the public drop is not open yet. Check the official mint page.'
   if (msg.includes('sale not active') || msg.includes('sale is not active') || msg.includes('not started') || msg.includes('not open') || msg.includes('mint closed') || msg.includes('mint has not') || msg.includes('minting is not') || msg.includes('paused')) return 'Mint is not open yet or has ended. Check the official mint page for the correct time.'
   if (msg.includes('allowlist') || msg.includes('not whitelisted') || msg.includes('not eligible') || msg.includes('merkle') || msg.includes('not in whitelist')) return 'Mint rejected — your wallet is not on the allowlist for this phase.'
@@ -172,6 +173,7 @@ function classifyExecutionStatus(error, { seaDropError = null } = {}) {
   if (seaDropError && !error) return 'router_required'
   const msg = String(error?.shortMessage || error?.message || error || '').toLowerCase()
   if (msg.includes('insufficient funds') || msg.includes('exceeds the balance') || msg.includes('exceeds balance') || msg.includes('total cost')) return 'live'
+  if (msg.includes('seadrop allowlist only') || (msg.includes('seadrop') && msg.includes('allowlist'))) return 'allowlist_only'
   if (msg.includes('seadrop') || msg.includes('router_required')) return 'router_required'
   if (msg.includes('paused') || msg.includes('ownable') || msg.includes('caller is not the owner')) return 'paused'
   if (
@@ -359,7 +361,13 @@ async function buildSeaDropCandidates(nftContract, quantity, walletAddress, clie
     feeRecipientCount: feeRecipients.length,
   })
   if (!isActive) {
-    const reason = startTime === 0n ? 'Public drop not configured' : startTime > now ? `Mint starts at ${new Date(Number(startTime) * 1000).toISOString()}` : `Mint ended at ${new Date(Number(endTime) * 1000).toISOString()}`
+    // startTime===0 + fee recipient present = contract registered but no public drop configured → allowlist/signed phase
+    if (startTime === 0n && feeRecipients.length > 0) {
+      throw new Error('SeaDrop allowlist only: no public drop configured, allowlist or signed mint required')
+    }
+    const reason = startTime > now
+      ? `Mint starts at ${new Date(Number(startTime) * 1000).toISOString()}`
+      : `Mint ended at ${new Date(Number(endTime) * 1000).toISOString()}`
     throw new Error(`SeaDrop mint not active: ${reason}`)
   }
   const data = encodeFunctionData({
@@ -636,6 +644,15 @@ export async function prepareMintTransaction(body, _clientOverride = null, _supa
     duration_ms: Date.now() - t0,
   })
   setCachedProbeResult(contract, chain, { execution_status: probeStatus, revert_reason: rawReason.slice(0, 200), function_tried: null })
+  const _isSeaDrop = Boolean(seaDropError)
+  console.log('[restriction-detect]', {
+    contract: contract.slice(0, 10),
+    chain,
+    phase: _isSeaDrop ? (probeStatus === 'allowlist_only' ? 'seadrop_allowlist' : 'seadrop_public') : 'unknown',
+    restriction_type: probeStatus,
+    proof_available: false,
+    execution_supported: !['allowlist_only', 'signed_mint_only', 'proof_required', 'router_required', 'captcha_required', 'unsupported_execution'].includes(probeStatus),
+  })
   console.log('[mint-path-trace]', {
     contract,
     chain,

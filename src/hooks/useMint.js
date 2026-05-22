@@ -2,6 +2,7 @@ import { useAccount, useSwitchChain, useSendTransaction } from 'wagmi'
 import { mainnet, base, bsc, sepolia, baseSepolia } from 'wagmi/chains'
 import toast from 'react-hot-toast'
 import { supabase, getAuthToken } from '../lib/supabase'
+import { RESTRICTION_MESSAGES, EXECUTION_BLOCKED } from '../lib/mintRestrictions.js'
 
 const CHAIN_MAP = {
   eth: mainnet.id,
@@ -17,7 +18,17 @@ const MINT_FUNCTIONS = ['mint', 'publicMint', 'mintPublic', 'safeMint', 'mintNFT
 function classifyMintError(message) {
   const msg = (message || '').toLowerCase()
 
+  // If the server returned a known centralized restriction message, pass it through directly
+  const knownRestriction = Object.values(RESTRICTION_MESSAGES).find(m => m && message === m)
+  if (knownRestriction) return { text: knownRestriction, fault: 'collection' }
+
   // Collection-side: mint is closed, not active, or gated
+  if (msg.includes('allowlist-only') || msg.includes('allowlist only') || msg.includes('not active for this wallet')) {
+    return { text: message, fault: 'collection' }
+  }
+  if (msg.includes('proof required') || msg.includes('allowlist proof')) {
+    return { text: message, fault: 'collection' }
+  }
   if (msg.includes('not currently active') || msg.includes('not open') || msg.includes('seadrop mint not active')) {
     return { text: 'This mint is not currently open. Check the project\'s official page for the live schedule.', fault: 'collection' }
   }

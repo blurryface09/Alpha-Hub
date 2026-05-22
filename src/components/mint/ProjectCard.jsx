@@ -9,6 +9,7 @@ import { supabase } from '../../lib/supabase'
 import { useAuthStore, useMonitorStore } from '../../store/index.js'
 import { useReadiness } from '../../hooks/useReadiness'
 import { ExecutionReadyBadge, ReadinessPanel } from './ExecutionReadyBadge'
+import { isExecutionBlocked } from '../../lib/mintRestrictions.js'
 
 // ── Strike state badge ────────────────────────────────────────────────────────
 
@@ -340,12 +341,21 @@ export default function ProjectCard({ project, isMinting, isDeleting, onMint, on
                 {project.mint_mode === "auto" ? React.createElement(ToggleRight, { size: 12 }) : React.createElement(ToggleLeft, { size: 12 })}
                 {project.mint_mode === "auto" ? "Strike" : "Fast"}
               </button>
-              {(project.status === "live" || project.status === "upcoming") && project.contract_address && (
-                <button onClick={() => onMint(false)} disabled={isMinting} className="btn-primary text-xs px-3 py-1.5 flex items-center gap-1.5">
-                  {isMinting ? React.createElement("div", { className: "spinner w-3 h-3" }) : React.createElement(Zap, { size: 12 })}
-                  {isMinting ? "Minting..." : "Mint"}
-                </button>
-              )}
+              {(project.status === "live" || project.status === "upcoming") && project.contract_address && (() => {
+                const probeBlocked = isExecutionBlocked(readiness.execution_status)
+                const officialUrl = project.source_url || project.mint_url || project.website_url
+                return probeBlocked ? (
+                  officialUrl
+                    ? React.createElement("a", { href: officialUrl, target: "_blank", rel: "noopener noreferrer", className: "btn-ghost text-xs px-3 py-1.5 flex items-center gap-1.5" },
+                        React.createElement(ExternalLink, { size: 12 }), "Official mint")
+                    : React.createElement("button", { disabled: true, className: "btn-ghost text-xs px-3 py-1.5 opacity-40 cursor-not-allowed", title: "Execution restricted — use official mint page" },
+                        "Restricted")
+                ) : (
+                  React.createElement("button", { onClick: () => onMint(false), disabled: isMinting, className: "btn-primary text-xs px-3 py-1.5 flex items-center gap-1.5" },
+                    isMinting ? React.createElement("div", { className: "spinner w-3 h-3" }) : React.createElement(Zap, { size: 12 }),
+                    isMinting ? "Minting..." : "Mint")
+                )
+              })()}
               <button onClick={function() { setExpanded(!expanded) }} className="text-muted hover:text-text min-w-[44px] min-h-[44px] flex items-center justify-center">
                 {expanded ? React.createElement(ChevronUp, { size: 14 }) : React.createElement(ChevronDown, { size: 14 })}
               </button>

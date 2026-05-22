@@ -19,6 +19,7 @@ import {
 } from '../lib/calendarQuality'
 import { MINT_MODES, MINT_PHASES, recommendMintMode } from '../lib/mintModes'
 import { useReadiness } from '../hooks/useReadiness'
+import { restrictionMessage, isExecutionBlocked, restrictionCta } from '../lib/mintRestrictions.js'
 
 const ADMIN_WALLET = import.meta.env.VITE_ADMIN_WALLET?.toLowerCase()
 
@@ -1542,14 +1543,7 @@ function DetailDrawer({ project, isAdmin, onClose, onAdd, onMint, onStatus, onRa
           )}
           {showProbeWarning && (
             <div className="rounded-lg border border-amber-500/30 bg-amber-500/10 p-3 text-sm text-amber-300">
-              Live signal detected, but contract probe returned a warning.{' '}
-              {execStatus === 'not_started' ? 'Public phase may be allowlist-only or still opening — try minting directly or check the official page.' :
-               execStatus === 'paused'      ? 'Contract is paused. Check the official mint page.' :
-               execStatus === 'allowlist_only' ? 'Allowlist phase only — your wallet may not be eligible.' :
-               execStatus === 'sold_out'    ? 'Mint may be sold out.' :
-               execStatus === 'router_required' ? 'Minting via SeaDrop router — use the official mint page.' :
-               execStatus === 'wrong_function'  ? 'Mint function not detected yet — try minting directly.' :
-               'Check the official mint page for the current state.'}
+              {restrictionMessage(execStatus) || 'Check the official mint page for the current state.'}
             </div>
           )}
           <Info label="Mint time" value={formatTime(project)} />
@@ -1572,17 +1566,37 @@ function DetailDrawer({ project, isAdmin, onClose, onAdd, onMint, onStatus, onRa
         <MintSchedule project={project} />
 
         <div className="flex flex-col sm:flex-row gap-2 mt-6">
-          <button onClick={onMint} className="btn-primary flex-1 flex items-center justify-center gap-2">
-            <Zap size={14} />
-            Mint Now
-          </button>
+          {isExecutionBlocked(execStatus) ? (
+            <>
+              <button disabled className="btn-primary flex-1 flex items-center justify-center gap-2 opacity-40 cursor-not-allowed" title={restrictionMessage(execStatus) || 'Execution not supported'}>
+                <Zap size={14} />
+                Mint Now
+              </button>
+              {(project.source_url || project.mint_url || project.website_url) && (
+                <a
+                  className="btn-ghost flex-1 flex items-center justify-center gap-2"
+                  href={project.source_url || project.mint_url || project.website_url}
+                  target="_blank"
+                  rel="noreferrer"
+                >
+                  <ExternalLink size={14} />
+                  Open official mint
+                </a>
+              )}
+            </>
+          ) : (
+            <button onClick={onMint} className="btn-primary flex-1 flex items-center justify-center gap-2">
+              <Zap size={14} />
+              Mint Now
+            </button>
+          )}
           <button onClick={onAdd} className="btn-ghost flex-1">
             Track in MintGuard
           </button>
           <button onClick={onShare} className="btn-ghost flex items-center justify-center gap-2 px-3">
             <Share2 size={14} />
           </button>
-          {project.source_url && (
+          {!isExecutionBlocked(execStatus) && project.source_url && (
             <a className="btn-ghost flex items-center justify-center px-3" href={project.source_url} target="_blank" rel="noreferrer">
               <ExternalLink size={14} />
             </a>

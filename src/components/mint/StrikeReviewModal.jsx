@@ -5,6 +5,7 @@ import {
   Clock, Cpu, Wifi, RefreshCw, ChevronRight,
 } from 'lucide-react'
 import { getAuthToken } from '../../lib/supabase'
+import { restrictionMessage, isExecutionBlocked } from '../../lib/mintRestrictions.js'
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -197,30 +198,21 @@ export default function StrikeReviewModal({ project, vault, onConfirmArm, onClos
     })
 
     const execStatus = simResult?.execution_status || 'not_probed'
-    const execHardBlocked = ['allowlist_only', 'sold_out', 'paused', 'wrong_function'].includes(execStatus)
+    const execHardBlocked = isExecutionBlocked(execStatus)
     const execWarn = !execHardBlocked && execStatus !== 'live'
+    const execDetail = execStatus === 'live'
+      ? 'Mint function responding — contract is open'
+      : execStatus === 'not_probed'
+        ? 'Run simulation to probe contract state'
+        : execStatus === 'not_started' || execStatus === 'public_not_started'
+          ? 'Public phase not open yet — Strike will fire when live'
+          : restrictionMessage(execStatus) || 'Probe error — check simulation output'
     items.push({
       id: 'exec_probe',
       ok: execStatus === 'live',
       warn: execWarn,
       label: 'Contract probe',
-      detail: execStatus === 'live'
-        ? 'Mint function responding — contract is open'
-        : execStatus === 'not_probed'
-          ? 'Run simulation to probe contract state'
-          : execStatus === 'not_started'
-            ? 'Sale not started — Strike will fire when live'
-            : execStatus === 'allowlist_only'
-              ? 'Allowlist required — wallet not on whitelist for this phase'
-              : execStatus === 'sold_out'
-                ? 'Sold out — max supply reached'
-                : execStatus === 'paused'
-                  ? 'Contract paused — mint is closed'
-                  : execStatus === 'router_required'
-                    ? 'SeaDrop router detected — minting via OpenSea router'
-                    : execStatus === 'wrong_function'
-                      ? 'Mint function not detected — add contract details'
-                      : 'Probe error — check simulation output',
+      detail: execDetail,
     })
 
     return items
