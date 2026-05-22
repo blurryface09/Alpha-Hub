@@ -138,7 +138,14 @@ function safeMessage(error) {
   if (msg.includes('execution reverted') || msg.includes('revert')) return 'Mint simulation failed — contract rejected the transaction. The mint may be closed or require an allowlist.'
   if (msg.includes('function') || msg.includes('selector') || msg.includes('unknown mint') || msg.includes('no standard mint')) return 'Could not detect the mint function. Use the official mint site or add contract details.'
   if (msg.includes('chain') || msg.includes('network')) return 'Wrong chain — switch to the required network and try again.'
-  return 'Mint preparation failed. Nothing was sent.'
+  if (msg.includes('erc721a') || msg.includes('mint_erc2309') || msg.includes('transferhelper') || msg.includes('ownable') || msg.includes('caller is not the owner')) return 'Contract configuration rejected the mint.'
+  if (msg.includes('invalid proof') || msg.includes('proof verification failed')) return 'Allowlist proof invalid for this wallet.'
+  if (msg.includes('cannot estimate gas') || msg.includes('estimategas') || msg.includes('gas estimation')) return 'Gas estimation failed — mint may not be live yet.'
+  if (msg.includes('user operation') || msg.includes('aa23') || msg.includes('aa24')) return 'Smart wallet execution failed.'
+  if (msg.includes('429') || msg.includes('too many requests')) return 'RPC is rate limited — retry in a few seconds.'
+  const raw = String(error?.shortMessage || error?.message || error || 'Unknown mint error')
+  console.error('[mint-safeMessage-unmatched]', { raw_error: raw })
+  return raw.length > 180 ? raw.slice(0, 180) : raw
 }
 
 function chainObject(chain) {
@@ -554,6 +561,7 @@ export async function prepareMintTransaction(body, _clientOverride = null, _supa
   // SeaDrop contracts: if SeaDrop setup failed and all fallback candidates also failed,
   // the SeaDrop error is the authoritative reason (generic candidates can never work on these contracts)
   const definitiveError = seaDropError || lastError
+  console.error('[mint-raw-error]', { raw: definitiveError?.message, stack: definitiveError?.stack?.slice(0, 300) })
   const rawReason = String(definitiveError?.shortMessage || definitiveError?.message || definitiveError || 'unknown')
   const userMessage = safeMessage(definitiveError)
   console.error('[mint-exec] all_candidates_failed', {

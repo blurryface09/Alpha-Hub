@@ -170,15 +170,25 @@ function friendlyMintStatus(project) {
 function tabFilter(project, tab) {
   if (!isLaunchReadyCalendarProject(project)) return false
   if (isStaleCalendarProject(project)) return false
-  const live = isLive(project) || project.status === 'live' || project.mint_status === 'live_now'
+  const now = Date.now()
+  const mintStart = project.mint_date ? new Date(project.mint_date).getTime() : null
+  const mintEnd = project.mint_end_date ? new Date(project.mint_end_date).getTime() : null
+  // A project is live if: explicit live_now flag, status=live, or mint started and not ended
+  const explicitLive = project.mint_status === 'live_now' || project.status === 'live'
+  const windowLive = mintStart != null && mintStart <= now && (mintEnd == null || mintEnd >= now)
+  const live = explicitLive || windowLive
   if (tab === 'live') return live
   if (tab === 'soon') {
     if (live) return false
-    if (!project.mint_date) return false
-    const diff = new Date(project.mint_date).getTime() - Date.now()
+    if (!project.mint_date || !project.contract_address) return false
+    const diff = mintStart - now
     return Number.isFinite(diff) && diff > 0 && diff <= 7 * 24 * 60 * 60 * 1000
   }
-  // upcoming: everything valid — live, soon, and future
+  // upcoming: must have a future mint_date + contract_address + chain, not ended
+  if (!project.contract_address || !project.chain) return false
+  if (project.status === 'ended' || project.mint_status === 'ended') return false
+  if (mintEnd != null && mintEnd < now) return false
+  if (mintStart != null && mintStart <= now && !live) return false
   return true
 }
 

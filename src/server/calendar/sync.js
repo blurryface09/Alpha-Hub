@@ -155,6 +155,50 @@ async function downgradeWeakDiscoveryRows(supabase) {
   return weakIds.length
 }
 
+async function purgeStaleProjects(supabase) {
+  const now = new Date().toISOString()
+  const summary = { markedEnded: 0, pendingReview: 0 }
+
+  // Mark ended: mint_end_date is in the past and not already ended
+  const { data: endedRows, error: endedErr } = await supabase
+    .from('calendar_projects')
+    .select('id')
+    .lt('mint_end_date', now)
+    .not('status', 'in', '("ended","hidden","rejected")')
+    .not('mint_status', 'eq', 'live_now')
+    .limit(200)
+  if (!endedErr && endedRows?.length) {
+    await supabase
+      .from('calendar_projects')
+      .update({ status: 'ended', updated_at: now })
+      .in('id', endedRows.map(r => r.id))
+    summary.markedEnded = endedRows.length
+  }
+
+  // Move to pending_review: no contract_address or no mint_date (non-admin, non-community)
+  const { data: incompleteRows, error: incompleteErr } = await supabase
+    .from('calendar_projects')
+    .select('id,contract_address,mint_date')
+    .in('status', ['approved', 'live'])
+    .not('source', 'in', '("admin","community")')
+    .limit(500)
+  if (!incompleteErr && incompleteRows?.length) {
+    const badIds = incompleteRows
+      .filter(r => !r.contract_address || !r.mint_date)
+      .map(r => r.id)
+    if (badIds.length) {
+      await supabase
+        .from('calendar_projects')
+        .update({ status: 'pending_review', updated_at: now })
+        .in('id', badIds)
+      summary.pendingReview = badIds.length
+    }
+  }
+
+  console.log('[calendar-sync] purgeStaleProjects', summary)
+  return summary
+}
+
 export async function runCalendarSync(supabase, { sources = Object.keys(ADAPTERS), limit = 12 } = {}) {
   const summary = {
     ok: true,
@@ -213,6 +257,12 @@ export async function runCalendarSync(supabase, { sources = Object.keys(ADAPTERS
     summary.downgradedForReview = await downgradeWeakDiscoveryRows(supabase)
   } catch (error) {
     summary.cleanupError = error.message
+  }
+
+  try {
+    summary.staleCleanup = await purgeStaleProjects(supabase)
+  } catch (error) {
+    summary.staleCleanupError = error.message
   }
 
   return summary

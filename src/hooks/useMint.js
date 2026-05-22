@@ -21,7 +21,7 @@ function classifyMintError(message) {
   if (msg.includes('not currently active') || msg.includes('not open') || msg.includes('seadrop mint not active')) {
     return { text: 'This mint is not currently open. Check the project\'s official page for the live schedule.', fault: 'collection' }
   }
-  if (msg.includes('simulation failed') || msg.includes('contract rejected') || msg.includes('execution reverted') || msg.includes('reverted')) {
+  if (msg.includes('simulation failed') || msg.includes('contract rejected') || msg.includes('execution reverted') || msg.includes('reverted') || msg.includes('call_exception')) {
     return { text: 'The contract rejected the transaction. This mint may be closed, not started yet, or require an allowlist.', fault: 'collection' }
   }
   if (msg.includes('unknown mint function') || msg.includes('not found') || msg.includes('no function')) {
