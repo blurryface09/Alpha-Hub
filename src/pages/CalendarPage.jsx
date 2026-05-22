@@ -1,11 +1,11 @@
 import React, { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
-  Clock, ExternalLink, Gem, Loader, Plus, Radar, Share2,
-  Search, Sparkles, Star, Target, TrendingUp, Wand2
+  Clock, ExternalLink, Loader, Plus, Radar, Share2,
+  Search, Sparkles, Target, Wand2, Zap, Calendar, ChevronRight
 } from 'lucide-react'
 import toast from 'react-hot-toast'
 import { useAccount } from 'wagmi'
-import { useParams } from 'react-router-dom'
+import { useParams, useNavigate } from 'react-router-dom'
 import { supabase, getAuthToken } from '../lib/supabase'
 import { useAuthStore } from '../store'
 import { useSubscription } from '../hooks/useSubscription'
@@ -22,18 +22,14 @@ import { MINT_MODES, MINT_PHASES, recommendMintMode } from '../lib/mintModes'
 const ADMIN_WALLET = import.meta.env.VITE_ADMIN_WALLET?.toLowerCase()
 
 const TABS = [
-  { id: 'trending', label: 'Trending', icon: TrendingUp, copy: 'Strongest attention signals right now.' },
-  { id: 'minting-soon', label: 'Minting Soon', icon: Target, copy: 'Confirmed launches approaching soon.' },
-  { id: 'whale-minted', label: 'Whale Minted', icon: Radar, copy: 'Projects touched by watched or whale wallets.' },
-  { id: 'hidden-gems', label: 'Hidden Gems', icon: Gem, copy: 'Quiet projects with early quality signals.' },
-  { id: 'high-confidence', label: 'High Confidence', icon: Star, copy: 'Best metadata, timing, and source clarity.' },
+  { id: 'live',     label: 'Live Now',      icon: Zap,      copy: 'Minting right now.' },
+  { id: 'soon',     label: 'Minting Soon',  icon: Target,   copy: 'Confirmed drops in the next 7 days.' },
+  { id: 'upcoming', label: 'Upcoming',      icon: Calendar, copy: 'Verified future drops on ETH & Base.' },
 ]
 
 const CHAINS = [
-  { value: 'eth', label: 'Ethereum', chainId: 1 },
-  { value: 'base', label: 'Base', chainId: 8453 },
-  { value: 'apechain', label: 'ApeChain', chainId: 33139 },
-  { value: 'solana', label: 'Solana', chainId: 0 },
+  { value: 'eth',  label: 'Ethereum', chainId: 1 },
+  { value: 'base', label: 'Base',     chainId: 8453 },
 ]
 
 function normalizeChain(chain) {
@@ -136,13 +132,8 @@ function baseSignalScore(project) {
 
 function scoreFor(project, tab) {
   const sourcePriority = { admin: 500, community: 450, opensea_drops: 380, opensea: 350, alchemy: 330, zora: 300, onchain: 0 }[project.source] || 100
-  const quality = Number(project.quality_score || calendarQualityScore(project))
-  const userBoost = userInteractionBoost(project)
-  if (tab === 'minting-soon') return sourcePriority + proximitySignal(project) * 5 + readinessSignal(project) * 3 + confidenceSignal(project) * 2
-  if (tab === 'whale-minted') return sourcePriority + whaleSignal(project) * 6 + freshnessSignal(project) * 4 + quality
-  if (tab === 'hidden-gems') return sourcePriority + numberSignal(project.hidden_gem_score) * 4 + quality * 2 + freshnessSignal(project) - numberSignal(project.hype_score) + userBoost
-  if (tab === 'high-confidence') return sourcePriority + confidenceSignal(project) * 5 + readinessSignal(project) * 3 + quality * 2
-  return sourcePriority + baseSignalScore(project) + numberSignal(project.hype_score) * 2 + userBoost
+  if (tab === 'live' || tab === 'soon') return sourcePriority + proximitySignal(project) * 5 + readinessSignal(project) * 2
+  return sourcePriority + proximitySignal(project) * 3 + confidenceSignal(project) * 2 + freshnessSignal(project)
 }
 
 function isLive(project) {
@@ -177,22 +168,20 @@ function friendlyMintStatus(project) {
 }
 
 function tabFilter(project, tab) {
-  const raw = isRawCalendarDiscovery(project)
-  const quality = Number(project.quality_score || calendarQualityScore(project))
-  const launchReady = isLaunchReadyCalendarProject(project)
-  if (raw && tab !== 'whale-minted') return false
-  if (tab === 'minting-soon') {
-    if (!project.mint_date || !launchReady) return false
+  if (!isLaunchReadyCalendarProject(project)) return false
+  if (isStaleCalendarProject(project)) return false
+  if (tab === 'live') return isLive(project)
+  if (tab === 'soon') {
+    if (isLive(project)) return false
+    if (!project.mint_date) return false
     const diff = new Date(project.mint_date).getTime() - Date.now()
     return Number.isFinite(diff) && diff > 0 && diff <= 7 * 24 * 60 * 60 * 1000
   }
-  if (tab === 'whale-minted') return whaleSignal(project) > 0 && quality >= 40
-  // Filter ended/stale projects from curated tabs
-  if (isStaleCalendarProject(project)) return false
-  if (!launchReady) return false
-  if (tab === 'hidden-gems') return quality >= 50 && ((project.hidden_gem_score || 0) >= (project.hype_score || 0) || (project.hype_score || 0) < 45)
-  if (tab === 'high-confidence') return quality >= 60 && confidenceSignal(project) >= 80
-  return quality >= 60 || baseSignalScore(project) >= 260
+  // upcoming: any valid future project
+  if (project.mint_status === 'live_now') return true
+  if (!project.mint_date) return false
+  const diff = new Date(project.mint_date).getTime() - Date.now()
+  return Number.isFinite(diff) && diff > -24 * 60 * 60 * 1000
 }
 
 function signalBadges(project, tab) {
@@ -393,11 +382,13 @@ function confidenceExplanation(project) {
 
 export default function CalendarPage() {
   const { shareCode } = useParams()
+  const navigate = useNavigate()
   const { user } = useAuthStore()
   const { address, isConnected } = useAccount()
   const { plan } = useSubscription()
   const isAdmin = isConnected && address?.toLowerCase() === ADMIN_WALLET
-  const [activeTab, setActiveTab] = useState('trending')
+  const [activeTab, setActiveTab] = useState('soon')
+  const [tick, setTick] = useState(0)
   const [projects, setProjects] = useState(() => {
     const cached = loadProjectsCache()
     return cached ? mergeLocalRatings(cached) : []
@@ -491,6 +482,17 @@ export default function CalendarPage() {
     }, 3 * 60 * 1000)
     return () => clearInterval(interval)
   }, [fetchProjects, fetchStatus])
+
+  // Tick every second so countdown timers stay live
+  useEffect(() => {
+    const id = setInterval(() => setTick(t => t + 1), 1000)
+    return () => clearInterval(id)
+  }, [])
+
+  const mintNow = useCallback(async (project) => {
+    await addToMintGuard(project)
+    navigate('/')
+  }, [addToMintGuard, navigate])
 
   const lastResumeRefresh = useRef(0)
 
@@ -1046,20 +1048,21 @@ export default function CalendarPage() {
         <Metric label="Pending" value={isAdmin ? (status?.pendingCount ?? 0) : '-'} tone="text-muted" />
       </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-5 gap-3 mb-5">
+      <div className="flex gap-2 mb-5 border-b border-border overflow-x-auto">
         {TABS.map(tab => {
           const Icon = tab.icon
           return (
             <button
               key={tab.id}
               onClick={() => setActiveTab(tab.id)}
-              className={`card-sm text-left transition-all ${activeTab === tab.id ? 'border-accent bg-accent/8' : 'hover:border-border2'}`}
+              className={`flex items-center gap-1.5 px-4 py-2.5 text-sm font-medium border-b-2 -mb-px whitespace-nowrap transition-colors ${
+                activeTab === tab.id
+                  ? 'border-accent text-accent'
+                  : 'border-transparent text-muted hover:text-text'
+              }`}
             >
-              <div className="flex items-center gap-2 mb-2">
-                <Icon size={15} className={activeTab === tab.id ? 'text-accent' : 'text-muted'} />
-                <span className="font-semibold text-sm">{tab.label}</span>
-              </div>
-              <p className="text-xs text-muted leading-relaxed">{tab.copy}</p>
+              <Icon size={14} />
+              {tab.label}
             </button>
           )
         })}
@@ -1113,19 +1116,17 @@ export default function CalendarPage() {
           </div>
         </div>
       ) : (
-        <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">
+        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
           {visibleProjects.map(project => (
             <ProjectCard
               key={project.id}
               project={project}
-              tab={activeTab}
               isAdmin={isAdmin}
+              tick={tick}
               onOpen={() => { setSelectedProject(project); trackProjectView(project.id) }}
-              onAdd={() => addToMintGuard(project)}
+              onMint={() => mintNow(project)}
               onStatus={status => updateStatus(project, status)}
-              onRate={rating => rateProject(project, rating)}
               onShare={() => copyShare(project)}
-              ratingBusy={ratingBusy === project.id}
             />
           ))}
         </div>
@@ -1147,6 +1148,7 @@ export default function CalendarPage() {
           project={selectedProject}
           isAdmin={isAdmin}
           onClose={() => setSelectedProject(null)}
+          onMint={() => mintNow(selectedProject)}
           onAdd={() => addToMintGuard(selectedProject)}
           onStatus={status => updateStatus(selectedProject, status)}
           onRate={rating => rateProject(selectedProject, rating)}
@@ -1158,100 +1160,97 @@ export default function CalendarPage() {
   )
 }
 
-const ProjectCard = memo(function ProjectCard({ project, tab, isAdmin, onOpen, onAdd, onStatus, onRate, onShare, ratingBusy }) {
+const ProjectCard = memo(function ProjectCard({ project, isAdmin, tick, onOpen, onMint, onStatus, onShare }) {
   const live = isLive(project)
-  const launchReady = isLaunchReadyCalendarProject(project)
-  const quality = Number(project.quality_score || calendarQualityScore(project))
-  const rating = Number(project.viewer_rating || project.rating_avg || 0)
-  const ratingCount = Number(project.rating_count || 0)
-  const rankValue = tab === 'hidden-gems'
-    ? project.hidden_gem_score || 0
-    : tab === 'whale-minted'
-    ? whaleSignal(project)
-    : tab === 'minting-soon'
-    ? proximitySignal(project)
-    : tab === 'high-confidence'
-    ? confidenceSignal(project)
-    : project.hype_score || 0
-  const needsReview = !launchReady || (project.source_confidence || project.mint_date_confidence || 'low') === 'low'
-  const badges = signalBadges(project, tab)
+  const countdownVal = countdown(project) // tick prop forces memo to re-evaluate
+  const price = displayProjectPrice(project)
+  const chain = normalizeChain(project.chain)
 
   return (
-    <div className="card overflow-hidden p-4 hover:border-accent/40 hover:-translate-y-0.5 transition-all duration-200">
-      {project.image_url && (
-        <div className="mb-4 aspect-[16/7] overflow-hidden rounded-2xl border border-border bg-surface2">
-          <img src={project.image_url} alt={projectTitle(project)} className="h-full w-full object-cover" loading="lazy" decoding="async" />
-        </div>
-      )}
-      <div className="flex items-start gap-4">
-        <div className="w-14 h-14 rounded-lg bg-surface2 border border-border overflow-hidden flex items-center justify-center shrink-0">
-          {project.image_url ? (
-            <img src={project.image_url} alt="" className="w-full h-full object-cover" decoding="async" />
-          ) : (
-            <Sparkles size={22} className="text-accent" />
-          )}
-        </div>
-        <div className="flex-1 min-w-0">
-          <div className="flex flex-wrap items-center gap-2 mb-1">
-            {live && <span className="badge badge-green animate-pulse-slow">LIVE NOW</span>}
-            {!live && <span className="badge badge-yellow">{friendlyMintStatus(project)}</span>}
-            <span className="badge badge-cyan">{normalizeChain(project.chain).toUpperCase()}</span>
-            <span className={`badge ${confidenceClass(project.source_confidence || project.mint_date_confidence)}`}>{confidenceText(project)}</span>
-            {(project.status === 'pending_review' || !launchReady) && <span className="badge badge-yellow">Needs Review</span>}
-            {badges.map(badge => <span key={badge.label} className={`badge ${badge.tone}`}>{badge.label}</span>)}
+    <div
+      className="card overflow-hidden p-0 hover:border-accent/40 hover:-translate-y-1 transition-all duration-200 cursor-pointer flex flex-col"
+      onClick={onOpen}
+    >
+      {/* Hero image */}
+      <div className="relative aspect-[16/9] overflow-hidden bg-surface2 border-b border-border shrink-0">
+        {project.image_url ? (
+          <img
+            src={project.image_url}
+            alt={projectTitle(project)}
+            className="h-full w-full object-cover"
+            loading="lazy"
+            decoding="async"
+          />
+        ) : (
+          <div className="h-full w-full flex items-center justify-center">
+            <Sparkles size={28} className="text-accent/30" />
           </div>
-          <h2 className="font-bold truncate">{projectTitle(project)}</h2>
-          <p className="text-xs text-muted mt-1 line-clamp-2">{projectSummary(project)}</p>
+        )}
+        {/* Status + chain overlay */}
+        <div className="absolute top-2 left-2 flex gap-1">
+          {live
+            ? <span className="badge badge-green animate-pulse-slow">LIVE NOW</span>
+            : <span className="badge badge-yellow">{friendlyMintStatus(project)}</span>
+          }
+          <span className="badge badge-cyan">{chain.toUpperCase()}</span>
         </div>
-        <div className="text-right shrink-0">
-          <div className={`font-mono font-bold ${live ? 'text-green' : 'text-accent3'}`}>{countdown(project)}</div>
-          <div className="text-[10px] text-muted uppercase tracking-widest mt-1">{displayProjectPrice(project)}</div>
+        {/* Source label */}
+        <div className="absolute top-2 right-2">
+          <span className="badge badge-purple text-[9px]">{sourceLabel(project.source)}</span>
         </div>
       </div>
 
-      <div className="mt-4 grid grid-cols-2 sm:grid-cols-4 gap-2 text-xs">
-        <Signal label={tab === 'hidden-gems' ? 'Gem score' : tab === 'whale-minted' ? 'Whale' : tab === 'minting-soon' ? 'Soon' : tab === 'high-confidence' ? 'Trust' : 'Signal'} value={Math.round(numberSignal(rankValue))} />
-        <Signal label="Quality" value={quality} tone={quality >= 60 ? 'text-green' : 'text-accent3'} />
-        <Signal label="Ready" value={readinessSignal(project)} tone={readinessSignal(project) >= 70 ? 'text-green' : 'text-accent3'} />
-        <Signal label="Rating" value={ratingCount ? `${rating}/5` : 'New'} />
-      </div>
+      {/* Body */}
+      <div className="p-4 flex flex-col flex-1">
+        <h2 className="font-bold truncate text-base leading-snug">{projectTitle(project)}</h2>
+        <p className="text-xs text-muted mt-0.5">{price}</p>
 
-      <div className="mt-3 flex flex-wrap items-center gap-2 text-xs text-muted">
-        <Clock size={13} />
-        <span>{formatTime(project)}</span>
-        {project.contract_address && <span className="font-mono text-accent">{shortAddress(project.contract_address)}</span>}
-        {project.share_code && <button onClick={() => navigator.clipboard?.writeText(project.share_code)} className="font-mono text-accent hover:underline">{project.share_code}</button>}
-        {project.submitted_by_label && <span>Shared by {project.submitted_by_label}</span>}
-        {needsReview && <span className="text-accent3">Verify official links before minting</span>}
-      </div>
-
-      <RatingControl rating={rating} ratingCount={ratingCount} onRate={onRate} busy={ratingBusy} />
-
-      <div className="mt-4 space-y-2">
-        <div className="flex gap-2">
-          <button onClick={onOpen} className="btn-primary flex-1">View Details</button>
-          <button onClick={onAdd} className="btn-ghost flex-1">Track in MintGuard</button>
+        {/* Countdown — primary visual */}
+        <div className={`mt-3 rounded-xl border px-4 py-3 text-center ${
+          live ? 'border-green/30 bg-green/8' : 'border-accent/20 bg-accent/8'
+        }`}>
+          <div className={`font-mono font-bold text-2xl tracking-wide ${live ? 'text-green' : 'text-accent3'}`}>
+            {countdownVal}
+          </div>
+          <div className="text-[10px] text-muted uppercase tracking-widest mt-0.5">
+            {live ? 'Minting now' : project.mint_date ? formatTime(project) : 'Time TBA'}
+          </div>
         </div>
-        <div className="flex gap-2">
-          <button onClick={onAdd} className="btn-ghost flex-1">Copy Mint</button>
-          <button onClick={onShare} className="btn-ghost flex-1 flex items-center justify-center gap-1.5">
-            <Share2 size={13} />Share
+
+        {/* Actions */}
+        <div className="mt-3 flex gap-2" onClick={e => e.stopPropagation()}>
+          <button onClick={onMint} className="btn-primary flex-1 flex items-center justify-center gap-1.5">
+            <Zap size={13} />
+            Mint Now
+          </button>
+          <button onClick={onOpen} className="btn-ghost flex items-center justify-center gap-1 px-3">
+            Details
+            <ChevronRight size={13} />
           </button>
           {project.source_url && (
-            <a href={project.source_url} target="_blank" rel="noreferrer" className="btn-ghost px-3 flex items-center justify-center" title="Open source">
+            <a
+              href={project.source_url}
+              target="_blank"
+              rel="noreferrer"
+              className="btn-ghost px-3 flex items-center justify-center"
+              title="Open source"
+            >
               <ExternalLink size={13} />
             </a>
           )}
+          <button onClick={onShare} className="btn-ghost px-3 flex items-center justify-center" title="Share">
+            <Share2 size={13} />
+          </button>
         </div>
-      </div>
 
-      {isAdmin && (
-        <div className="flex gap-2 mt-3">
-          <button onClick={() => onStatus('approved')} className="btn-ghost text-xs flex-1">Approve</button>
-          <button onClick={() => onStatus('live')} className="btn-ghost text-xs flex-1">Mark Live</button>
-          <button onClick={() => onStatus('hidden')} className="btn-danger text-xs flex-1">Hide</button>
-        </div>
-      )}
+        {isAdmin && (
+          <div className="flex gap-2 mt-2" onClick={e => e.stopPropagation()}>
+            <button onClick={() => onStatus('approved')} className="btn-ghost text-xs flex-1">Approve</button>
+            <button onClick={() => onStatus('live')} className="btn-ghost text-xs flex-1">Live</button>
+            <button onClick={() => onStatus('hidden')} className="btn-danger text-xs flex-1">Hide</button>
+          </div>
+        )}
+      </div>
     </div>
   )
 })
@@ -1424,7 +1423,7 @@ function Field({ label, value, onChange, placeholder = '', required = false }) {
   )
 }
 
-function DetailDrawer({ project, isAdmin, onClose, onAdd, onStatus, onRate, onShare, ratingBusy }) {
+function DetailDrawer({ project, isAdmin, onClose, onAdd, onMint, onStatus, onRate, onShare, ratingBusy }) {
   const launchReady = isLaunchReadyCalendarProject(project)
   const needsReview = !launchReady || (project.source_confidence || project.mint_date_confidence || 'low') === 'low'
   const quality = Number(project.quality_score || calendarQualityScore(project))
@@ -1493,17 +1492,21 @@ function DetailDrawer({ project, isAdmin, onClose, onAdd, onStatus, onRate, onSh
         <MintSchedule project={project} />
 
         <div className="flex flex-col sm:flex-row gap-2 mt-6">
+          <button onClick={onMint} className="btn-primary flex-1 flex items-center justify-center gap-2">
+            <Zap size={14} />
+            Mint Now
+          </button>
           <button onClick={onAdd} className="btn-ghost flex-1">
             Track in MintGuard
           </button>
-          <button onClick={onAdd} className="btn-ghost flex-1">
-            Copy Mint
-          </button>
-          <button onClick={onShare} className="btn-primary flex-1 flex items-center justify-center gap-2">
+          <button onClick={onShare} className="btn-ghost flex items-center justify-center gap-2 px-3">
             <Share2 size={14} />
-            Copy Share Link
           </button>
-          {project.source_url && <a className="btn-ghost flex-1 text-center" href={project.source_url} target="_blank" rel="noreferrer">Open Source</a>}
+          {project.source_url && (
+            <a className="btn-ghost flex items-center justify-center px-3" href={project.source_url} target="_blank" rel="noreferrer">
+              <ExternalLink size={14} />
+            </a>
+          )}
         </div>
         {isAdmin && (
           <div className="flex gap-2 mt-3">
