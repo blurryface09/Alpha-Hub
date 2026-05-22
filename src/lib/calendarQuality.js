@@ -160,9 +160,12 @@ export function freshnessBonus(project) {
 
 export function isStaleCalendarProject(project) {
   if (!project) return true
-  if (project.mint_status === 'ended' || project.status === 'ended') return true
+  if (project.status === 'ended') return true
+  // Admin/sync explicitly set status=live → never stale regardless of mint_date
+  if (project.status === 'live') return false
   if (!project.mint_date) return false
   const mintPassed = Date.now() - new Date(project.mint_date).getTime() > 24 * 60 * 60 * 1000
   if (!mintPassed) return false
-  return project.mint_status !== 'live_now'
+  // Past mint_date: only keep if explicitly marked live_now in mint_status
+  return (project.mint_status || '') !== 'live_now'
 }
