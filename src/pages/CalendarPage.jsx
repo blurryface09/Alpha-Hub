@@ -487,22 +487,6 @@ export default function CalendarPage() {
     return () => clearInterval(id)
   }, [])
 
-  const mintNow = useCallback(async (project) => {
-    const live = isLive(project)
-    if (!live) {
-      const timeLeft = project.mint_date ? countdown(project) : null
-      const when = timeLeft ? `opens in ${timeLeft}` : 'date not confirmed yet'
-      toast(`Mint ${when} — added to MintGuard. Arm Strike Mode to auto-execute when it goes live.`, {
-        icon: '⏳',
-        duration: 5000,
-      })
-      await addToMintGuard(project)
-      return
-    }
-    await addToMintGuard(project)
-    navigate('/')
-  }, [addToMintGuard, navigate])
-
   const lastResumeRefresh = useRef(0)
 
   useEffect(() => {
@@ -795,6 +779,23 @@ export default function CalendarPage() {
       toast.error(friendlyError(error, 'Could not add this project to MintGuard.'), { id: 'calendar-add' })
     }
   }
+
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const mintNow = useCallback(async (project) => {
+    const live = isLive(project)
+    if (!live) {
+      const timeLeft = project.mint_date ? countdown(project) : null
+      const when = timeLeft ? `opens in ${timeLeft}` : 'date not confirmed yet'
+      toast(`Mint ${when} — added to MintGuard. Arm Strike Mode to auto-execute when it goes live.`, {
+        icon: '⏳',
+        duration: 5000,
+      })
+      await addToMintGuard(project)
+      return
+    }
+    await addToMintGuard(project)
+    navigate('/')
+  }, [addToMintGuard, navigate])
 
   const saveProject = async (project) => {
     if (!user?.id) {

@@ -126,8 +126,8 @@ function safeMessage(error) {
   if (msg.includes('no contract exists')) return 'No contract exists at this address on the selected chain.'
   if (msg.includes('rpc') || msg.includes('http request failed') || msg.includes('fetch failed') || msg.includes('network error')) return 'RPC connection failed. Please retry in a moment.'
   if (msg.includes('max_spend_exceeded')) return 'Mint skipped because max spend was exceeded.'
-  if (msg.includes('insufficient funds')) return 'The mint wallet does not have enough funds.'
-  if (msg.includes('seadrop mint not active')) return error?.message || 'This mint is not currently active.'
+  if (msg.includes('insufficient funds') || msg.includes('total cost') || msg.includes('exceeds the balance') || msg.includes('exceeds balance')) return 'Insufficient ETH for gas — top up your wallet and try again.'
+  if (msg.includes('seadrop mint not active') || msg.includes('public drop not configured')) return 'This mint is not currently active — the public drop is not open yet. Check the official mint page.'
   if (msg.includes('execution reverted') || msg.includes('revert')) return 'Mint simulation failed — contract rejected the transaction. The mint may be closed or require an allowlist.'
   if (msg.includes('function') || msg.includes('selector')) return 'Unknown mint function. Use the official mint site or add contract details.'
   if (msg.includes('chain')) return 'Wrong chain for this mint.'
@@ -444,9 +444,11 @@ export async function prepareMintTransaction(body, _clientOverride = null, _supa
 
     // Protocol detection: SeaDrop contracts must be minted via the SeaDrop router
     let protocolCandidates = []
+    let seaDropError = null
     if (isSeaDropContract(verifiedAbi)) {
       protocolCandidates = await buildSeaDropCandidates(contract, quantity, walletAddress, activeRpc).catch(e => {
         console.log('[mint-benchmark] seadrop_setup_fail', { error: String(e.message || '').slice(0, 80) })
+        seaDropError = e
         return []
       })
     }
@@ -542,7 +544,10 @@ export async function prepareMintTransaction(body, _clientOverride = null, _supa
     console.log('[mint-benchmark] rpc_retry', { failedUrl: activeUrl.slice(0, 40), remaining: rpcQueue.length - rpcQueue.indexOf({ activeClient: activeRpc, url: activeUrl }) - 1 })
   }
 
-  const rawReason = String(lastError?.shortMessage || lastError?.message || lastError || 'unknown')
+  // SeaDrop contracts: if SeaDrop setup failed and all fallback candidates also failed,
+  // the SeaDrop error is the authoritative reason (generic candidates can never work on these contracts)
+  const definitiveError = seaDropError || lastError
+  const rawReason = String(definitiveError?.shortMessage || definitiveError?.message || definitiveError || 'unknown')
   console.error('[mint-benchmark] all_candidates_failed', {
     duration_ms: Date.now() - t0,
     chain,
@@ -550,7 +555,7 @@ export async function prepareMintTransaction(body, _clientOverride = null, _supa
     attempts: attemptCount,
     failure_reason: rawReason.slice(0, 200),
   })
-  const err = new Error(safeMessage(lastError))
+  const err = new Error(safeMessage(definitiveError))
   err.rawReason = rawReason
   throw err
 }
