@@ -60,13 +60,12 @@ export function isLaunchReadyCalendarProject(project) {
   if (!project) return false
   if (['hidden', 'rejected', 'pending_review'].includes(project.status)) return false
   if (isRawCalendarDiscovery(project)) return false
-  // Hard requirements — project must have these to show anywhere
+  // Hard requirements — must have a contract to be mintable
   if (!project.contract_address) return false
-  if (!project.image_url) return false
   if (!hasUsefulProjectName(project)) return false
   // Trust gate — low confidence only allowed if admin/community vouched
   if (project.source_confidence === 'low' && !['admin', 'community'].includes(project.source)) return false
-  if (calendarQualityScore(project) < 60) return false
+  if (calendarQualityScore(project) < 50) return false
   return true
 }
 

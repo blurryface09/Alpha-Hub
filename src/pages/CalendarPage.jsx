@@ -170,18 +170,16 @@ function friendlyMintStatus(project) {
 function tabFilter(project, tab) {
   if (!isLaunchReadyCalendarProject(project)) return false
   if (isStaleCalendarProject(project)) return false
-  if (tab === 'live') return isLive(project)
+  const live = isLive(project) || project.status === 'live' || project.mint_status === 'live_now'
+  if (tab === 'live') return live
   if (tab === 'soon') {
-    if (isLive(project)) return false
+    if (live) return false
     if (!project.mint_date) return false
     const diff = new Date(project.mint_date).getTime() - Date.now()
     return Number.isFinite(diff) && diff > 0 && diff <= 7 * 24 * 60 * 60 * 1000
   }
-  // upcoming: any valid future project
-  if (project.mint_status === 'live_now') return true
-  if (!project.mint_date) return false
-  const diff = new Date(project.mint_date).getTime() - Date.now()
-  return Number.isFinite(diff) && diff > -24 * 60 * 60 * 1000
+  // upcoming: everything valid — live, soon, and future
+  return true
 }
 
 function signalBadges(project, tab) {
@@ -387,7 +385,7 @@ export default function CalendarPage() {
   const { address, isConnected } = useAccount()
   const { plan } = useSubscription()
   const isAdmin = isConnected && address?.toLowerCase() === ADMIN_WALLET
-  const [activeTab, setActiveTab] = useState('soon')
+  const [activeTab, setActiveTab] = useState('live')
   const [tick, setTick] = useState(0)
   const [projects, setProjects] = useState(() => {
     const cached = loadProjectsCache()
@@ -650,7 +648,10 @@ export default function CalendarPage() {
         }),
       })
       const data = await res.json().catch(() => ({}))
-      if (!res.ok || data?.ok === false) throw new Error(data.error || 'Could not prepare mint')
+      if (!res.ok || data?.ok === false) {
+        const reason = data.error || 'Could not prepare mint'
+        throw new Error(reason)
+      }
       setConsoleSteps([
         'Preparing project',
         'Detecting phase',
@@ -663,7 +664,8 @@ export default function CalendarPage() {
       toast.success(data.message || `${MINT_MODES[selectedMode]?.label || 'Mint'} prepared.`)
     } catch (error) {
       setConsoleSteps(prev => [...prev, 'Failed'])
-      toast.error(friendlyError(error, 'Mint preparation failed. Nothing was sent.'))
+      const msg = friendlyError(error, error?.message || 'Mint preparation failed.')
+      toast.error(msg, { duration: 8000 })
     }
   }
 
