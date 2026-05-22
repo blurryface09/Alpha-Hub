@@ -613,6 +613,7 @@ function intentPayload(user, body, status = 'draft') {
 
 // Columns that may not exist in older DB schemas — stripped on schema errors
 const OPTIONAL_INTENT_COLS = [
+  'project_id',
   'strike_status', 'strike_armed_at', 'strike_execute_at', 'strike_error',
   'vault_wallet_id', 'calendar_project_id', 'wl_project_id', 'chain_id',
   'mint_url', 'mint_phase', 'execution_mode', 'quantity',
