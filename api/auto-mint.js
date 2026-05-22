@@ -159,9 +159,8 @@ async function markProject(projectId, updates) {
 
 function safeUserMessage(kind) {
   if (kind === 'simulation') return 'Mint simulation failed. Transaction was not sent.'
-  if (kind === 'spend') return 'Mint skipped because max spend was exceeded.'
-  if (kind === 'prepare') return 'Mint preparation failed.'
-  return 'Automint is temporarily unavailable.'
+  if (kind === 'spend') return 'Mint skipped — max spend limit reached.'
+  return 'Automint failed.'
 }
 
 function createClients(chainKey, account) {
@@ -620,10 +619,17 @@ export default async function handler(req, res) {
       fired++
 
     } catch (e) {
-      const msg = e.shortMessage || e.message || 'Unknown error'
-      console.error(`auto-mint failed for ${project.id}:`, msg)
-      const isSpend = msg === 'max_spend_exceeded'
+      const rawMsg = e.shortMessage || e.message || 'Unknown error'
+      const isSpend = rawMsg === 'max_spend_exceeded'
       const publicMsg = isSpend ? safeUserMessage('spend') : sanitizeRpcError(e)
+      console.error('[mint-exec] auto_mint_failed', {
+        stage: 'execute',
+        chain: project.chain || 'eth',
+        contract: project.contract_address?.slice(0, 12),
+        project: project.id,
+        real_error: rawMsg.slice(0, 200),
+        user_message: publicMsg,
+      })
 
       // Always unmark fired so the cron can retry on next run.
       // The project remains 'live' so it will be picked up again.

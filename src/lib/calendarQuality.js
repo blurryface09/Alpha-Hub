@@ -59,12 +59,14 @@ export function isRawCalendarDiscovery(project) {
 export function isLaunchReadyCalendarProject(project) {
   if (!project) return false
   if (['hidden', 'rejected', 'pending_review'].includes(project.status)) return false
-  if (isRawCalendarDiscovery(project)) return false
-  // Hard requirements — must have a contract to be mintable
-  if (!project.contract_address) return false
   if (!hasUsefulProjectName(project)) return false
-  // Trust gate — low confidence only allowed if admin/community vouched
-  if (project.source_confidence === 'low' && !['admin', 'community'].includes(project.source)) return false
+  // Admin/community projects are manually verified — show them if they have a name + contract
+  if (['admin', 'community'].includes(project.source) && project.contract_address) return true
+  // Raw onchain discoveries and projects with no metadata links are not ready for the feed
+  if (isRawCalendarDiscovery(project)) return false
+  if (!project.contract_address) return false
+  // Quality score is the gate — source_confidence is used for display purposes only.
+  // Unverified OpenSea/Alchemy/Zora drops still have good quality signals (image, source_url, etc.)
   if (calendarQualityScore(project) < 50) return false
   return true
 }

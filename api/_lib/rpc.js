@@ -67,10 +67,51 @@ export function getRpcHealth() {
 }
 
 export function sanitizeRpcError(error) {
-  const message = error?.shortMessage || error?.message || String(error || '')
-  if (message.toLowerCase().includes('revert')) return 'Mint simulation failed. Transaction was not sent.'
-  if (message.toLowerCase().includes('timeout')) return 'Automint is temporarily unavailable.'
-  return 'Automint is temporarily unavailable.'
+  const raw = error?.shortMessage || error?.message || String(error || '')
+  const msg = raw.toLowerCase()
+  if (msg.includes('insufficient funds') || msg.includes('total cost') || msg.includes('exceeds the balance') || msg.includes('exceeds balance')) {
+    return 'Insufficient ETH — top up the vault wallet and try again.'
+  }
+  if (msg.includes('seadrop mint not active') || msg.includes('public drop not configured') || msg.includes('not currently active')) {
+    return 'Mint is not currently active — the public drop is not open yet.'
+  }
+  if (msg.includes('sale not active') || msg.includes('sale is not active') || msg.includes('not started') || msg.includes('not open') || msg.includes('mint closed') || msg.includes('mint has not') || msg.includes('minting is not') || msg.includes('paused')) {
+    return 'Mint is not open yet or has ended. Check the official mint page for the correct time.'
+  }
+  if (msg.includes('allowlist') || msg.includes('not whitelisted') || msg.includes('not eligible') || msg.includes('merkle') || msg.includes('not in whitelist')) {
+    return 'Vault wallet is not on the allowlist for this mint phase.'
+  }
+  if (msg.includes('already minted') || msg.includes('max per wallet') || msg.includes('max mint') || msg.includes('limit reached') || msg.includes('max tokens') || msg.includes('token limit')) {
+    return 'Max mints reached — this wallet has already hit the limit for this mint.'
+  }
+  if (msg.includes('max supply') || msg.includes('sold out') || msg.includes('exceeds max') || msg.includes('supply exceeded')) {
+    return 'Sold out — this mint has reached maximum supply.'
+  }
+  if (msg.includes('no contract exists') || msg.includes('no bytecode') || msg.includes('contract not found')) {
+    return 'No contract found at this address on the selected chain.'
+  }
+  if (msg.includes('msg.value') || msg.includes('wrong value') || msg.includes('incorrect value') || msg.includes('invalid price')) {
+    return 'Wrong mint price sent. Check the price on the official mint page.'
+  }
+  if (msg.includes('nonce')) {
+    return 'Transaction nonce error — reset vault wallet pending transactions.'
+  }
+  if (msg.includes('execution reverted') || msg.includes('revert')) {
+    return 'Mint simulation failed — contract rejected the transaction. The mint may be closed or require an allowlist.'
+  }
+  if (msg.includes('rpc') || msg.includes('http request failed') || msg.includes('fetch failed') || msg.includes('network error') || msg.includes('econnrefused') || msg.includes('etimedout')) {
+    return 'RPC connection failed. Will retry on next tick.'
+  }
+  if (msg.includes('timeout') || msg.includes('timed out')) {
+    return 'Request timed out. Will retry on next tick.'
+  }
+  if (msg.includes('unsupported mint function') || msg.includes('no supported mint') || msg.includes('no standard mint')) {
+    return 'Could not detect the mint function. Verify contract address and add contract details.'
+  }
+  if (msg.includes('chain') || msg.includes('network')) {
+    return 'Wrong chain — check the project chain setting.'
+  }
+  return `Automint failed: ${raw.slice(0, 120)}`
 }
 
 export async function rpcRequest(chainKey, method, params = [], timeoutMs = DEFAULT_TIMEOUT_MS) {

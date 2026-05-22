@@ -123,14 +123,21 @@ function safeMessage(error) {
   const msg = String(error?.shortMessage || error?.message || error || '').toLowerCase()
   if (msg.includes('contract address')) return 'Contract address is needed for Fast or Strike Mint.'
   if (msg.includes('connect wallet')) return 'Connect wallet before preparing this mint.'
-  if (msg.includes('no contract exists')) return 'No contract exists at this address on the selected chain.'
-  if (msg.includes('rpc') || msg.includes('http request failed') || msg.includes('fetch failed') || msg.includes('network error')) return 'RPC connection failed. Please retry in a moment.'
-  if (msg.includes('max_spend_exceeded')) return 'Mint skipped because max spend was exceeded.'
-  if (msg.includes('insufficient funds') || msg.includes('total cost') || msg.includes('exceeds the balance') || msg.includes('exceeds balance')) return 'Insufficient ETH for gas — top up your wallet and try again.'
-  if (msg.includes('seadrop mint not active') || msg.includes('public drop not configured')) return 'This mint is not currently active — the public drop is not open yet. Check the official mint page.'
+  if (msg.includes('no contract exists') || msg.includes('no bytecode') || msg.includes('contract not found')) return 'No contract found at this address on the selected chain. Check the contract address.'
+  if (msg.includes('rpc') || msg.includes('http request failed') || msg.includes('fetch failed') || msg.includes('network error') || msg.includes('econnrefused') || msg.includes('etimedout')) return 'RPC connection failed. Please retry in a moment.'
+  if (msg.includes('max_spend_exceeded')) return 'Mint skipped — max spend limit reached.'
+  if (msg.includes('timeout') || msg.includes('timed out')) return 'Request timed out. Please try again.'
+  if (msg.includes('nonce')) return 'Transaction nonce error — reset your wallet pending transactions and try again.'
+  if (msg.includes('insufficient funds') || msg.includes('total cost') || msg.includes('exceeds the balance') || msg.includes('exceeds balance')) return 'Insufficient ETH — top up your wallet and try again.'
+  if (msg.includes('seadrop mint not active') || msg.includes('public drop not configured') || msg.includes('not currently active')) return 'This mint is not currently active — the public drop is not open yet. Check the official mint page.'
+  if (msg.includes('sale not active') || msg.includes('sale is not active') || msg.includes('not started') || msg.includes('not open') || msg.includes('mint closed') || msg.includes('mint has not') || msg.includes('minting is not') || msg.includes('paused')) return 'Mint is not open yet or has ended. Check the official mint page for the correct time.'
+  if (msg.includes('allowlist') || msg.includes('not whitelisted') || msg.includes('not eligible') || msg.includes('merkle') || msg.includes('not in whitelist')) return 'Mint rejected — your wallet is not on the allowlist for this phase.'
+  if (msg.includes('already minted') || msg.includes('max per wallet') || msg.includes('max mint') || msg.includes('limit reached') || msg.includes('max tokens') || msg.includes('token limit')) return 'Max mints reached — this wallet has hit the limit for this mint.'
+  if (msg.includes('max supply') || msg.includes('sold out') || msg.includes('exceeds max') || msg.includes('supply exceeded')) return 'Sold out — this mint has reached maximum supply.'
+  if (msg.includes('msg.value') || msg.includes('wrong value') || msg.includes('incorrect value') || msg.includes('invalid price') || msg.includes('price mismatch')) return 'Wrong mint price — check the price on the official mint page.'
   if (msg.includes('execution reverted') || msg.includes('revert')) return 'Mint simulation failed — contract rejected the transaction. The mint may be closed or require an allowlist.'
-  if (msg.includes('function') || msg.includes('selector')) return 'Unknown mint function. Use the official mint site or add contract details.'
-  if (msg.includes('chain')) return 'Wrong chain for this mint.'
+  if (msg.includes('function') || msg.includes('selector') || msg.includes('unknown mint') || msg.includes('no standard mint')) return 'Could not detect the mint function. Use the official mint site or add contract details.'
+  if (msg.includes('chain') || msg.includes('network')) return 'Wrong chain — switch to the required network and try again.'
   return 'Mint preparation failed. Nothing was sent.'
 }
 
@@ -548,14 +555,17 @@ export async function prepareMintTransaction(body, _clientOverride = null, _supa
   // the SeaDrop error is the authoritative reason (generic candidates can never work on these contracts)
   const definitiveError = seaDropError || lastError
   const rawReason = String(definitiveError?.shortMessage || definitiveError?.message || definitiveError || 'unknown')
-  console.error('[mint-benchmark] all_candidates_failed', {
-    duration_ms: Date.now() - t0,
+  const userMessage = safeMessage(definitiveError)
+  console.error('[mint-exec] all_candidates_failed', {
+    stage: 'prepare',
     chain,
     contract: contract.slice(0, 10),
     attempts: attemptCount,
-    failure_reason: rawReason.slice(0, 200),
+    real_error: rawReason.slice(0, 200),
+    user_message: userMessage,
+    duration_ms: Date.now() - t0,
   })
-  const err = new Error(safeMessage(definitiveError))
+  const err = new Error(userMessage)
   err.rawReason = rawReason
   throw err
 }
@@ -821,18 +831,24 @@ export async function handleMintAction(req, res, action) {
         }, null, supabase)
       } catch (error) {
         const rawReason = error.rawReason || error.shortMessage || error.message || String(error)
-        console.error('[mint-engine] prepare_failed', {
-          chain, contract: contract?.slice?.(0, 12),
-          reason: rawReason.slice(0, 200),
+        // error.rawReason means prepareMintTransaction already ran safeMessage — use error.message directly
+        // to avoid double-classification (e.g. "Insufficient ETH" not matching safeMessage patterns again)
+        const userMessage = error.rawReason ? error.message : safeMessage(error)
+        console.error('[mint-exec] prepare_failed', {
+          stage: 'prepare',
+          chain,
+          contract: contract?.slice?.(0, 12),
+          real_error: rawReason.slice(0, 200),
+          user_message: userMessage,
         })
         await recordExecutionOptimization(supabase, {
           chain,
           contractAddress: contract,
           status: 'failed',
           latencyMs: Date.now() - prepareStartedAt,
-          errorMessage: safeMessage(error),
+          errorMessage: userMessage,
         })
-        return res.status(400).json({ ...safeError(safeMessage(error)), reason: rawReason.slice(0, 300) })
+        return res.status(400).json({ ...safeError(userMessage), reason: rawReason.slice(0, 300) })
       }
       const prepareLatencyMs = Date.now() - prepareStartedAt
       const row = await insertOptional(supabase, 'mint_intents', intentPayload(user, body, 'prepared'))
@@ -940,7 +956,9 @@ export async function handleMintAction(req, res, action) {
       try {
         await prepareMintTransaction({ ...intent, walletAddress: vault.address || vault.wallet_address })
       } catch (error) {
-        return res.status(400).json(safeError(safeMessage(error)))
+        const msg = error.rawReason ? error.message : safeMessage(error)
+        console.error('[mint-exec] strike_arm_failed', { stage: 'prepare', chain: intent.chain, contract: intent.contract_address?.slice(0, 12), real_error: (error.rawReason || error.message || '').slice(0, 200), user_message: msg })
+        return res.status(400).json(safeError(msg))
       }
       const strikeExecuteAt = body.strikeExecuteAt || body.strike_execute_at || body.mintDate || intent.mint_date || nowIso
       const armed = await updateStrikeIntent(supabase, intentId, user.id, {
@@ -1015,9 +1033,9 @@ export async function handleMintAction(req, res, action) {
           functionName = prepared.functionName
           estimatedGas = prepared.gas ? String(prepared.gas) : null
         } catch (err) {
-          const msg = safeMessage(err)
+          const msg = err.rawReason ? err.message : safeMessage(err)
           // Insufficient funds is a wallet issue, not a contract issue
-          if (msg.toLowerCase().includes('insufficient funds')) {
+          if (msg.toLowerCase().includes('insufficient') || msg.toLowerCase().includes('top up')) {
             warnings.push('Vault balance may not cover this mint — top up before arming')
             contractValid = true
           } else {
@@ -1133,7 +1151,9 @@ export async function handleMintAction(req, res, action) {
       try {
         preparedTransaction = await prepareMintTransaction({ ...intent, walletAddress: req.body?.walletAddress, mode }, null, supabase)
       } catch (error) {
-        return res.status(400).json(safeError(safeMessage(error)))
+        const msg = error.rawReason ? error.message : safeMessage(error)
+        console.error('[mint-exec] execute_failed', { stage: 'prepare', chain: intent.chain, contract: intent.contract_address?.slice(0, 12), real_error: (error.rawReason || error.message || '').slice(0, 200), user_message: msg })
+        return res.status(400).json(safeError(msg))
       }
       return res.status(200).json({
         ok: true,
@@ -1143,7 +1163,8 @@ export async function handleMintAction(req, res, action) {
       })
     }
   } catch (error) {
-    console.error(`mint ${action} failed:`, error)
-    return res.status(200).json(safeError('Mint engine is temporarily unavailable. Nothing was sent.'))
+    const msg = error.rawReason ? error.message : safeMessage(error)
+    console.error('[mint-exec] engine_error', { action, real_error: (error.rawReason || error.message || String(error)).slice(0, 200), user_message: msg })
+    return res.status(200).json(safeError(msg))
   }
 }
