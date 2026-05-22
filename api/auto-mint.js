@@ -435,7 +435,28 @@ export default async function handler(req, res) {
 
   if (error) return res.status(200).json({ ok: false, error: error.message })
   const projects = [...(freshProjects || []), ...(pendingProjects || [])]
-  if (!projects.length) return res.status(200).json({ ok: true, fired: 0 })
+
+  if (!projects.length) {
+    // Diagnostic: explain why queue is empty
+    const { data: allAuto } = await supabase
+      .from('wl_projects')
+      .select('id, name, status, mint_mode, mint_time_confirmed, contract_address, auto_mint_fired')
+      .eq('mint_mode', 'auto')
+    const diag = (allAuto || []).map(p => ({
+      name:               p.name,
+      status:             p.status,
+      mint_time_confirmed: p.mint_time_confirmed,
+      has_contract:       Boolean(p.contract_address),
+      auto_mint_fired:    p.auto_mint_fired,
+      skip_reason:
+        p.status !== 'live'            ? 'status_not_live' :
+        !p.contract_address            ? 'no_contract' :
+        p.mint_time_confirmed !== true  ? 'mint_time_not_confirmed' :
+        p.auto_mint_fired === true      ? 'already_fired' :
+        'unknown',
+    }))
+    return res.status(200).json({ ok: true, fired: 0, queue_empty_reason: diag.length ? diag : 'no_auto_projects_found' })
+  }
 
   const userIds = [...new Set(projects.map(p => p.user_id))]
 
@@ -633,5 +654,5 @@ export default async function handler(req, res) {
     }
   }
 
-  res.status(200).json({ ok: true, fired })
+  res.status(200).json({ ok: true, fired, projects_checked: projects.length })
 }
