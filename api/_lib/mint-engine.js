@@ -5,6 +5,7 @@ import { chainIdFor, normalizeChain, normalizePhase, recommendMode } from './pro
 import {
   getCachedAbi, setCachedAbi,
   getCachedExecution, setCachedExecution, loadCachedExecution,
+  getCachedProbeResult, setCachedProbeResult,
   recordLatency, getPrewarmStatus,
 } from './contract-cache.js'
 import { computeReadiness } from './readiness.js'
@@ -163,6 +164,27 @@ function chainObject(chain) {
 function isRpcFailure(error) {
   const msg = String(error?.message || error || '').toLowerCase()
   return msg.includes('http request failed') || msg.includes('fetch failed') || msg.includes('network error') || msg.includes('econnrefused') || msg.includes('etimedout')
+}
+
+// Classify a gas-estimation failure into a discrete execution state.
+// 'live' = contract is accepting the call (wallet just has no ETH).
+function classifyExecutionStatus(error, { seaDropError = null } = {}) {
+  if (seaDropError && !error) return 'router_required'
+  const msg = String(error?.shortMessage || error?.message || error || '').toLowerCase()
+  if (msg.includes('insufficient funds') || msg.includes('exceeds the balance') || msg.includes('exceeds balance') || msg.includes('total cost')) return 'live'
+  if (msg.includes('seadrop') || msg.includes('router_required')) return 'router_required'
+  if (msg.includes('paused') || msg.includes('ownable') || msg.includes('caller is not the owner')) return 'paused'
+  if (
+    msg.includes('sale not active') || msg.includes('sale is not active') || msg.includes('not started') ||
+    msg.includes('not open') || msg.includes('mint closed') || msg.includes('mint has not') ||
+    msg.includes('minting is not') || msg.includes('seadrop mint not active') ||
+    msg.includes('public drop not configured') || msg.includes('not currently active')
+  ) return 'not_started'
+  if (msg.includes('allowlist') || msg.includes('not whitelisted') || msg.includes('not eligible') || msg.includes('merkle') || msg.includes('not in whitelist') || msg.includes('invalid proof') || msg.includes('proof verification')) return 'allowlist_only'
+  if (msg.includes('max supply') || msg.includes('sold out') || msg.includes('exceeds max') || msg.includes('supply exceeded') || msg.includes('max per wallet') || msg.includes('already minted') || msg.includes('max mint') || msg.includes('limit reached')) return 'sold_out'
+  if (msg.includes('function') || msg.includes('selector') || msg.includes('unknown mint') || msg.includes('no standard mint')) return 'wrong_function'
+  if (msg.includes('rpc') || msg.includes('fetch failed') || msg.includes('network error') || msg.includes('econnrefused') || msg.includes('etimedout') || msg.includes('timeout')) return 'error'
+  return 'paused'
 }
 
 function publicClient(chain, rpcUrl, executionProfile) {
@@ -546,6 +568,7 @@ export async function prepareMintTransaction(body, _clientOverride = null, _supa
           } : null,
         }
         setCachedExecution(contract, chain, result, _supabase)
+        setCachedProbeResult(contract, chain, { execution_status: 'live', function_tried: candidate.functionName })
         return result
       } catch (error) {
         lastError = error
@@ -564,6 +587,7 @@ export async function prepareMintTransaction(body, _clientOverride = null, _supa
   console.error('[mint-raw-error]', { raw: definitiveError?.message, stack: definitiveError?.stack?.slice(0, 300) })
   const rawReason = String(definitiveError?.shortMessage || definitiveError?.message || definitiveError || 'unknown')
   const userMessage = safeMessage(definitiveError)
+  const probeStatus = classifyExecutionStatus(definitiveError, { seaDropError })
   console.error('[mint-exec] all_candidates_failed', {
     stage: 'prepare',
     chain,
@@ -571,8 +595,10 @@ export async function prepareMintTransaction(body, _clientOverride = null, _supa
     attempts: attemptCount,
     real_error: rawReason.slice(0, 200),
     user_message: userMessage,
+    execution_status: probeStatus,
     duration_ms: Date.now() - t0,
   })
+  setCachedProbeResult(contract, chain, { execution_status: probeStatus, revert_reason: rawReason.slice(0, 200), function_tried: null })
   const err = new Error(userMessage)
   err.rawReason = rawReason
   throw err
@@ -808,6 +834,19 @@ export async function handleMintAction(req, res, action) {
 
       const readiness = computeReadiness(contract, chain)
 
+      // Derive execution_status from probe cache (15-min TTL), with exec cache as fallback.
+      const probeResult = contract ? getCachedProbeResult(contract, chain) : null
+      const executionStatus = probeResult?.execution_status || 'not_probed'
+
+      console.log('[mint-live-probe]', {
+        contract: contract?.slice(0, 10) || null,
+        chain,
+        execution_status: executionStatus,
+        revert_reason:    probeResult?.revert_reason  || null,
+        function_tried:   probeResult?.function_tried || null,
+        probe_age_s:      probeResult ? Math.round((Date.now() - probeResult.at) / 1000) : null,
+      })
+
       // Auto-trigger background prewarm when stale or function not yet detected
       if (contract && SUPPORTED_EXECUTION_CHAINS.has(chain) &&
           (readiness.staleCache || !readiness.checks.function_cached?.pass)) {
@@ -820,7 +859,7 @@ export async function handleMintAction(req, res, action) {
         }, null, supabase).catch(() => null)
       }
 
-      return res.status(200).json({ ok: true, readiness })
+      return res.status(200).json({ ok: true, readiness: { ...readiness, execution_status: executionStatus } })
     }
 
     if (action === 'prepare') {
@@ -1025,6 +1064,7 @@ export async function handleMintAction(req, res, action) {
       let contractValid = false
       let functionName = null
       let estimatedGas = null
+      let executionStatus = 'not_probed'
       if (!contract) {
         blockers.push('No contract address — add it in project settings')
       } else if (!isAddress(contract)) {
@@ -1041,14 +1081,17 @@ export async function handleMintAction(req, res, action) {
           contractValid = true
           functionName = prepared.functionName
           estimatedGas = prepared.gas ? String(prepared.gas) : null
+          executionStatus = 'live'
         } catch (err) {
           const msg = err.rawReason ? err.message : safeMessage(err)
-          // Insufficient funds is a wallet issue, not a contract issue
+          // Insufficient funds is a wallet issue, not a contract issue — contract IS open
           if (msg.toLowerCase().includes('insufficient') || msg.toLowerCase().includes('top up')) {
             warnings.push('Vault balance may not cover this mint — top up before arming')
             contractValid = true
+            executionStatus = 'live'
           } else {
             blockers.push(msg)
+            executionStatus = classifyExecutionStatus(err)
           }
         }
       }
@@ -1088,6 +1131,7 @@ export async function handleMintAction(req, res, action) {
           blockers,
           warnings,
           live_execution_enabled: liveExecutionEnabled,
+          execution_status: executionStatus,
         },
       })
     }

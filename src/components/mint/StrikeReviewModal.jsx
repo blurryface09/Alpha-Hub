@@ -196,6 +196,33 @@ export default function StrikeReviewModal({ project, vault, onConfirmArm, onClos
           : 'Run simulation to check live execution status',
     })
 
+    const execStatus = simResult?.execution_status || 'not_probed'
+    const execHardBlocked = ['allowlist_only', 'sold_out', 'paused', 'wrong_function'].includes(execStatus)
+    const execWarn = !execHardBlocked && execStatus !== 'live'
+    items.push({
+      id: 'exec_probe',
+      ok: execStatus === 'live',
+      warn: execWarn,
+      label: 'Contract probe',
+      detail: execStatus === 'live'
+        ? 'Mint function responding — contract is open'
+        : execStatus === 'not_probed'
+          ? 'Run simulation to probe contract state'
+          : execStatus === 'not_started'
+            ? 'Sale not started — Strike will fire when live'
+            : execStatus === 'allowlist_only'
+              ? 'Allowlist required — wallet not on whitelist for this phase'
+              : execStatus === 'sold_out'
+                ? 'Sold out — max supply reached'
+                : execStatus === 'paused'
+                  ? 'Contract paused — mint is closed'
+                  : execStatus === 'router_required'
+                    ? 'SeaDrop router detected — minting via OpenSea router'
+                    : execStatus === 'wrong_function'
+                      ? 'Mint function not detected — add contract details'
+                      : 'Probe error — check simulation output',
+    })
+
     return items
   }, [project, vault, simResult])
 

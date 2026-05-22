@@ -18,6 +18,7 @@ import {
   mintGuardEligible,
 } from '../lib/calendarQuality'
 import { MINT_MODES, MINT_PHASES, recommendMintMode } from '../lib/mintModes'
+import { useReadiness } from '../hooks/useReadiness'
 
 const ADMIN_WALLET = import.meta.env.VITE_ADMIN_WALLET?.toLowerCase()
 
@@ -1490,6 +1491,10 @@ function DetailDrawer({ project, isAdmin, onClose, onAdd, onMint, onStatus, onRa
   const quality = Number(project.quality_score || calendarQualityScore(project))
   const rating = Number(project.viewer_rating || project.rating_avg || 0)
   const ratingCount = Number(project.rating_count || 0)
+  const readiness = useReadiness(project)
+  const displayLive = isLive(project)
+  const execStatus = readiness.execution_status
+  const showProbeWarning = displayLive && execStatus !== 'live' && execStatus !== 'not_probed'
   return (
     <div className="fixed inset-0 z-50 bg-black/70 flex justify-end" onClick={event => event.target === event.currentTarget && onClose()}>
       <div className="w-full max-w-2xl bg-surface border-l border-border h-full overflow-y-auto">
@@ -1531,6 +1536,18 @@ function DetailDrawer({ project, isAdmin, onClose, onAdd, onMint, onStatus, onRa
           {needsReview && (
             <div className="rounded-lg border border-accent3/30 bg-accent3/10 p-3 text-sm text-accent3">
               This project needs review. Alpha Hub found activity, but official project metadata is limited. You can save it to My Mints, but confirm official links before Strike Mode.
+            </div>
+          )}
+          {showProbeWarning && (
+            <div className="rounded-lg border border-amber-500/30 bg-amber-500/10 p-3 text-sm text-amber-300">
+              Live signal detected, but contract mint probe is still closed.{' '}
+              {execStatus === 'not_started' ? 'Sale has not started — Strike Mode will fire when the window opens.' :
+               execStatus === 'paused'      ? 'Contract is paused. Check the official mint page.' :
+               execStatus === 'allowlist_only' ? 'Allowlist phase only — your wallet may not be eligible.' :
+               execStatus === 'sold_out'    ? 'Mint may be sold out.' :
+               execStatus === 'router_required' ? 'Minting via SeaDrop router — use the official mint page.' :
+               execStatus === 'wrong_function'  ? 'Mint function not detected yet.' :
+               'Check the official mint page for the current state.'}
             </div>
           )}
           <Info label="Mint time" value={formatTime(project)} />

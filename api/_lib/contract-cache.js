@@ -9,13 +9,16 @@
  * doesn't exist, all Supabase ops silently no-op via .catch(() => null).
  */
 
-const EXEC_TTL_MS = 24 * 60 * 60 * 1000
-const ABI_TTL_MS  =      60 * 60 * 1000
+const EXEC_TTL_MS  = 24 * 60 * 60 * 1000
+const ABI_TTL_MS   =      60 * 60 * 1000
+const PROBE_TTL_MS =      15 * 60 * 1000  // 15 min — probe state changes quickly
 
 // Map<key, { abi, at }>
 const abiCache  = new Map()
 // Map<key, { functionName, argsSummary, gas, chainId, source, successCount, lastLatencyMs, at }>
 const execCache = new Map()
+// Map<key, { execution_status, revert_reason, function_tried, at }>
+const probeCache = new Map()
 // Map<key, number[]>  — rolling window of latency samples
 const latencyMap = new Map()
 
@@ -154,6 +157,21 @@ export function isStaleCached(contract, chain) {
 
 export function invalidateCachedExecution(contract, chain) {
   execCache.delete(cacheKey(contract, chain))
+}
+
+// ─── Live probe result cache ──────────────────────────────────────────────────
+
+export function getCachedProbeResult(contract, chain) {
+  const k = cacheKey(contract, chain)
+  const entry = probeCache.get(k)
+  if (!entry) return null
+  if (Date.now() - entry.at > PROBE_TTL_MS) { probeCache.delete(k); return null }
+  return entry
+}
+
+export function setCachedProbeResult(contract, chain, result) {
+  if (!contract || !chain || !result) return
+  probeCache.set(cacheKey(contract, chain), { ...result, at: Date.now() })
 }
 
 export function getPrewarmStatus(contract, chain) {

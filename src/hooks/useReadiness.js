@@ -5,20 +5,21 @@ const POLL_READY_MS   = 5 * 60 * 1000  // 5min once execution_ready + fresh cach
 const POLL_WAITING_MS = 30 * 1000      // 30s while unready or stale
 
 const DEFAULT = {
-  ready:         false,
-  score:         0,
-  status:        'not_ready',
-  checks:        {},
-  blockers:      [],
-  warnings:      [],
-  staleCache:    false,
-  functionName:  null,
-  gasEstimate:   null,
-  successCount:  0,
-  lastLatencyMs: null,
-  avgLatencyMs:  null,
-  rpcCount:      { total: 0, healthy: 0 },
-  loading:       false,
+  ready:            false,
+  score:            0,
+  status:           'not_ready',
+  checks:           {},
+  blockers:         [],
+  warnings:         [],
+  staleCache:       false,
+  functionName:     null,
+  gasEstimate:      null,
+  successCount:     0,
+  lastLatencyMs:    null,
+  avgLatencyMs:     null,
+  rpcCount:         { total: 0, healthy: 0 },
+  execution_status: 'not_probed',
+  loading:          false,
 }
 
 /**
