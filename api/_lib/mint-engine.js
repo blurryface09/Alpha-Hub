@@ -29,8 +29,10 @@ const MINT_NAMES = ['mint', 'publicMint', 'mintPublic', 'allowlistMint', 'presal
 const SEADROP_ADDRESS = '0x00005EA00Ac477B1030CE78506496e8C2dE24bf5'
 const SEADROP_ABI = parseAbi([
   'function mintPublic(address nftContract, address feeRecipient, address minterIfNotPayer, uint256 quantity) payable',
+  'function mintAllowList(address nftContract, address feeRecipient, address minterIfNotPayer, uint256 quantity, (uint256 mintPrice, uint256 maxTotalMintableByWallet, uint256 startTime, uint256 endTime, uint256 dropStageIndex, uint256 maxTokenSupplyForStage, uint256 feeBps, bool restrictFeeRecipients) mintParams, bytes32[] proof) payable',
   'function getAllowedFeeRecipients(address nftContract) view returns (address[])',
   'function getPublicDrop(address nftContract) view returns (uint80 mintPrice, uint48 startTime, uint48 endTime, uint16 maxTotalMintableByWallet, uint16 feeBps, bool restrictFeeRecipients)',
+  'function getAllowListMerkleRoot(address nftContract) view returns (bytes32)',
 ])
 // Known reliable OpenSea fee recipient — fallback if on-chain query fails
 const SEADROP_FEE_RECIPIENT_FALLBACK = '0x0000a26b00c1F0DF003000390027140000fAa719'
@@ -130,6 +132,9 @@ function safeMessage(error) {
   if (msg.includes('timeout') || msg.includes('timed out')) return 'Request timed out. Please try again.'
   if (msg.includes('nonce')) return 'Transaction nonce error — reset your wallet pending transactions and try again.'
   if (msg.includes('insufficient funds') || msg.includes('total cost') || msg.includes('exceeds the balance') || msg.includes('exceeds balance')) return 'Insufficient ETH — top up your wallet and try again.'
+  if (msg.includes('seadrop proof unavailable') || msg.includes('proof could not be fetched')) return 'Wallet may be eligible, but the allowlist proof is only available through the official mint page.'
+  if (msg.includes('seadrop wallet not eligible') || msg.includes('not on the allowlist') || msg.includes('wallet not eligible')) return 'This wallet is not on the allowlist for this mint.'
+  if (msg.includes('seadrop allowlist phase') || msg.includes('merkle proof required')) return 'Allowlist phase active — wallet may be eligible. Check the official mint page for your proof.'
   if (msg.includes('seadrop allowlist only') || (msg.includes('seadrop') && msg.includes('allowlist'))) return 'This mint is currently allowlist-only. Public mint is not active for this wallet.'
   if (msg.includes('seadrop mint not active') || msg.includes('public drop not configured') || msg.includes('not currently active')) return 'This mint is not currently active — the public drop is not open yet. Check the official mint page.'
   if (msg.includes('sale not active') || msg.includes('sale is not active') || msg.includes('not started') || msg.includes('not open') || msg.includes('mint closed') || msg.includes('mint has not') || msg.includes('minting is not') || msg.includes('paused')) return 'Mint is not open yet or has ended. Check the official mint page for the correct time.'
@@ -173,6 +178,10 @@ function classifyExecutionStatus(error, { seaDropError = null } = {}) {
   if (seaDropError && !error) return 'router_required'
   const msg = String(error?.shortMessage || error?.message || error || '').toLowerCase()
   if (msg.includes('insufficient funds') || msg.includes('exceeds the balance') || msg.includes('exceeds balance') || msg.includes('total cost')) return 'live'
+  // Allowlist-specific states — check before generic seadrop/allowlist catches
+  if (msg.includes('seadrop proof unavailable') || msg.includes('proof could not be fetched')) return 'proof_unavailable'
+  if (msg.includes('seadrop wallet not eligible') || msg.includes('not on the allowlist') || msg.includes('wallet not eligible')) return 'wallet_not_eligible'
+  if (msg.includes('seadrop allowlist phase') || msg.includes('merkle proof required')) return 'allowlist_ready'
   if (msg.includes('seadrop allowlist only') || (msg.includes('seadrop') && msg.includes('allowlist'))) return 'allowlist_only'
   if (msg.includes('seadrop') || msg.includes('router_required')) return 'router_required'
   if (msg.includes('paused') || msg.includes('ownable') || msg.includes('caller is not the owner')) return 'paused'
@@ -336,20 +345,112 @@ function isSeaDropContract(abi) {
   return Array.isArray(abi) && abi.some(fn => fn?.type === 'function' && fn.name === 'mintSeaDrop')
 }
 
-async function buildSeaDropCandidates(nftContract, quantity, walletAddress, client) {
-  const [feeResult, dropResult] = await Promise.allSettled([
+// Normalise an API-returned MintParams object into viem-compatible BigInt fields.
+function parseMintParams(raw) {
+  return {
+    mintPrice:                  BigInt(raw.mintPrice               ?? raw.mint_price                ?? 0),
+    maxTotalMintableByWallet:   BigInt(raw.maxTotalMintableByWallet ?? raw.max_total_mintable_by_wallet ?? 1),
+    startTime:                  BigInt(raw.startTime               ?? raw.start_time                ?? 0),
+    endTime:                    BigInt(raw.endTime                 ?? raw.end_time                  ?? 0),
+    dropStageIndex:             BigInt(raw.dropStageIndex          ?? raw.drop_stage_index          ?? 1),
+    maxTokenSupplyForStage:     BigInt(raw.maxTokenSupplyForStage  ?? raw.max_token_supply_for_stage ?? 0),
+    feeBps:                     BigInt(raw.feeBps                  ?? raw.fee_bps                   ?? 500),
+    restrictFeeRecipients:      Boolean(raw.restrictFeeRecipients  ?? raw.restrict_fee_recipients),
+  }
+}
+
+// Attempt to fetch the SeaDrop allowlist proof for a specific wallet from known API sources.
+// Returns { proof: bytes32[], mintParams: object, feeRecipient?: string, source: string } or null.
+// Does NOT throw — always resolves with null on failure so callers can fall back gracefully.
+async function fetchSeaDropAllowlistProof(nftContract, walletAddress, chainId) {
+  // OpenSea chain slug used in their API paths
+  const CHAIN_SLUGS = { 1: 'ethereum', 8453: 'base', 56: 'bsc', 11155111: 'sepolia', 84532: 'base_sepolia' }
+  const chainSlug = CHAIN_SLUGS[chainId] || 'ethereum'
+
+  // Ordered list of endpoint strategies to attempt
+  const strategies = [
+    // Strategy 1: OpenSea SeaDrop allowlist proof endpoint (v2 drops)
+    async () => {
+      const url = `https://api.opensea.io/api/v2/chain/${chainSlug}/contract/${nftContract}/seadrop/allowlist-proof?wallet_address=${walletAddress}`
+      const res = await fetch(url, { headers: { Accept: 'application/json' }, signal: AbortSignal.timeout(6000) })
+      if (res.status === 404) return { notFound: true }
+      if (!res.ok) return null
+      return { source: 'opensea_v2', data: await res.json().catch(() => null) }
+    },
+    // Strategy 2: OpenSea v2 nft allowlist proof (alternate path)
+    async () => {
+      const url = `https://api.opensea.io/v2/chain/${chainSlug}/contract/${nftContract}/nft/allowlist-proof?wallet_address=${walletAddress}`
+      const res = await fetch(url, { headers: { Accept: 'application/json' }, signal: AbortSignal.timeout(5000) })
+      if (res.status === 404) return { notFound: true }
+      if (!res.ok) return null
+      return { source: 'opensea_v2_nft', data: await res.json().catch(() => null) }
+    },
+    // Strategy 3: OpenSea seadrop fulfillment data (older path)
+    async () => {
+      const url = 'https://api.opensea.io/api/v2/seadrop/allowlist-proof'
+      const res = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+        body: JSON.stringify({ chain_id: chainId, nft_address: nftContract, wallet_address: walletAddress }),
+        signal: AbortSignal.timeout(6000),
+      })
+      if (res.status === 404) return { notFound: true }
+      if (!res.ok) return null
+      return { source: 'opensea_seadrop_post', data: await res.json().catch(() => null) }
+    },
+  ]
+
+  let walletNotFound = false
+  for (const strategy of strategies) {
+    try {
+      const result = await strategy()
+      if (!result) continue
+      if (result.notFound) { walletNotFound = true; continue }
+
+      const { source, data } = result
+      if (!data) continue
+
+      // Parse proof from various response shapes OpenSea might return
+      const proof = data.proof ?? data.merkle_proof ?? data.allowlist_proof ?? data.merkleProof
+      const mintParamsRaw = data.mint_params ?? data.mintParams ?? data.drop_stage ?? data.dropStage
+      const feeRecipient = data.fee_recipient ?? data.feeRecipient ?? null
+
+      if (Array.isArray(proof) && proof.length > 0 && mintParamsRaw) {
+        console.log('[allowlist-proof] proof_found', { source, proofLen: proof.length, wallet: walletAddress.slice(0, 10), contract: nftContract.slice(0, 10) })
+        return { proof, mintParams: mintParamsRaw, feeRecipient, source }
+      }
+      console.log('[allowlist-proof] endpoint_no_proof', { source, keys: Object.keys(data || {}).slice(0, 8) })
+    } catch (e) {
+      console.log('[allowlist-proof] strategy_error', { err: String(e.message || '').slice(0, 60) })
+    }
+  }
+
+  if (walletNotFound) {
+    console.log('[allowlist-proof] wallet_not_found', { wallet: walletAddress.slice(0, 10), contract: nftContract.slice(0, 10) })
+    throw new Error('SeaDrop wallet not eligible: wallet address is not on the allowlist for this mint')
+  }
+  console.log('[allowlist-proof] proof_unavailable', { wallet: walletAddress.slice(0, 10), contract: nftContract.slice(0, 10), chainId })
+  return null
+}
+
+async function buildSeaDropCandidates(nftContract, chain, quantity, walletAddress, client) {
+  const chainId = chainIdFor(chain)
+  const [feeResult, dropResult, merkleResult] = await Promise.allSettled([
     client.readContract({ address: SEADROP_ADDRESS, abi: SEADROP_ABI, functionName: 'getAllowedFeeRecipients', args: [nftContract] }),
     client.readContract({ address: SEADROP_ADDRESS, abi: SEADROP_ABI, functionName: 'getPublicDrop', args: [nftContract] }),
+    client.readContract({ address: SEADROP_ADDRESS, abi: SEADROP_ABI, functionName: 'getAllowListMerkleRoot', args: [nftContract] }),
   ])
   const feeRecipients = feeResult.status === 'fulfilled' ? feeResult.value : []
   const feeRecipient = feeRecipients[0] || SEADROP_FEE_RECIPIENT_FALLBACK
   const drop = dropResult.status === 'fulfilled' ? dropResult.value : null
+  const merkleRoot = merkleResult.status === 'fulfilled' ? merkleResult.value : null
   const mintPrice = drop ? BigInt(drop.mintPrice || 0n) : 0n
   const totalValue = mintPrice * quantity
   const now = BigInt(Math.floor(Date.now() / 1000))
   const startTime = drop ? BigInt(drop.startTime || 0n) : 0n
   const endTime = drop ? BigInt(drop.endTime || 0n) : 0n
   const isActive = startTime > 0n && startTime <= now && (endTime === 0n || endTime > now)
+  const hasAllowlist = Boolean(merkleRoot && merkleRoot !== '0x' + '0'.repeat(64))
   console.log('[mint-benchmark] seadrop_detected', {
     nftContract: nftContract.slice(0, 10),
     feeRecipient: feeRecipient.slice(0, 10),
@@ -358,24 +459,83 @@ async function buildSeaDropCandidates(nftContract, quantity, walletAddress, clie
     endTime: endTime.toString(),
     nowTs: now.toString(),
     isActive,
+    hasAllowlist,
     feeRecipientCount: feeRecipients.length,
   })
-  if (!isActive) {
-    // startTime===0 + fee recipient present = contract registered but no public drop configured → allowlist/signed phase
-    if (startTime === 0n && feeRecipients.length > 0) {
-      throw new Error('SeaDrop allowlist only: no public drop configured, allowlist or signed mint required')
-    }
-    const reason = startTime > now
-      ? `Mint starts at ${new Date(Number(startTime) * 1000).toISOString()}`
-      : `Mint ended at ${new Date(Number(endTime) * 1000).toISOString()}`
-    throw new Error(`SeaDrop mint not active: ${reason}`)
+
+  if (isActive) {
+    // Public drop is live — use mintPublic
+    const data = encodeFunctionData({
+      abi: SEADROP_ABI,
+      functionName: 'mintPublic',
+      args: [nftContract, feeRecipient, '0x0000000000000000000000000000000000000000', quantity],
+    })
+    return [{ abi: SEADROP_ABI, functionName: 'mintPublic', args: [nftContract, feeRecipient, '0x0000000000000000000000000000000000000000', quantity], source: 'seadrop', toOverride: SEADROP_ADDRESS, valueOverride: totalValue, data }]
   }
-  const data = encodeFunctionData({
-    abi: SEADROP_ABI,
-    functionName: 'mintPublic',
-    args: [nftContract, feeRecipient, '0x0000000000000000000000000000000000000000', quantity],
-  })
-  return [{ abi: SEADROP_ABI, functionName: 'mintPublic', args: [nftContract, feeRecipient, '0x0000000000000000000000000000000000000000', quantity], source: 'seadrop', toOverride: SEADROP_ADDRESS, valueOverride: totalValue, data }]
+
+  // Not active — check allowlist
+  if (startTime === 0n && feeRecipients.length > 0) {
+    // No public drop configured. Check if an allowlist phase is active.
+    if (hasAllowlist) {
+      // Allowlist merkle tree exists — try to fetch proof for this wallet
+      const isStubWallet = walletAddress === '0x0000000000000000000000000000000000000001' || walletAddress === '0x0000000000000000000000000000000000000000'
+      if (isStubWallet) {
+        // Can't fetch proof for stub wallet (used in simulations) — signal allowlist phase clearly
+        throw new Error('SeaDrop allowlist phase: merkle proof required — wallet is eligible if on allowlist')
+      }
+
+      let proofData = null
+      try {
+        proofData = await fetchSeaDropAllowlistProof(nftContract, walletAddress, chainId)
+      } catch (proofErr) {
+        // fetchSeaDropAllowlistProof only throws for explicit not-found (wallet_not_eligible)
+        const msg = String(proofErr.message || '')
+        if (msg.includes('wallet not eligible') || msg.includes('not on the allowlist')) {
+          console.log('[allowlist-proof]', { wallet: walletAddress.slice(0, 10), contract: nftContract.slice(0, 10), phase: 'allowlist', proof_found: false, failure_reason: 'wallet_not_eligible', function: 'mintAllowList' })
+          throw new Error('SeaDrop wallet not eligible: wallet is not on the allowlist for this mint')
+        }
+        console.log('[allowlist-proof]', { wallet: walletAddress.slice(0, 10), contract: nftContract.slice(0, 10), phase: 'allowlist', proof_found: false, failure_reason: 'probe_error', function: 'mintAllowList' })
+      }
+
+      if (proofData) {
+        const { proof, mintParams: mintParamsRaw, feeRecipient: proofFeeRecipient, source } = proofData
+        const effectiveFeeRecipient = proofFeeRecipient || feeRecipient
+        const mintParams = parseMintParams(mintParamsRaw)
+        const allowlistValue = mintParams.mintPrice * quantity
+        const data = encodeFunctionData({
+          abi: SEADROP_ABI,
+          functionName: 'mintAllowList',
+          args: [nftContract, effectiveFeeRecipient, '0x0000000000000000000000000000000000000000', quantity, mintParams, proof],
+        })
+        console.log('[allowlist-proof]', {
+          wallet: walletAddress.slice(0, 10), contract: nftContract.slice(0, 10),
+          phase: 'allowlist', proof_found: true, function: 'mintAllowList',
+          source, proofLen: proof.length, failure_reason: null,
+        })
+        return [{
+          abi: SEADROP_ABI,
+          functionName: 'mintAllowList',
+          args: [nftContract, effectiveFeeRecipient, '0x0000000000000000000000000000000000000000', quantity, mintParams, proof],
+          source: `seadrop_allowlist:${source}`,
+          toOverride: SEADROP_ADDRESS,
+          valueOverride: allowlistValue,
+          data,
+        }]
+      }
+
+      // Proof fetch returned null — allowlist exists but proof API unavailable
+      console.log('[allowlist-proof]', { wallet: walletAddress.slice(0, 10), contract: nftContract.slice(0, 10), phase: 'allowlist', proof_found: false, failure_reason: 'api_unavailable', function: 'mintAllowList' })
+      throw new Error('SeaDrop proof unavailable: wallet may be eligible but the allowlist proof could not be fetched — use the official mint page')
+    }
+
+    // No merkle root → signed mint or contract paused between phases
+    throw new Error('SeaDrop allowlist only: no public drop configured, allowlist or signed mint required')
+  }
+
+  const reason = startTime > now
+    ? `Mint starts at ${new Date(Number(startTime) * 1000).toISOString()}`
+    : `Mint ended at ${new Date(Number(endTime) * 1000).toISOString()}`
+  throw new Error(`SeaDrop mint not active: ${reason}`)
 }
 
 // _clientOverride: inject a mock viem publicClient for testing
@@ -499,7 +659,7 @@ export async function prepareMintTransaction(body, _clientOverride = null, _supa
     let protocolCandidates = []
     if (isSeaDropContract(verifiedAbi)) {
       // Verified ABI confirms SeaDrop — set seaDropError on failure so definitiveError is correct
-      protocolCandidates = await buildSeaDropCandidates(contract, quantity, walletAddress, activeRpc).catch(e => {
+      protocolCandidates = await buildSeaDropCandidates(contract, chain, quantity, walletAddress, activeRpc).catch(e => {
         console.log('[mint-benchmark] seadrop_setup_fail', { error: String(e.message || '').slice(0, 80) })
         seaDropError = e
         return []
@@ -508,7 +668,7 @@ export async function prepareMintTransaction(body, _clientOverride = null, _supa
       // No verified ABI — blindly probe SeaDrop to catch unverified SeaDrop contracts.
       // Do NOT set seaDropError on failure: we don't know if it's SeaDrop, so keep definitiveError neutral.
       try {
-        const blindCandidates = await buildSeaDropCandidates(contract, quantity, walletAddress, activeRpc)
+        const blindCandidates = await buildSeaDropCandidates(contract, chain, quantity, walletAddress, activeRpc)
         if (blindCandidates.length > 0) {
           protocolCandidates = blindCandidates
           console.log('[mint-benchmark] seadrop_blind_detected', { contract: contract.slice(0, 10), chain })
@@ -1280,41 +1440,59 @@ export async function handleMintAction(req, res, action) {
             preparedExecStatus = 'public_live'
             console.log('[strike-prep]', { stage: 'live_low_balance', contract: contract?.slice(0, 10), chain })
           } else {
-            // Gas estimation failed — probe capability without requiring live execution
+            // Gas estimation failed — classify the error first
             executionStatus = classifyExecutionStatus(err)
-            const rpcClient = publicClient(chain, RPC_URLS[chain], null)
-            const qty = BigInt(Math.max(1, Number(body.quantity || body.max_mint || 1)))
-            const stubWallet = walletAddress || '0x0000000000000000000000000000000000000001'
-            try {
-              const capability = await probeCapability(contract, chain, qty, stubWallet, rpcClient)
-              preparedExecStatus = capability.prepared_execution_status
-              functionName = capability.functionName || null
-              console.log('[strike-prep]', {
-                stage: 'capability_probe', contract: contract?.slice(0, 10), chain,
-                prepared_status: preparedExecStatus, fn: functionName, details: capability.details,
-              })
-              if (preparedExecStatus === 'waiting_public_drop') {
-                // Pre-arm allowed — public drop exists but hasn't opened yet
-                contractValid = true
-                executionStatus = 'not_started'
-                warnings.push(`Execution path ready — waiting for public mint to open${capability.startTime ? ` (${new Date(capability.startTime * 1000).toLocaleString()})` : ''}`)
-              } else if (preparedExecStatus === 'ready') {
-                // Calldata constructible — contract may just have simulation issues
-                contractValid = true
-                warnings.push('Contract execution path ready — mint may not be open yet. Strike will fire when live.')
-              } else if (preparedExecStatus === 'public_live') {
-                contractValid = true
-                executionStatus = 'live'
-              } else if (preparedExecStatus === 'allowlist_only') {
-                blockers.push('This mint is allowlist-only — no public drop is configured. Alpha Hub cannot execute this mint.')
-              } else {
-                // unsupported_contract or unknown
+
+            // Allowlist-specific states: don't need probeCapability, classification is definitive
+            if (executionStatus === 'proof_unavailable') {
+              // Allowlist configured, vault wallet may be eligible but proof API unavailable
+              contractValid = true
+              preparedExecStatus = 'proof_unavailable'
+              blockers.push(msg)
+              console.log('[strike-prep]', { stage: 'proof_unavailable', contract: contract?.slice(0, 10), chain })
+            } else if (executionStatus === 'wallet_not_eligible') {
+              preparedExecStatus = 'wallet_not_eligible'
+              blockers.push(msg)
+              console.log('[strike-prep]', { stage: 'wallet_not_eligible', contract: contract?.slice(0, 10), chain })
+            } else if (executionStatus === 'allowlist_ready') {
+              // Allowlist phase, stub wallet was used in sim — real wallet may have a proof
+              contractValid = true
+              preparedExecStatus = 'allowlist_ready'
+              warnings.push('Allowlist phase active — vault wallet eligibility unknown. Run Strike Sim with vault wallet connected.')
+              console.log('[strike-prep]', { stage: 'allowlist_ready', contract: contract?.slice(0, 10), chain })
+            } else {
+              // Structural unknown — probe capability without requiring live execution
+              const rpcClient = publicClient(chain, RPC_URLS[chain], null)
+              const qty = BigInt(Math.max(1, Number(body.quantity || body.max_mint || 1)))
+              const stubWallet = walletAddress || '0x0000000000000000000000000000000000000001'
+              try {
+                const capability = await probeCapability(contract, chain, qty, stubWallet, rpcClient)
+                preparedExecStatus = capability.prepared_execution_status
+                functionName = capability.functionName || null
+                console.log('[strike-prep]', {
+                  stage: 'capability_probe', contract: contract?.slice(0, 10), chain,
+                  prepared_status: preparedExecStatus, fn: functionName, details: capability.details,
+                })
+                if (preparedExecStatus === 'waiting_public_drop') {
+                  contractValid = true
+                  executionStatus = 'not_started'
+                  warnings.push(`Execution path ready — waiting for public mint to open${capability.startTime ? ` (${new Date(capability.startTime * 1000).toLocaleString()})` : ''}`)
+                } else if (preparedExecStatus === 'ready') {
+                  contractValid = true
+                  warnings.push('Contract execution path ready — mint may not be open yet. Strike will fire when live.')
+                } else if (preparedExecStatus === 'public_live') {
+                  contractValid = true
+                  executionStatus = 'live'
+                } else if (preparedExecStatus === 'allowlist_only') {
+                  blockers.push('This mint is allowlist-only — no public drop is configured. Alpha Hub cannot execute this mint.')
+                } else {
+                  blockers.push(msg)
+                }
+              } catch (probeErr) {
+                console.log('[strike-prep]', { stage: 'capability_probe_error', err: String(probeErr.message || '').slice(0, 80) })
+                preparedExecStatus = 'not_probed'
                 blockers.push(msg)
               }
-            } catch (probeErr) {
-              console.log('[strike-prep]', { stage: 'capability_probe_error', err: String(probeErr.message || '').slice(0, 80) })
-              preparedExecStatus = 'not_probed'
-              blockers.push(msg)
             }
           }
         }

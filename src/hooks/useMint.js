@@ -22,6 +22,17 @@ function classifyMintError(message) {
   const knownRestriction = Object.values(RESTRICTION_MESSAGES).find(m => m && message === m)
   if (knownRestriction) return { text: knownRestriction, fault: 'collection' }
 
+  // Allowlist-specific errors — must check before generic "allowlist" catch
+  if (msg.includes('proof unavailable') || msg.includes('proof could not be fetched') || msg.includes('only available through the official mint page')) {
+    return { text: message, fault: 'collection' }
+  }
+  if (msg.includes('not on the allowlist') || msg.includes('wallet not eligible') || msg.includes('not on the allowlist')) {
+    return { text: message, fault: 'collection' }
+  }
+  if (msg.includes('allowlist phase active') || msg.includes('merkle proof required')) {
+    return { text: message, fault: 'collection' }
+  }
+
   // Collection-side: mint is closed, not active, or gated
   if (msg.includes('allowlist-only') || msg.includes('allowlist only') || msg.includes('not active for this wallet')) {
     return { text: message, fault: 'collection' }

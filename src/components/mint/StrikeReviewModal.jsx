@@ -205,18 +205,22 @@ export default function StrikeReviewModal({ project, vault, onConfirmArm, onClos
     const prepStatus = simResult?.prepared_execution_status || 'not_probed'
     const execHardBlocked = isExecutionBlocked(execStatus) && !isPreArmAllowed(prepStatus)
     const execWarn = !execHardBlocked && (execStatus !== 'live' || prepStatus === 'waiting_public_drop')
-    const execOk = execStatus === 'live' && prepStatus !== 'waiting_public_drop'
+    const execOk = (execStatus === 'live' || execStatus === 'allowlist_ready') && prepStatus !== 'waiting_public_drop'
     const execDetail = execOk
-      ? 'Mint function responding — contract is open'
+      ? (execStatus === 'allowlist_ready' ? 'Allowlist proof found — wallet is eligible, ready to execute' : 'Mint function responding — contract is open')
       : prepStatus === 'waiting_public_drop'
         ? (simResult?.warnings?.find(w => w.includes('waiting for public mint')) || 'Execution path ready — waiting for public mint to open')
-        : prepStatus === 'ready'
-          ? 'Execution path ready — Strike will fire when mint opens'
-          : execStatus === 'not_probed'
-            ? 'Run simulation to probe contract state'
-            : execStatus === 'not_started' || execStatus === 'public_not_started'
-              ? 'Public phase not open yet — Strike will fire when live'
-              : restrictionMessage(execStatus) || 'Probe error — check simulation output'
+        : prepStatus === 'proof_unavailable'
+          ? 'Allowlist configured — wallet may be eligible but proof API unavailable. Use official mint page.'
+          : prepStatus === 'wallet_not_eligible'
+            ? 'Vault wallet is not on the allowlist for this mint'
+            : prepStatus === 'ready'
+              ? 'Execution path ready — Strike will fire when mint opens'
+              : execStatus === 'not_probed'
+                ? 'Run simulation to probe contract state'
+                : execStatus === 'not_started' || execStatus === 'public_not_started'
+                  ? 'Public phase not open yet — Strike will fire when live'
+                  : restrictionMessage(execStatus) || 'Probe error — check simulation output'
     items.push({
       id: 'exec_probe',
       ok: execOk,
