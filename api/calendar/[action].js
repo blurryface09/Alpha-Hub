@@ -605,7 +605,9 @@ export default async function handler(req, res) {
 
     const row = normalizeProject({
       ...body,
-      status: isAdmin ? 'approved' : 'pending_review',
+      status: isAdmin
+        ? (body.mint_status === 'live_now' ? 'live' : 'approved')
+        : 'pending_review',
       source: isAdmin ? 'admin' : 'community',
       source_confidence: body.mint_date ? 'medium' : 'low',
       created_by: user.id,
@@ -785,7 +787,7 @@ export default async function handler(req, res) {
       notes: eligible
         ? 'Added from Alpha Radar in Fast Mint mode.'
         : 'Added from Alpha Radar as a needs-review project. Verify official links before Strike Mode.',
-      status: project.status === 'live' ? 'live' : 'upcoming',
+      status: project.status === 'live' || project.mint_status === 'live_now' ? 'live' : 'upcoming',
     }
 
     try {

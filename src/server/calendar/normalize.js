@@ -70,8 +70,30 @@ export function normalizeProject(input, source) {
     stage_prices: input.stage_prices || null,
     mint_schedule: input.mint_schedule || null,
     mint_type: input.mint_type || 'unknown',
-    status: input.status || (input.mint_date && new Date(input.mint_date) <= new Date() ? 'live' : 'approved'),
-    mint_status: input.mint_status || null,
+    // Canonical status: mint_status=live_now always means status=live.
+    // Also auto-detect live window from timestamps when mint_status not set.
+    status: (() => {
+      if (input.mint_status === 'live_now') return 'live'
+      if (input.mint_status === 'ended')   return 'ended'
+      if (input.status) return input.status
+      if (!input.mint_date) return 'pending_review'
+      const mintStart = new Date(input.mint_date).getTime()
+      const mintEnd   = input.mint_end_date ? new Date(input.mint_end_date).getTime() : null
+      const now       = Date.now()
+      if (mintStart <= now && (mintEnd == null || mintEnd > now)) return 'live'
+      if (mintEnd && mintEnd <= now) return 'ended'
+      return 'approved'
+    })(),
+    mint_status: (() => {
+      if (input.mint_status) return input.mint_status
+      if (!input.mint_date) return null
+      const mintStart = new Date(input.mint_date).getTime()
+      const mintEnd   = input.mint_end_date ? new Date(input.mint_end_date).getTime() : null
+      const now       = Date.now()
+      if (mintStart <= now && (mintEnd == null || mintEnd > now)) return 'live_now'
+      if (mintEnd && mintEnd <= now) return 'ended'
+      return null
+    })(),
     mint_end_date: input.mint_end_date || null,
     source,
     source_url: input.source_url || input.mint_url || input.website_url || null,

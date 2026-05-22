@@ -89,9 +89,13 @@ async function upsertProject(supabase, project) {
   }
 
   if (existing?.id) {
-    const nextStatus = existing.status === 'hidden' || existing.status === 'rejected'
+    // Protect admin locks and live status — never let a weaker sync payload downgrade them.
+    // 'live' can only move to 'ended'; everything else is held unless the new score upgrades it.
+    const nextStatus = ['hidden', 'rejected'].includes(existing.status)
       ? existing.status
-      : scored.status
+      : existing.status === 'live' && scored.status !== 'ended'
+        ? 'live'
+        : scored.status
     let { error } = await supabase
       .from('calendar_projects')
       .update({
@@ -175,15 +179,17 @@ async function purgeStaleProjects(supabase) {
     summary.markedEnded = endedRows.length
   }
 
-  // Move to pending_review: no contract_address or no mint_date (non-admin, non-community)
+  // Move to pending_review: no contract_address or no mint_date (non-admin, non-community).
+  // Never downgrade live_now projects — they may be actively minting without a stored mint_date.
   const { data: incompleteRows, error: incompleteErr } = await supabase
     .from('calendar_projects')
-    .select('id,contract_address,mint_date')
+    .select('id,contract_address,mint_date,mint_status')
     .in('status', ['approved', 'live'])
     .not('source', 'in', '("admin","community")')
     .limit(500)
   if (!incompleteErr && incompleteRows?.length) {
     const badIds = incompleteRows
+      .filter(r => r.mint_status !== 'live_now')
       .filter(r => !r.contract_address || !r.mint_date)
       .map(r => r.id)
     if (badIds.length) {
