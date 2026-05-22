@@ -138,6 +138,8 @@ function scoreFor(project, tab) {
 }
 
 function isLive(project) {
+  // Admin/sync explicitly set status=live → always live regardless of mint_date or confidence
+  if (project.status === 'live') return true
   // Explicit live_now flag from DB (set by OpenSea drops API or admin) — trust it directly
   if (project.mint_status === 'live_now') return true
 
@@ -1540,13 +1542,13 @@ function DetailDrawer({ project, isAdmin, onClose, onAdd, onMint, onStatus, onRa
           )}
           {showProbeWarning && (
             <div className="rounded-lg border border-amber-500/30 bg-amber-500/10 p-3 text-sm text-amber-300">
-              Live signal detected, but contract mint probe is still closed.{' '}
-              {execStatus === 'not_started' ? 'Sale has not started — Strike Mode will fire when the window opens.' :
+              Live signal detected, but contract probe returned a warning.{' '}
+              {execStatus === 'not_started' ? 'Public phase may be allowlist-only or still opening — try minting directly or check the official page.' :
                execStatus === 'paused'      ? 'Contract is paused. Check the official mint page.' :
                execStatus === 'allowlist_only' ? 'Allowlist phase only — your wallet may not be eligible.' :
                execStatus === 'sold_out'    ? 'Mint may be sold out.' :
                execStatus === 'router_required' ? 'Minting via SeaDrop router — use the official mint page.' :
-               execStatus === 'wrong_function'  ? 'Mint function not detected yet.' :
+               execStatus === 'wrong_function'  ? 'Mint function not detected yet — try minting directly.' :
                'Check the official mint page for the current state.'}
             </div>
           )}

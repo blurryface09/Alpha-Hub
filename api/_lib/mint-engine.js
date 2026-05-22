@@ -490,11 +490,24 @@ export async function prepareMintTransaction(body, _clientOverride = null, _supa
     // Protocol detection: SeaDrop contracts must be minted via the SeaDrop router
     let protocolCandidates = []
     if (isSeaDropContract(verifiedAbi)) {
+      // Verified ABI confirms SeaDrop — set seaDropError on failure so definitiveError is correct
       protocolCandidates = await buildSeaDropCandidates(contract, quantity, walletAddress, activeRpc).catch(e => {
         console.log('[mint-benchmark] seadrop_setup_fail', { error: String(e.message || '').slice(0, 80) })
         seaDropError = e
         return []
       })
+    } else if (!verifiedAbi) {
+      // No verified ABI — blindly probe SeaDrop to catch unverified SeaDrop contracts.
+      // Do NOT set seaDropError on failure: we don't know if it's SeaDrop, so keep definitiveError neutral.
+      try {
+        const blindCandidates = await buildSeaDropCandidates(contract, quantity, walletAddress, activeRpc)
+        if (blindCandidates.length > 0) {
+          protocolCandidates = blindCandidates
+          console.log('[mint-benchmark] seadrop_blind_detected', { contract: contract.slice(0, 10), chain })
+        }
+      } catch {
+        console.log('[mint-benchmark] seadrop_blind_miss', { contract: contract.slice(0, 10), chain })
+      }
     }
 
     // Deduplicate: skip fallback candidates whose function name is already covered by verified ABI
