@@ -243,22 +243,27 @@ function isAddressInput(input) {
 
 function defaultForType(type) {
   const t = String(type || '')
+  // Array and fixed-array types (e.g. bytes32[], uint256[5]) can't be safely inferred.
+  // bytes32[] is almost always a merkle proof; uint256[]/address[] are batch params.
+  if (t.includes('[')) return null
   if (/^uint/.test(t) || /^int/.test(t)) return 0n
   if (t === 'address') return '0x0000000000000000000000000000000000000000'
   if (t === 'bool') return false
   if (t === 'string') return ''
   if (/^bytes/.test(t)) return '0x'  // bytes, bytes32, bytes calldata, etc.
-  if (t.endsWith('[]')) return []
   return null  // tuple or unknown — can't safely guess
 }
 
 export function argsForInputs(inputs = [], quantity, walletAddress) {
   if (!inputs.length) return []
-  // Build args type-by-type, substituting quantity for the first uint and walletAddress for address
+  // Build args type-by-type, substituting quantity for the first uint and walletAddress for address.
+  // Array types (bytes32[], uint256[]) are rejected up front — can't safely infer proof or batch data.
   let usedQuantity = false
   const args = []
   for (const input of inputs) {
     const t = String(input?.type || '')
+    // Array/fixed-array types can't be safely inferred (merkle proofs, batch token IDs, etc.)
+    if (t.includes('[')) return null
     if (/^uint/.test(t) || /^int/.test(t)) {
       args.push(usedQuantity ? 0n : quantity)
       usedQuantity = true
@@ -447,6 +452,8 @@ export async function prepareMintTransaction(body, _clientOverride = null, _supa
   let lastError = null
   let seaDropError = null
   let attemptCount = 0
+  let hadVerifiedAbi = false
+  const triedFunctions = []
 
   for (const { activeClient: activeRpc, url: activeUrl } of rpcQueue) {
     if (!activeRpc) continue
@@ -478,6 +485,7 @@ export async function prepareMintTransaction(body, _clientOverride = null, _supa
     })
 
     if (!code || code === '0x') throw new Error('No contract exists at this address on the selected chain.')
+    if (verifiedAbi) hadVerifiedAbi = true
 
     // Protocol detection: SeaDrop contracts must be minted via the SeaDrop router
     let protocolCandidates = []
@@ -514,6 +522,7 @@ export async function prepareMintTransaction(body, _clientOverride = null, _supa
     let rpcHadNetworkError = false
     for (const candidate of candidates) {
       attemptCount++
+      triedFunctions.push(candidate.functionName)
       try {
         // Protocol candidates (SeaDrop etc.) pre-compute data and override to/value
         const data = candidate.data || encodeFunctionData({
@@ -567,6 +576,21 @@ export async function prepareMintTransaction(body, _clientOverride = null, _supa
             max: executionProfile.max_gas,
           } : null,
         }
+        console.log('[mint-path-trace]', {
+          contract,
+          chain,
+          abi_source: hadVerifiedAbi ? 'etherscan_verified' : 'none',
+          candidates_tried: attemptCount,
+          all_fns_tried: [...new Set(triedFunctions)],
+          selected_fn: candidate.functionName,
+          selected_args: candidate.args.map(a => typeof a === 'bigint' ? a.toString() : String(a)),
+          msg_value: txValue.toString(),
+          calldata: data?.slice(0, 42) || null,
+          router_target: txTo !== contract ? txTo : 'direct',
+          gas_estimate: gas.toString(),
+          source: candidate.source,
+          outcome: 'success',
+        })
         setCachedExecution(contract, chain, result, _supabase)
         setCachedProbeResult(contract, chain, { execution_status: 'live', function_tried: candidate.functionName })
         return result
@@ -599,6 +623,21 @@ export async function prepareMintTransaction(body, _clientOverride = null, _supa
     duration_ms: Date.now() - t0,
   })
   setCachedProbeResult(contract, chain, { execution_status: probeStatus, revert_reason: rawReason.slice(0, 200), function_tried: null })
+  console.log('[mint-path-trace]', {
+    contract,
+    chain,
+    abi_source: hadVerifiedAbi ? 'etherscan_verified' : 'none',
+    candidates_tried: attemptCount,
+    all_fns_tried: [...new Set(triedFunctions)],
+    selected_fn: null,
+    msg_value: value.toString(),
+    router_target: seaDropError ? SEADROP_ADDRESS : 'direct',
+    gas_estimate: null,
+    raw_revert: rawReason.slice(0, 200),
+    classified_reason: userMessage,
+    execution_status: probeStatus,
+    outcome: 'failed',
+  })
   const err = new Error(userMessage)
   err.rawReason = rawReason
   throw err

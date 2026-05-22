@@ -364,7 +364,7 @@ await test('insufficient funds error message is user-friendly', async () => {
   }
   await assert.rejects(
     () => prepareMintTransaction(body(), client),
-    /wallet does not have enough funds|insufficient funds/i,
+    /insufficient eth|top up/i,
   )
 })
 
