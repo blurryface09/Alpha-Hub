@@ -5,6 +5,8 @@
 export const RESTRICTION_MESSAGES = {
   live:                  null,
   not_probed:            null,
+  // Capture profile — execution path learned from official mint
+  captured_ready:        null,  // profile captured, Strike pre-armed
   // Capability states (prepared_execution_status)
   public_live:           null,
   waiting_public_drop:   'Execution path ready — waiting for public mint to open.',
@@ -39,7 +41,7 @@ export const EXECUTION_BLOCKED = new Set([
 export const ALLOWLIST_ACTIVE = new Set(['allowlist_ready', 'proof_unavailable', 'wallet_not_eligible', 'signed_mint_only'])
 
 // Capability states where Strike can be pre-armed (execution path known, mint not yet open)
-export const PRE_ARM_ALLOWED = new Set(['waiting_public_drop', 'ready', 'public_live'])
+export const PRE_ARM_ALLOWED = new Set(['waiting_public_drop', 'ready', 'public_live', 'captured_ready'])
 
 // States that confirm the project IS live on-chain (regardless of executability)
 export const LIVE_EXECUTION_STATUSES = new Set([
@@ -57,7 +59,7 @@ export function isExecutionBlocked(status) {
 // Returns the best CTA action for a given restriction state
 // 'mint' = Alpha Hub can execute | 'wait' = not open yet | 'open_official' = restricted
 export function restrictionCta(status) {
-  if (!status || status === 'live' || status === 'not_probed' || status === 'public_live' || status === 'ready' || status === 'allowlist_ready') return 'mint'
+  if (!status || status === 'live' || status === 'not_probed' || status === 'public_live' || status === 'ready' || status === 'allowlist_ready' || status === 'captured_ready') return 'mint'
   if (status === 'not_started' || status === 'public_not_started' || status === 'waiting_public_drop') return 'wait'
   return 'open_official'
 }

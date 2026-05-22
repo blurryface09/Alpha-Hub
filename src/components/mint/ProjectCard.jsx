@@ -1,14 +1,16 @@
-import React, { useEffect, useState } from 'react'
+import React, { useEffect, useState, useCallback } from 'react'
 import LiveMintFeed from './LiveMintFeed'
 import EditProjectModal from './EditProjectModal'
+import CaptureModeModal from './CaptureModeModal'
 import { motion } from 'framer-motion'
-import { Zap, Trash2, Clock, ChevronDown, ChevronUp, ToggleLeft, ToggleRight, ExternalLink, RefreshCw, Twitter, AlertCircle, Gift, Bell, BellOff, Lock } from 'lucide-react'
+import { Zap, Trash2, Clock, ChevronDown, ChevronUp, ToggleLeft, ToggleRight, ExternalLink, RefreshCw, Twitter, AlertCircle, Gift, Bell, BellOff, Lock, Database } from 'lucide-react'
 import toast from 'react-hot-toast'
 import { fetchProjectIntel } from '../../lib/ai'
-import { supabase } from '../../lib/supabase'
+import { supabase, getAuthToken } from '../../lib/supabase'
 import { useAuthStore, useMonitorStore } from '../../store/index.js'
 import { useReadiness } from '../../hooks/useReadiness'
 import { ExecutionReadyBadge, ReadinessPanel } from './ExecutionReadyBadge'
+import CapabilityBadge from './CapabilityBadge'
 import { isExecutionBlocked } from '../../lib/mintRestrictions.js'
 
 // ── Strike state badge ────────────────────────────────────────────────────────
@@ -230,6 +232,8 @@ function ExecutionHistoryPanel({ project, expanded }) {
 export default function ProjectCard({ project, isMinting, isDeleting, onMint, onDelete, onStatusUpdate, onMintModeToggle, onEdit, onReplay }) {
   const [expanded, setExpanded] = useState(false)
   const [showEdit, setShowEdit] = useState(false)
+  const [showCapture, setShowCapture] = useState(false)
+  const [captureProfile, setCaptureProfile] = useState(null)
   const [intel, setIntel] = useState(null)
   const [intelLoading, setIntelLoading] = useState(false)
   const status = STATUS_STYLES[project.status] || STATUS_STYLES.upcoming
@@ -239,6 +243,22 @@ export default function ProjectCard({ project, isMinting, isDeleting, onMint, on
   const readiness = useReadiness(project.contract_address ? project : null)
   const watchId = project.calendar_project_id || project.id
   const isWatching = watchedProjects.has(watchId)
+
+  // Load capture profile for this contract when card expands
+  useEffect(() => {
+    if (!expanded || !project.contract_address || !user?.id) return
+    let cancelled = false
+    getAuthToken().then(token => {
+      if (!token || cancelled) return
+      fetch(`/api/capture/stats?contractAddress=${project.contract_address}`, {
+        headers: { Authorization: `Bearer ${token}` },
+      })
+        .then(r => r.json())
+        .then(d => { if (!cancelled && d?.hasProfile) setCaptureProfile(d) })
+        .catch(() => {})
+    })
+    return () => { cancelled = true }
+  }, [expanded, project.contract_address, user?.id])
 
   const handleFetchIntel = async function() {
     setIntelLoading(true)
@@ -376,9 +396,42 @@ export default function ProjectCard({ project, isMinting, isDeleting, onMint, on
             {project.source_url && (
               <div className="flex items-center justify-between text-xs">
                 <span className="text-muted">Source</span>
-                <a href={project.source_url} target="_blank" rel="noopener noreferrer" className="text-accent flex items-center gap-1 hover:underline">
-                  View {React.createElement(ExternalLink, { size: 10 })}
-                </a>
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={() => setShowCapture(true)}
+                    title="Open in Capture Mode — learn the execution path"
+                    className="flex items-center gap-1 text-purple-400 hover:text-purple-300 transition-colors"
+                  >
+                    {React.createElement(Database, { size: 10 })}
+                    {captureProfile ? 'Recapture' : 'Capture'}
+                  </button>
+                  <a href={project.source_url} target="_blank" rel="noopener noreferrer" className="text-accent flex items-center gap-1 hover:underline">
+                    View {React.createElement(ExternalLink, { size: 10 })}
+                  </a>
+                </div>
+              </div>
+            )}
+            {!project.source_url && project.contract_address && (
+              <div className="flex items-center justify-between text-xs">
+                <span className="text-muted">Capture</span>
+                <button
+                  onClick={() => setShowCapture(true)}
+                  title="Open in Capture Mode — learn the execution path"
+                  className="flex items-center gap-1 text-purple-400 hover:text-purple-300 transition-colors"
+                >
+                  {React.createElement(Database, { size: 10 })}
+                  {captureProfile ? 'Recapture' : 'Open Capture Mode'}
+                </button>
+              </div>
+            )}
+            {(readiness.execution_status || captureProfile?.hasProfile) && (
+              <div className="flex items-center justify-between text-xs">
+                <span className="text-muted">Capability</span>
+                {React.createElement(CapabilityBadge, {
+                  status: readiness.execution_status,
+                  hasProfile: Boolean(captureProfile?.hasProfile),
+                  compact: true,
+                })}
               </div>
             )}
             {project.gas_limit && (
@@ -542,6 +595,17 @@ export default function ProjectCard({ project, isMinting, isDeleting, onMint, on
           setShowEdit(false)
         }}
         onClose={() => setShowEdit(false)}
+      />
+    )}
+
+    {showCapture && (
+      <CaptureModeModal
+        project={project}
+        onClose={() => setShowCapture(false)}
+        onSaved={(profile) => {
+          setCaptureProfile({ hasProfile: true, protocol: profile?.protocol, mintFunction: profile?.mint_function })
+          setShowCapture(false)
+        }}
       />
     )}
   </>

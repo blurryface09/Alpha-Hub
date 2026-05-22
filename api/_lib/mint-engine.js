@@ -1274,6 +1274,87 @@ async function loadVault(supabase, userId) {
   return data?.[0] || null
 }
 
+// ── Capture profile helpers ───────────────────────────────────────────────────
+
+const CAPTURE_TABLE = 'mint_capture_profiles'
+
+function isCaptureSchemaError(err) {
+  const msg = String(err?.message || err || '').toLowerCase()
+  return (String(err?.code || '') === '42P01') || msg.includes(CAPTURE_TABLE) || msg.includes('schema cache') || msg.includes('does not exist')
+}
+
+async function loadCaptureProfile(supabase, { contractAddress, chain }) {
+  if (!supabase || !contractAddress) return null
+  const addr = contractAddress.toLowerCase()
+  try {
+    const { data, error } = await supabase
+      .from(CAPTURE_TABLE)
+      .select('id, mint_function, router_address, selector, protocol, proof_required, proof_shape, gas_avg, gas_min, gas_max, sample_count, verified')
+      .eq('contract_address', addr)
+      .eq('chain', chain || 'eth')
+      .order('sample_count', { ascending: false })
+      .limit(1)
+      .maybeSingle()
+    if (error) { if (isCaptureSchemaError(error)) return null; throw error }
+    return data
+  } catch { return null }
+}
+
+function _buildAutoLearnProfile({ functionName, tx, chain, contractAddress }) {
+  const sel = tx.data?.slice(0, 10)?.toLowerCase() || null
+  const toAddr = (tx.to || contractAddress || '').toLowerCase()
+  return {
+    contract_address: contractAddress.toLowerCase(),
+    chain: chain || 'eth',
+    to_address: toAddr,
+    calldata: (tx.data || '').toLowerCase() || null,
+    selector: sel,
+    value_wei: String(tx.value || '0'),
+    gas_limit: tx.gas ? Number(tx.gas) : null,
+    mint_function: functionName || null,
+    protocol: 'custom',
+    router_address: null,
+    proof_required: false,
+    proof_shape: 'none',
+    multicall: false,
+    source: 'auto_learn',
+    sample_count: 1,
+    verified: false,
+    shared: false,
+    captured_at: new Date().toISOString(),
+  }
+}
+
+async function autoLearnCaptureProfile(supabase, userId, { chain, contractAddress, preparedTransaction, functionName }) {
+  if (!supabase || !contractAddress) return
+  const tx = preparedTransaction?.preparedTransaction || {}
+  if (!tx.data || !tx.to) return
+  const profile = _buildAutoLearnProfile({ functionName, tx, chain, contractAddress })
+  const addr = contractAddress.toLowerCase()
+
+  try {
+    const { data: existing } = await supabase
+      .from(CAPTURE_TABLE)
+      .select('id, sample_count, gas_avg')
+      .eq('contract_address', addr)
+      .eq('chain', chain || 'eth')
+      .eq('source', 'auto_learn')
+      .maybeSingle()
+
+    const gas = profile.gas_limit
+    if (existing) {
+      const n = (existing.sample_count || 0) + 1
+      const gAvg = existing.gas_avg && gas ? Math.round(((existing.gas_avg * (n - 1)) + gas) / n) : gas || existing.gas_avg
+      await supabase.from(CAPTURE_TABLE).update({ sample_count: n, gas_avg: gAvg, mint_function: profile.mint_function, updated_at: new Date().toISOString() }).eq('id', existing.id)
+    } else {
+      await supabase.from(CAPTURE_TABLE).insert({ ...profile, user_id: userId })
+    }
+    console.log('[capture-learn]', { contract: addr.slice(0, 12), fn: functionName, chain, source: 'auto_learn' })
+  } catch (err) {
+    if (!isCaptureSchemaError(err)) console.warn('[capture-learn] save_error', err.message?.slice(0, 80))
+  }
+}
+
 export async function handleMintAction(req, res, action) {
   const allowed = new Set(['prepare', 'prewarm', 'readiness', 'enable-strike', 'stop', 'execute', 'confirm', 'status', 'strike-simulate', 'strike-replay', 'strike-rerun'])
   if (!allowed.has(action)) return res.status(404).json(safeError('Unknown mint action.'))
@@ -1440,6 +1521,15 @@ export async function handleMintAction(req, res, action) {
         functionSource: preparedTransaction.source,
         rpcLabel: preparedTransaction.rpcLabel,
       })
+      // Phase 5 — auto-learn: save execution profile fire-and-forget
+      // Skip stub prewarm wallets so we only learn from real mint paths
+      const isRealWallet = body.walletAddress && body.walletAddress !== '0x0000000000000000000000000000000000000001'
+      if (isRealWallet && preparedTransaction?.preparedTransaction?.data && contract) {
+        autoLearnCaptureProfile(supabase, user.id, {
+          chain, contractAddress: contract, userId: user.id,
+          preparedTransaction, functionName: preparedTransaction.functionName,
+        }).catch(() => {})
+      }
       return res.status(200).json({
         ok: true,
         intent: { ...row, id: intentId },
@@ -1514,30 +1604,55 @@ export async function handleMintAction(req, res, action) {
         })
       }
       if (!SUPPORTED_EXECUTION_CHAINS.has(intent.chain)) return res.status(400).json(safeError('This chain is not supported for Strike Mode yet.'))
+
+      // Phase 3 — pre-load capture profile: skip ABI guessing if we have a learned profile
+      const captureProfile = await loadCaptureProfile(supabase, { contractAddress: intent.contract_address, chain: intent.chain })
+      if (captureProfile) {
+        console.log('[strike-prep]', {
+          stage: 'capture_profile_match',
+          contract: intent.contract_address?.slice(0, 12),
+          chain: intent.chain,
+          protocol: captureProfile.protocol,
+          fn: captureProfile.mint_function,
+          samples: captureProfile.sample_count,
+        })
+      }
+
       try {
-        await prepareMintTransaction({ ...intent, walletAddress: vault.address || vault.wallet_address })
-        console.log('[strike-prep]', { stage: 'arm_prepare_ok', contract: intent.contract_address?.slice(0, 12), chain: intent.chain })
+        await prepareMintTransaction({
+          ...intent,
+          walletAddress: vault.address || vault.wallet_address,
+          // Pass learned function name to skip ABI iteration
+          functionName: intent.functionName || captureProfile?.mint_function || null,
+        })
+        console.log('[strike-prep]', { stage: 'arm_prepare_ok', contract: intent.contract_address?.slice(0, 12), chain: intent.chain, usedProfile: Boolean(captureProfile) })
       } catch (error) {
         const msg = error.rawReason ? error.message : safeMessage(error)
-        // Check if we can still pre-arm via capability probe (mint not open yet but path is valid)
-        try {
-          const armRpc = publicClient(intent.chain, RPC_URLS[intent.chain], null)
-          const armQty = BigInt(Math.max(1, Number(intent.quantity || 1)))
-          const armWallet = vault.address || vault.wallet_address || '0x0000000000000000000000000000000000000001'
-          const capability = await probeCapability(intent.contract_address, intent.chain, armQty, armWallet, armRpc)
-          console.log('[strike-prep]', {
-            stage: 'arm_capability_probe', contract: intent.contract_address?.slice(0, 12), chain: intent.chain,
-            prepared_status: capability.prepared_execution_status,
-          })
-          const armableStatuses = new Set(['waiting_public_drop', 'ready', 'public_live'])
-          if (!armableStatuses.has(capability.prepared_execution_status)) {
-            console.error('[mint-exec] strike_arm_failed', { stage: 'prepare', chain: intent.chain, contract: intent.contract_address?.slice(0, 12), real_error: (error.rawReason || error.message || '').slice(0, 200), user_message: msg, capability: capability.prepared_execution_status })
+        // If we have a capture profile, allow arm immediately — we know the execution path
+        if (captureProfile && !['signed_mint_only', 'captcha_required', 'router_required', 'unsupported_contract'].includes(classifyExecutionStatus(error.message))) {
+          console.log('[strike-prep]', { stage: 'arm_via_capture_profile', contract: intent.contract_address?.slice(0, 12), protocol: captureProfile.protocol, fn: captureProfile.mint_function })
+          // Profile-based arm: skip probeCapability, proceed to arm
+        } else {
+          // Check if we can still pre-arm via capability probe (mint not open yet but path is valid)
+          try {
+            const armRpc = publicClient(intent.chain, RPC_URLS[intent.chain], null)
+            const armQty = BigInt(Math.max(1, Number(intent.quantity || 1)))
+            const armWallet = vault.address || vault.wallet_address || '0x0000000000000000000000000000000000000001'
+            const capability = await probeCapability(intent.contract_address, intent.chain, armQty, armWallet, armRpc)
+            console.log('[strike-prep]', {
+              stage: 'arm_capability_probe', contract: intent.contract_address?.slice(0, 12), chain: intent.chain,
+              prepared_status: capability.prepared_execution_status,
+            })
+            const armableStatuses = new Set(['waiting_public_drop', 'ready', 'public_live'])
+            if (!armableStatuses.has(capability.prepared_execution_status)) {
+              console.error('[mint-exec] strike_arm_failed', { stage: 'prepare', chain: intent.chain, contract: intent.contract_address?.slice(0, 12), real_error: (error.rawReason || error.message || '').slice(0, 200), user_message: msg, capability: capability.prepared_execution_status })
+              return res.status(400).json(safeError(msg))
+            }
+            // Allow arm — execution path is valid but mint is not live yet
+          } catch (probeErr) {
+            console.error('[mint-exec] strike_arm_failed', { stage: 'prepare', chain: intent.chain, contract: intent.contract_address?.slice(0, 12), real_error: (error.rawReason || error.message || '').slice(0, 200), user_message: msg })
             return res.status(400).json(safeError(msg))
           }
-          // Allow arm — execution path is valid but mint is not live yet
-        } catch (probeErr) {
-          console.error('[mint-exec] strike_arm_failed', { stage: 'prepare', chain: intent.chain, contract: intent.contract_address?.slice(0, 12), real_error: (error.rawReason || error.message || '').slice(0, 200), user_message: msg })
-          return res.status(400).json(safeError(msg))
         }
       }
       const strikeExecuteAt = body.strikeExecuteAt || body.strike_execute_at || body.mintDate || intent.mint_date || nowIso
@@ -1706,6 +1821,18 @@ export async function handleMintAction(req, res, action) {
 
       const liveExecutionEnabled = String(process.env.LIVE_EXECUTION_ENABLED || '').toLowerCase() === 'true'
 
+      // Phase 3 — promote to captured_ready if a capture profile exists for this contract
+      let captureProfileSim = null
+      if (contract && !blockers.some(b => b.includes('contract address'))) {
+        captureProfileSim = await loadCaptureProfile(supabase, { contractAddress: contract, chain })
+        if (captureProfileSim && !['signed_mint_only', 'captcha_required', 'router_required', 'unsupported_contract'].includes(preparedExecutionStatus)) {
+          preparedExecutionStatus = 'captured_ready'
+          contractValid = true
+          if (!functionName && captureProfileSim.mint_function) functionName = captureProfileSim.mint_function
+          console.log('[strike-prep]', { stage: 'sim_capture_profile', contract: contract?.slice(0, 10), protocol: captureProfileSim.protocol, fn: captureProfileSim.mint_function })
+        }
+      }
+
       return res.status(200).json({
         ok: true,
         simulation: {
@@ -1724,6 +1851,8 @@ export async function handleMintAction(req, res, action) {
           live_execution_enabled: liveExecutionEnabled,
           execution_status: executionStatus,
           prepared_execution_status: preparedExecutionStatus,
+          capture_protocol: captureProfileSim?.protocol || null,
+          capture_sample_count: captureProfileSim?.sample_count || null,
         },
       })
     }

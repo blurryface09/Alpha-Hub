@@ -2,10 +2,11 @@ import React, { useState, useMemo } from 'react'
 import { AnimatePresence, motion } from 'framer-motion'
 import {
   Zap, X, Shield, AlertTriangle, CheckCircle, XCircle,
-  Clock, Cpu, Wifi, RefreshCw, ChevronRight,
+  Clock, Cpu, Wifi, RefreshCw, ChevronRight, Database,
 } from 'lucide-react'
 import { getAuthToken } from '../../lib/supabase'
 import { restrictionMessage, isExecutionBlocked, isPreArmAllowed } from '../../lib/mintRestrictions.js'
+import CapabilityBadge from './CapabilityBadge'
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -99,6 +100,7 @@ export function strikeUiState(project, simResult) {
   // waiting_public_drop / ready = pre-armed, not blocked
   const prepStatus = simResult.prepared_execution_status
   if (prepStatus === 'waiting_public_drop') return 'waiting_prepared'
+  if (prepStatus === 'captured_ready') return 'ready'
   if (!simResult.live_execution_enabled) return 'simulation_only'
   return 'ready'
 }
@@ -205,22 +207,24 @@ export default function StrikeReviewModal({ project, vault, onConfirmArm, onClos
     const prepStatus = simResult?.prepared_execution_status || 'not_probed'
     const execHardBlocked = isExecutionBlocked(execStatus) && !isPreArmAllowed(prepStatus)
     const execWarn = !execHardBlocked && (execStatus !== 'live' || prepStatus === 'waiting_public_drop')
-    const execOk = (execStatus === 'live' || execStatus === 'allowlist_ready') && prepStatus !== 'waiting_public_drop'
-    const execDetail = execOk
-      ? (execStatus === 'allowlist_ready' ? 'Allowlist proof found — wallet is eligible, ready to execute' : 'Mint function responding — contract is open')
-      : prepStatus === 'waiting_public_drop'
-        ? (simResult?.warnings?.find(w => w.includes('waiting for public mint')) || 'Execution path ready — waiting for public mint to open')
-        : prepStatus === 'proof_unavailable'
-          ? 'Allowlist configured — wallet may be eligible but proof API unavailable. Use official mint page.'
-          : prepStatus === 'wallet_not_eligible'
-            ? 'Vault wallet is not on the allowlist for this mint'
-            : prepStatus === 'ready'
-              ? 'Execution path ready — Strike will fire when mint opens'
-              : execStatus === 'not_probed'
-                ? 'Run simulation to probe contract state'
-                : execStatus === 'not_started' || execStatus === 'public_not_started'
-                  ? 'Public phase not open yet — Strike will fire when live'
-                  : restrictionMessage(execStatus) || 'Probe error — check simulation output'
+    const execOk = (execStatus === 'live' || execStatus === 'allowlist_ready' || prepStatus === 'captured_ready') && prepStatus !== 'waiting_public_drop'
+    const execDetail = prepStatus === 'captured_ready'
+      ? `Execution profile loaded — ${simResult?.capture_protocol ? simResult.capture_protocol + ' path' : 'calldata pre-armed'}`
+      : execOk
+        ? (execStatus === 'allowlist_ready' ? 'Allowlist proof found — wallet is eligible, ready to execute' : 'Mint function responding — contract is open')
+        : prepStatus === 'waiting_public_drop'
+          ? (simResult?.warnings?.find(w => w.includes('waiting for public mint')) || 'Execution path ready — waiting for public mint to open')
+          : prepStatus === 'proof_unavailable'
+            ? 'Allowlist configured — wallet may be eligible but proof API unavailable. Use official mint page.'
+            : prepStatus === 'wallet_not_eligible'
+              ? 'Vault wallet is not on the allowlist for this mint'
+              : prepStatus === 'ready'
+                ? 'Execution path ready — Strike will fire when mint opens'
+                : execStatus === 'not_probed'
+                  ? 'Run simulation to probe contract state'
+                  : execStatus === 'not_started' || execStatus === 'public_not_started'
+                    ? 'Public phase not open yet — Strike will fire when live'
+                    : restrictionMessage(execStatus) || 'Probe error — check simulation output'
     items.push({
       id: 'exec_probe',
       ok: execOk,
@@ -335,6 +339,16 @@ export default function StrikeReviewModal({ project, vault, onConfirmArm, onClos
                 <Row label="Retry policy" value="3× with exponential backoff"               />
                 <Row label="Execution"    value={simResult?.live_execution_enabled ? 'LIVE_EXECUTION_ENABLED=true ✓' : 'LIVE_EXECUTION_ENABLED=false'} />
               </div>
+              {simResult?.prepared_execution_status && (
+                <div className="mt-2 flex items-center justify-between">
+                  <span className="text-[10px] text-muted/60 font-mono uppercase tracking-wider">Capability</span>
+                  <CapabilityBadge
+                    status={simResult.prepared_execution_status}
+                    hasProfile={simResult.prepared_execution_status === 'captured_ready'}
+                    compact
+                  />
+                </div>
+              )}
             </Section>
 
             {/* Readiness checklist */}
