@@ -18,7 +18,7 @@ export const RESTRICTION_MESSAGES = {
   public_not_started:    'Public mint has not started yet.',
   not_started:           'Public mint has not started yet.',
   allowlist_only:        'This mint is allowlist-only — public mint has not opened. Check the official page for your allowlist proof.',
-  signed_mint_only:      'Signed mint only — a signature from the project is required.',
+  signed_mint_only:      'Proof requires OpenSea session. Use official mint.',
   sold_out:              'Mint has sold out.',
   paused:                'Contract is paused.',
   router_required:       'Minting via a router — use the official mint page.',
@@ -35,6 +35,8 @@ export const EXECUTION_BLOCKED = new Set([
   'router_required', 'wallet_not_eligible', 'proof_required',
   'proof_unavailable', 'captcha_required', 'unsupported_execution', 'unsupported_contract',
 ])
+// States that confirm allowlist IS active (contract is live, just access-gated)
+export const ALLOWLIST_ACTIVE = new Set(['allowlist_ready', 'proof_unavailable', 'wallet_not_eligible', 'signed_mint_only'])
 
 // Capability states where Strike can be pre-armed (execution path known, mint not yet open)
 export const PRE_ARM_ALLOWED = new Set(['waiting_public_drop', 'ready', 'public_live'])

@@ -1,4 +1,4 @@
-import { createPublicClient, encodeFunctionData, http, isAddress, parseAbi, parseEther } from 'viem'
+import { createPublicClient, encodeFunctionData, http, isAddress, keccak256, encodeAbiParameters, encodePacked, decodeAbiParameters, parseAbi, parseEther } from 'viem'
 import { createServiceClient, requireUser } from './auth.js'
 import { rateLimit, sendRateLimit } from './redis.js'
 import { chainIdFor, normalizeChain, normalizePhase, recommendMode } from './project-intelligence.js'
@@ -33,7 +33,21 @@ const SEADROP_ABI = parseAbi([
   'function getAllowedFeeRecipients(address nftContract) view returns (address[])',
   'function getPublicDrop(address nftContract) view returns (uint80 mintPrice, uint48 startTime, uint48 endTime, uint16 maxTotalMintableByWallet, uint16 feeBps, bool restrictFeeRecipients)',
   'function getAllowListMerkleRoot(address nftContract) view returns (bytes32)',
+  'function getSignedMintValidationParams(address nftContract) view returns ((uint80 minMintPrice, uint24 maxMaxTotalMintableByWallet, uint40 minStartTime, uint40 maxEndTime, uint40 maxMaxTokenSupplyForStage, uint16 minFeeBps, uint16 maxFeeBps))',
 ])
+// keccak256("AllowListUpdated(address,bytes32,bytes32,string[],string)")
+const SEADROP_ALLOWLIST_UPDATED_TOPIC = '0xefcd7e019bc8b47d27881fd59e2619280ca5894f285950f10ab049870652efa5'
+// IPFS public gateways tried in order
+const IPFS_GATEWAYS = [
+  'https://ipfs.io/ipfs/',
+  'https://cloudflare-ipfs.com/ipfs/',
+  'https://gateway.pinata.cloud/ipfs/',
+]
+// MintParams ABI type (used for leaf computation and mintAllowList encoding)
+const MINT_PARAMS_ABI_TYPE = { type: 'tuple', components: [
+  { type: 'uint256' }, { type: 'uint256' }, { type: 'uint256' }, { type: 'uint256' },
+  { type: 'uint256' }, { type: 'uint256' }, { type: 'uint256' }, { type: 'bool' },
+]}
 // Known reliable OpenSea fee recipient — fallback if on-chain query fails
 const SEADROP_FEE_RECIPIENT_FALLBACK = '0x0000a26b00c1F0DF003000390027140000fAa719'
 const RPC_URLS = {
@@ -132,8 +146,9 @@ function safeMessage(error) {
   if (msg.includes('timeout') || msg.includes('timed out')) return 'Request timed out. Please try again.'
   if (msg.includes('nonce')) return 'Transaction nonce error — reset your wallet pending transactions and try again.'
   if (msg.includes('insufficient funds') || msg.includes('total cost') || msg.includes('exceeds the balance') || msg.includes('exceeds balance')) return 'Insufficient ETH — top up your wallet and try again.'
-  if (msg.includes('seadrop proof unavailable') || msg.includes('proof could not be fetched')) return 'Wallet may be eligible, but the allowlist proof is only available through the official mint page.'
-  if (msg.includes('seadrop wallet not eligible') || msg.includes('not on the allowlist') || msg.includes('wallet not eligible')) return 'This wallet is not on the allowlist for this mint.'
+  if (msg.includes('seadrop proof unavailable') || msg.includes('proof could not be fetched') || msg.includes('all_strategies_exhausted') || msg.includes('allowlist too large')) return 'Wallet may be eligible, but the allowlist proof is only available through the official mint page.'
+  if (msg.includes('seadrop wallet not eligible') || msg.includes('not on the allowlist') || msg.includes('wallet not eligible') || msg.includes('not in the on-chain allowlist')) return 'This wallet is not on the allowlist for this mint.'
+  if (msg.includes('seadrop signed mint') || msg.includes('signed mint: proof requires')) return 'Proof requires OpenSea session. Use official mint.'
   if (msg.includes('seadrop allowlist phase') || msg.includes('merkle proof required')) return 'Allowlist phase active — wallet may be eligible. Check the official mint page for your proof.'
   if (msg.includes('seadrop allowlist only') || (msg.includes('seadrop') && msg.includes('allowlist'))) return 'This mint is currently allowlist-only. Public mint is not active for this wallet.'
   if (msg.includes('seadrop mint not active') || msg.includes('public drop not configured') || msg.includes('not currently active')) return 'This mint is not currently active — the public drop is not open yet. Check the official mint page.'
@@ -180,7 +195,8 @@ function classifyExecutionStatus(error, { seaDropError = null } = {}) {
   if (msg.includes('insufficient funds') || msg.includes('exceeds the balance') || msg.includes('exceeds balance') || msg.includes('total cost')) return 'live'
   // Allowlist-specific states — check before generic seadrop/allowlist catches
   if (msg.includes('seadrop proof unavailable') || msg.includes('proof could not be fetched')) return 'proof_unavailable'
-  if (msg.includes('seadrop wallet not eligible') || msg.includes('not on the allowlist') || msg.includes('wallet not eligible')) return 'wallet_not_eligible'
+  if (msg.includes('seadrop wallet not eligible') || msg.includes('not on the allowlist') || msg.includes('wallet not eligible') || msg.includes('not in the on-chain allowlist')) return 'wallet_not_eligible'
+  if (msg.includes('seadrop signed mint') || msg.includes('signed mint: proof requires')) return 'signed_mint_only'
   if (msg.includes('seadrop allowlist phase') || msg.includes('merkle proof required')) return 'allowlist_ready'
   if (msg.includes('seadrop allowlist only') || (msg.includes('seadrop') && msg.includes('allowlist'))) return 'allowlist_only'
   if (msg.includes('seadrop') || msg.includes('router_required')) return 'router_required'
@@ -359,77 +375,239 @@ function parseMintParams(raw) {
   }
 }
 
-// Attempt to fetch the SeaDrop allowlist proof for a specific wallet from known API sources.
-// Returns { proof: bytes32[], mintParams: object, feeRecipient?: string, source: string } or null.
-// Does NOT throw — always resolves with null on failure so callers can fall back gracefully.
-async function fetchSeaDropAllowlistProof(nftContract, walletAddress, chainId) {
-  // OpenSea chain slug used in their API paths
-  const CHAIN_SLUGS = { 1: 'ethereum', 8453: 'base', 56: 'bsc', 11155111: 'sepolia', 84532: 'base_sepolia' }
-  const chainSlug = CHAIN_SLUGS[chainId] || 'ethereum'
+// ─── Merkle proof helpers ─────────────────────────────────────────────────────
 
-  // Ordered list of endpoint strategies to attempt
-  const strategies = [
-    // Strategy 1: OpenSea SeaDrop allowlist proof endpoint (v2 drops)
-    async () => {
-      const url = `https://api.opensea.io/api/v2/chain/${chainSlug}/contract/${nftContract}/seadrop/allowlist-proof?wallet_address=${walletAddress}`
-      const res = await fetch(url, { headers: { Accept: 'application/json' }, signal: AbortSignal.timeout(6000) })
-      if (res.status === 404) return { notFound: true }
-      if (!res.ok) return null
-      return { source: 'opensea_v2', data: await res.json().catch(() => null) }
-    },
-    // Strategy 2: OpenSea v2 nft allowlist proof (alternate path)
-    async () => {
-      const url = `https://api.opensea.io/v2/chain/${chainSlug}/contract/${nftContract}/nft/allowlist-proof?wallet_address=${walletAddress}`
-      const res = await fetch(url, { headers: { Accept: 'application/json' }, signal: AbortSignal.timeout(5000) })
-      if (res.status === 404) return { notFound: true }
-      if (!res.ok) return null
-      return { source: 'opensea_v2_nft', data: await res.json().catch(() => null) }
-    },
-    // Strategy 3: OpenSea seadrop fulfillment data (older path)
-    async () => {
-      const url = 'https://api.opensea.io/api/v2/seadrop/allowlist-proof'
-      const res = await fetch(url, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
-        body: JSON.stringify({ chain_id: chainId, nft_address: nftContract, wallet_address: walletAddress }),
-        signal: AbortSignal.timeout(6000),
-      })
-      if (res.status === 404) return { notFound: true }
-      if (!res.ok) return null
-      return { source: 'opensea_seadrop_post', data: await res.json().catch(() => null) }
-    },
-  ]
+function sortedPairHash(a, b) {
+  return a <= b
+    ? keccak256(encodePacked(['bytes32', 'bytes32'], [a, b]))
+    : keccak256(encodePacked(['bytes32', 'bytes32'], [b, a]))
+}
 
-  let walletNotFound = false
-  for (const strategy of strategies) {
+// SeaDrop leaf: keccak256(abi.encode(address, MintParams))
+function seaDropLeaf(walletAddress, mp) {
+  return keccak256(encodeAbiParameters(
+    [{ type: 'address' }, MINT_PARAMS_ABI_TYPE],
+    [walletAddress, [
+      BigInt(mp.mintPrice ?? mp.mint_price ?? 0),
+      BigInt(mp.maxTotalMintableByWallet ?? mp.max_total_mintable_by_wallet ?? 1),
+      BigInt(mp.startTime ?? mp.start_time ?? 0),
+      BigInt(mp.endTime ?? mp.end_time ?? 0),
+      BigInt(mp.dropStageIndex ?? mp.drop_stage_index ?? 1),
+      BigInt(mp.maxTokenSupplyForStage ?? mp.max_token_supply_for_stage ?? 0),
+      BigInt(mp.feeBps ?? mp.fee_bps ?? 500),
+      Boolean(mp.restrictFeeRecipients ?? mp.restrict_fee_recipients),
+    ]]
+  ))
+}
+
+// Build sorted-pair merkle tree from an ordered list of leaves.
+// Returns { layers, root } where layers[0] = leaves, layers[last] = [root].
+function buildMerkleTree(leaves) {
+  if (!leaves.length) return { layers: [], root: '0x' + '0'.repeat(64) }
+  if (leaves.length === 1) return { layers: [leaves], root: leaves[0] }
+  const layers = [leaves]
+  let cur = [...leaves]
+  while (cur.length > 1) {
+    const next = []
+    for (let i = 0; i < cur.length; i += 2) {
+      const a = cur[i]
+      const b = i + 1 < cur.length ? cur[i + 1] : a  // duplicate last if odd
+      next.push(sortedPairHash(a, b))
+    }
+    layers.push(next)
+    cur = next
+  }
+  return { layers, root: cur[0] }
+}
+
+// Return the merkle proof path for a leaf at `leafIndex` in a pre-built tree.
+function getProofForIndex(layers, leafIndex) {
+  const proof = []
+  let idx = leafIndex
+  for (let i = 0; i < layers.length - 1; i++) {
+    const layer = layers[i]
+    const siblingIdx = idx % 2 === 0 ? idx + 1 : idx - 1
+    // If sibling index is out of bounds, the leaf was duplicated — sibling = same leaf
+    proof.push(siblingIdx < layer.length ? layer[siblingIdx] : layer[idx])
+    idx = Math.floor(idx / 2)
+  }
+  return proof
+}
+
+// ─── On-chain allowlist fetching ──────────────────────────────────────────────
+
+// Fetch the allowListURI for a contract from Etherscan's AllowListUpdated event logs.
+async function fetchAllowListUri(nftContract, chain) {
+  const apiKey = process.env.ETHERSCAN_API_KEY || process.env.VITE_ETHERSCAN_API_KEY || ''
+  if (!apiKey) {
+    console.log('[allowlist-proof] etherscan_key_missing', { contract: nftContract.slice(0, 10) })
+    return null
+  }
+  const chainId = chainIdFor(chain)
+  // Topic1: nftContract address padded to 32 bytes (indexed parameter encoding)
+  const topic1 = '0x' + '0'.repeat(24) + nftContract.slice(2).toLowerCase()
+  const url = new URL('https://api.etherscan.io/v2/api')
+  url.searchParams.set('chainid', String(chainId))
+  url.searchParams.set('module', 'logs')
+  url.searchParams.set('action', 'getLogs')
+  url.searchParams.set('address', SEADROP_ADDRESS)
+  url.searchParams.set('topic0', SEADROP_ALLOWLIST_UPDATED_TOPIC)
+  url.searchParams.set('topic1', topic1)
+  url.searchParams.set('topic0_1_opr', 'and')
+  url.searchParams.set('page', '1')
+  url.searchParams.set('offset', '5')
+  url.searchParams.set('sort', 'desc')
+  url.searchParams.set('apikey', apiKey)
+  try {
+    const res = await fetch(url.toString(), { signal: AbortSignal.timeout(8000) })
+    const data = await res.json()
+    if (data.status !== '1' || !data.result?.length) {
+      console.log('[allowlist-proof] no_event_found', { contract: nftContract.slice(0, 10), status: data.status, msg: data.message })
+      return null
+    }
+    const log = data.result[0]
+    const [publicKeyURIs, allowListURI] = decodeAbiParameters(
+      [{ type: 'string[]' }, { type: 'string' }],
+      log.data
+    )
+    console.log('[allowlist-proof] uri_from_event', {
+      contract: nftContract.slice(0, 10), chain,
+      allowListURI: allowListURI?.slice(0, 60),
+      isSignedMint: publicKeyURIs?.length > 0,
+      blockNumber: parseInt(log.blockNumber, 16),
+    })
+    return { allowListURI, publicKeyURIs: publicKeyURIs || [] }
+  } catch (e) {
+    console.log('[allowlist-proof] etherscan_error', { err: String(e.message || '').slice(0, 60) })
+    return null
+  }
+}
+
+// Fetch the allowlist JSON from a URI (IPFS or HTTP). Returns parsed entries or null.
+async function fetchAllowListData(uri) {
+  if (!uri || uri.length < 4) return null
+  // Convert ipfs:// to HTTP gateway
+  const urls = uri.startsWith('ipfs://')
+    ? IPFS_GATEWAYS.map(gw => gw + uri.slice(7))
+    : [uri]
+  for (const url of urls) {
     try {
-      const result = await strategy()
-      if (!result) continue
-      if (result.notFound) { walletNotFound = true; continue }
-
-      const { source, data } = result
-      if (!data) continue
-
-      // Parse proof from various response shapes OpenSea might return
-      const proof = data.proof ?? data.merkle_proof ?? data.allowlist_proof ?? data.merkleProof
-      const mintParamsRaw = data.mint_params ?? data.mintParams ?? data.drop_stage ?? data.dropStage
-      const feeRecipient = data.fee_recipient ?? data.feeRecipient ?? null
-
-      if (Array.isArray(proof) && proof.length > 0 && mintParamsRaw) {
-        console.log('[allowlist-proof] proof_found', { source, proofLen: proof.length, wallet: walletAddress.slice(0, 10), contract: nftContract.slice(0, 10) })
-        return { proof, mintParams: mintParamsRaw, feeRecipient, source }
-      }
-      console.log('[allowlist-proof] endpoint_no_proof', { source, keys: Object.keys(data || {}).slice(0, 8) })
+      // HEAD first to check size
+      try {
+        const head = await fetch(url, { method: 'HEAD', signal: AbortSignal.timeout(4000) })
+        const size = parseInt(head.headers.get('content-length') || '0')
+        if (size > 15_000_000) {
+          console.log('[allowlist-proof] allowlist_too_large', { url: url.slice(0, 60), size })
+          return { tooBig: true }
+        }
+      } catch {}
+      const res = await fetch(url, { signal: AbortSignal.timeout(12000) })
+      if (!res.ok) continue
+      const text = await res.text()
+      if (text.length > 15_000_000) return { tooBig: true }
+      const json = JSON.parse(text)
+      // Support multiple JSON shapes
+      const entries = Array.isArray(json) ? json
+        : Array.isArray(json.allowList) ? json.allowList
+        : Array.isArray(json.entries)   ? json.entries
+        : Array.isArray(json.data)      ? json.data
+        : null
+      if (!entries) continue
+      console.log('[allowlist-proof] entries_fetched', { url: url.slice(0, 60), count: entries.length })
+      return { entries, merkleRoot: json.merkleRoot || null }
     } catch (e) {
-      console.log('[allowlist-proof] strategy_error', { err: String(e.message || '').slice(0, 60) })
+      console.log('[allowlist-proof] fetch_uri_fail', { url: url.slice(0, 60), err: String(e.message || '').slice(0, 50) })
     }
   }
+  return null
+}
 
-  if (walletNotFound) {
-    console.log('[allowlist-proof] wallet_not_found', { wallet: walletAddress.slice(0, 10), contract: nftContract.slice(0, 10) })
-    throw new Error('SeaDrop wallet not eligible: wallet address is not on the allowlist for this mint')
+// Find wallet in entries and return proof + mintParams. Returns null if wallet not found.
+function computeProofForWallet(entries, walletAddress) {
+  const wallet = walletAddress.toLowerCase()
+  const idx = entries.findIndex(e => (e.address || '').toLowerCase() === wallet)
+  if (idx === -1) return null
+  const entry = entries[idx]
+  const mintParams = entry.mintParams || entry.mint_params || entry
+  // Fast path: pre-computed proof is included in the allowlist data
+  if (Array.isArray(entry.proof) && entry.proof.length > 0) {
+    return { proof: entry.proof, mintParams, source: 'precomputed_in_uri', walletIdx: idx }
   }
-  console.log('[allowlist-proof] proof_unavailable', { wallet: walletAddress.slice(0, 10), contract: nftContract.slice(0, 10), chainId })
+  // Compute proof from full tree
+  const leaves = entries.map(e => seaDropLeaf(e.address, e.mintParams || e.mint_params || e))
+  const { layers, root } = buildMerkleTree(leaves)
+  const proof = getProofForIndex(layers, idx)
+  return { proof, mintParams, source: 'computed_from_uri', merkleRoot: root, walletIdx: idx }
+}
+
+// ─── Allowlist proof fetching ─────────────────────────────────────────────────
+
+// Fetch SeaDrop allowlist proof for a wallet. Returns { proof, mintParams, feeRecipient, source } or null.
+// Throws (not returns null) for explicit wallet_not_eligible or signed_mint cases.
+async function fetchSeaDropAllowlistProof(nftContract, walletAddress, chainId) {
+  const chain = { 1: 'eth', 8453: 'base', 56: 'bnb', 11155111: 'sepolia', 84532: 'base-sepolia' }[chainId] || 'eth'
+  const walletLower = walletAddress.toLowerCase()
+
+  // ── Strategy 1: On-chain AllowListURI via Etherscan AllowListUpdated events ──
+  // This is the primary path — no OpenSea auth required, works from on-chain data.
+  try {
+    const eventData = await fetchAllowListUri(nftContract, chain)
+    if (eventData) {
+      const { allowListURI, publicKeyURIs } = eventData
+      // publicKeyURIs present + no usable allowListURI → signed mint phase, can't fetch sig
+      if (publicKeyURIs.length > 0 && (!allowListURI || allowListURI.trim().length < 4)) {
+        console.log('[allowlist-proof]', { wallet: walletLower.slice(0,10), contract: nftContract.slice(0,10), phase: 'signed_mint', proof_found: false, proof_source: 'signed_mint_key', failure_reason: 'signed_mint_requires_project_signature' })
+        throw new Error('SeaDrop signed mint: proof requires a signature from the project — use the official mint page')
+      }
+      if (allowListURI?.trim().length > 3) {
+        const listData = await fetchAllowListData(allowListURI)
+        if (listData?.tooBig) {
+          console.log('[allowlist-proof]', { wallet: walletLower.slice(0,10), contract: nftContract.slice(0,10), phase: 'allowlist', proof_found: false, proof_source: 'uri_too_large', failure_reason: 'allowlist_too_large_for_local_compute' })
+          // Fall through to API strategies for large lists
+        } else if (listData?.entries) {
+          const proofResult = computeProofForWallet(listData.entries, walletAddress)
+          if (!proofResult) {
+            console.log('[allowlist-proof]', { wallet: walletLower.slice(0,10), contract: nftContract.slice(0,10), phase: 'allowlist', proof_found: false, proof_source: allowListURI?.slice(0,40), failure_reason: 'wallet_not_in_allowlist', entries_checked: listData.entries.length })
+            throw new Error('SeaDrop wallet not eligible: wallet is not in the on-chain allowlist')
+          }
+          console.log('[allowlist-proof]', { wallet: walletLower.slice(0,10), contract: nftContract.slice(0,10), phase: 'allowlist', proof_found: true, proof_source: proofResult.source, function: 'mintAllowList', proof_len: proofResult.proof.length, failure_reason: null })
+          return { proof: proofResult.proof, mintParams: proofResult.mintParams, feeRecipient: null, source: proofResult.source }
+        }
+      }
+    }
+  } catch (e) {
+    if (e.message.includes('wallet not eligible') || e.message.includes('not in the on-chain') || e.message.includes('signed mint')) throw e
+    console.log('[allowlist-proof] uri_strategy_error', { err: String(e.message || '').slice(0, 80) })
+  }
+
+  // ── Strategy 2: OpenSea API ──
+  // OpenSea's proof endpoints require auth (401) as of investigation. Kept for forward-compatibility.
+  const CHAIN_SLUGS = { 1: 'ethereum', 8453: 'base', 56: 'bsc', 11155111: 'sepolia', 84532: 'base_sepolia' }
+  const chainSlug = CHAIN_SLUGS[chainId] || 'ethereum'
+  const osEndpoints = [
+    `https://api.opensea.io/api/v2/chain/${chainSlug}/contract/${nftContract}/seadrop/allowlist-proof?wallet_address=${walletAddress}`,
+    `https://api.opensea.io/api/v2/seadrop/allowlist-proof?chain_id=${chainId}&nft_address=${nftContract}&wallet_address=${walletAddress}`,
+  ]
+  for (const url of osEndpoints) {
+    try {
+      const res = await fetch(url, { headers: { Accept: 'application/json' }, signal: AbortSignal.timeout(5000) })
+      if (res.status === 401 || res.status === 403) {
+        console.log('[allowlist-proof]', { wallet: walletLower.slice(0,10), contract: nftContract.slice(0,10), phase: 'allowlist', proof_found: false, proof_source: 'opensea_api', failure_reason: `opensea_auth_required_${res.status}` })
+        continue
+      }
+      if (!res.ok) continue
+      const data = await res.json().catch(() => null)
+      if (!data) continue
+      const proof = data.proof ?? data.merkle_proof ?? data.allowlist_proof ?? data.merkleProof
+      const mintParamsRaw = data.mint_params ?? data.mintParams ?? data.drop_stage ?? data.dropStage
+      if (Array.isArray(proof) && proof.length > 0 && mintParamsRaw) {
+        console.log('[allowlist-proof]', { wallet: walletLower.slice(0,10), contract: nftContract.slice(0,10), phase: 'allowlist', proof_found: true, proof_source: 'opensea_api', function: 'mintAllowList', failure_reason: null })
+        return { proof, mintParams: mintParamsRaw, feeRecipient: data.fee_recipient ?? null, source: 'opensea_api' }
+      }
+    } catch {}
+  }
+
+  console.log('[allowlist-proof]', { wallet: walletLower.slice(0,10), contract: nftContract.slice(0,10), phase: 'allowlist', proof_found: false, proof_source: null, failure_reason: 'all_strategies_exhausted' })
   return null
 }
 
@@ -488,12 +666,12 @@ async function buildSeaDropCandidates(nftContract, chain, quantity, walletAddres
       try {
         proofData = await fetchSeaDropAllowlistProof(nftContract, walletAddress, chainId)
       } catch (proofErr) {
-        // fetchSeaDropAllowlistProof only throws for explicit not-found (wallet_not_eligible)
-        const msg = String(proofErr.message || '')
-        if (msg.includes('wallet not eligible') || msg.includes('not on the allowlist')) {
-          console.log('[allowlist-proof]', { wallet: walletAddress.slice(0, 10), contract: nftContract.slice(0, 10), phase: 'allowlist', proof_found: false, failure_reason: 'wallet_not_eligible', function: 'mintAllowList' })
+        // Re-throw definitive failures (wallet not eligible, signed mint)
+        const pMsg = String(proofErr.message || '')
+        if (pMsg.includes('wallet not eligible') || pMsg.includes('not on the allowlist') || pMsg.includes('not in the on-chain')) {
           throw new Error('SeaDrop wallet not eligible: wallet is not on the allowlist for this mint')
         }
+        if (pMsg.includes('signed mint')) throw proofErr  // propagate signed mint message as-is
         console.log('[allowlist-proof]', { wallet: walletAddress.slice(0, 10), contract: nftContract.slice(0, 10), phase: 'allowlist', proof_found: false, failure_reason: 'probe_error', function: 'mintAllowList' })
       }
 
@@ -528,7 +706,17 @@ async function buildSeaDropCandidates(nftContract, chain, quantity, walletAddres
       throw new Error('SeaDrop proof unavailable: wallet may be eligible but the allowlist proof could not be fetched — use the official mint page')
     }
 
-    // No merkle root → signed mint or contract paused between phases
+    // No merkle root — check if this is a signed mint phase
+    try {
+      const signedParams = await client.readContract({ address: SEADROP_ADDRESS, abi: SEADROP_ABI, functionName: 'getSignedMintValidationParams', args: [nftContract] })
+      const hasSignedMint = signedParams && (signedParams.maxEndTime > 0n || signedParams.maxMaxTotalMintableByWallet > 0n)
+      if (hasSignedMint) {
+        console.log('[allowlist-proof]', { wallet: walletAddress.slice(0,10), contract: nftContract.slice(0,10), phase: 'signed_mint', proof_found: false, proof_source: null, failure_reason: 'signed_mint_no_public_api' })
+        throw new Error('SeaDrop signed mint: proof requires a signature from the project — use the official mint page')
+      }
+    } catch (e) {
+      if (e.message.includes('signed mint')) throw e
+    }
     throw new Error('SeaDrop allowlist only: no public drop configured, allowlist or signed mint required')
   }
 
