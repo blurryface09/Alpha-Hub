@@ -28,6 +28,11 @@
     { "source": "/api/vault/create", "destination": "/api/calendar/vault-create" },
     { "source": "/api/vault/import", "destination": "/api/calendar/vault-import" },
     { "source": "/api/vault/list", "destination": "/api/calendar/vault-list" },
+    { "source": "/api/capture/proxy", "destination": "/api/calendar/capture-proxy" },
+    { "source": "/api/capture/save", "destination": "/api/calendar/capture-save" },
+    { "source": "/api/capture/list", "destination": "/api/calendar/capture-list" },
+    { "source": "/api/capture/stats", "destination": "/api/calendar/capture-stats" },
+    { "source": "/api/capture/delete", "destination": "/api/calendar/capture-delete" },
     { "source": "/((?!api/.*).*)", "destination": "/index.html" }
   ]
 }

@@ -1031,5 +1031,172 @@ export default async function handler(req, res) {
     }
   }
 
+  if (action.startsWith('capture-')) {
+    return handleCaptureAction(req, res, action.replace(/^capture-/, ''))
+  }
+
   return res.status(404).json({ ok: false, error: 'Unknown calendar action' })
+}
+
+// ── Mint Capture Mode ─────────────────────────────────────────────────────────
+
+const CAPTURE_TABLE = 'mint_capture_profiles'
+const CAPTURE_BLOCKED_HOSTS = new Set(['localhost', '127.0.0.1', '0.0.0.0', '::1'])
+
+function captureSchemaError(err) {
+  const m = String(err?.message || '').toLowerCase()
+  return String(err?.code || '') === '42P01' || m.includes(CAPTURE_TABLE) || m.includes('schema cache') || m.includes('does not exist')
+}
+
+function normCaptureAddr(v) {
+  const s = String(v || '').trim().toLowerCase()
+  return /^0x[a-f0-9]+$/.test(s) ? s : null
+}
+
+function normCaptureChain(v) {
+  const s = String(v || 'eth').toLowerCase()
+  if (s.includes('base')) return 'base'
+  if (s.includes('ape')) return 'apechain'
+  if (s.includes('bnb') || s.includes('bsc')) return 'bnb'
+  return 'eth'
+}
+
+const CAPTURE_INJECT = `<script>
+;(function(){if(window.__AH_CAPTURE_ACTIVE)return;window.__AH_CAPTURE_ACTIVE=true;var P=(function(){try{return window.parent!==window?window.parent:null}catch(e){return null}})();function badge(){var s=document.createElement('style');s.textContent='#__ahb{position:fixed;top:10px;right:10px;z-index:2147483647;background:linear-gradient(135deg,#7c3aed,#4f46e5);color:#fff;font:700 11px/1 monospace;padding:5px 12px;border-radius:99px;box-shadow:0 2px 16px rgba(0,0,0,.45);pointer-events:none;letter-spacing:.04em}#__ahn{position:fixed;top:44px;right:10px;z-index:2147483647;background:#10b981;color:#fff;font:600 11px/1 monospace;padding:6px 13px;border-radius:8px;box-shadow:0 2px 14px rgba(0,0,0,.4);pointer-events:none;transition:opacity .3s}';var b=document.createElement('div');b.id='__ahb';b.textContent='⚡ CAPTURE MODE';var a=function(){document.body.appendChild(s);document.body.appendChild(b)};if(document.body)a();else document.addEventListener('DOMContentLoaded',a)}function notify(){var el=document.getElementById('__ahn');if(el){el.style.opacity='1';return}el=document.createElement('div');el.id='__ahn';el.textContent='✓ Transaction captured';document.body&&document.body.appendChild(el);setTimeout(function(){el.style.opacity='0'},2200);setTimeout(function(){el.remove()},2700)}function patch(eth){if(!eth||eth.__ahp)return eth;var orig=eth.request.bind(eth);eth.request=async function(a){var m=a&&a.method||'';if(m==='eth_sendTransaction'||m==='wallet_sendTransaction'){var tx=(a.params||[])[0];if(tx&&P){try{P.postMessage({__type:'AH_CAPTURE_TX',tx:tx},'*')}catch(e){}}notify()}return orig(a)};eth.__ahp=true;return eth}badge();if(window.ethereum)patch(window.ethereum);try{var d=Object.getOwnPropertyDescriptor(window,'ethereum');if(!d||d.configurable!==false){var _e=window.ethereum;Object.defineProperty(window,'ethereum',{get:function(){return _e},set:function(v){_e=patch(v)},configurable:true})}}catch(e){}window.addEventListener('ethereum#initialized',function(){if(window.ethereum)patch(window.ethereum)},{once:true});window.addEventListener('eip6963:announceProvider',function(e){if(e.detail&&e.detail.provider)patch(e.detail.provider)});try{window.dispatchEvent(new Event('eip6963:requestProvider'))}catch(e){}})();
+</script>`
+
+async function handleCaptureAction(req, res, subAction) {
+  // ── proxy ────────────────────────────────────────────────────────────────────
+  if (subAction === 'proxy') {
+    if (req.method !== 'GET') return res.status(405).end('Method Not Allowed')
+    const token = req.query.token || getBearerToken(req)
+    if (!token) return res.status(401).json({ error: 'Authentication required' })
+    const supabase = createAnonClient()
+    const { data: { user }, error: authErr } = await supabase.auth.getUser(token)
+    if (authErr || !user) return res.status(401).json({ error: 'Invalid or expired session' })
+    const rawUrl = req.query.url
+    if (!rawUrl) return res.status(400).end('Missing url parameter')
+    let parsed
+    try { parsed = new URL(rawUrl) } catch { return res.status(400).end('Invalid URL') }
+    if (!['http:', 'https:'].includes(parsed.protocol)) return res.status(400).end('Only HTTP/S allowed')
+    if (CAPTURE_BLOCKED_HOSTS.has(parsed.hostname) || parsed.hostname.endsWith('.internal')) return res.status(400).end('URL not allowed')
+    let fetchRes
+    try {
+      const controller = new AbortController()
+      const tid = setTimeout(() => controller.abort(), 12000)
+      fetchRes = await fetch(rawUrl, {
+        signal: controller.signal, redirect: 'follow',
+        headers: { 'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 Chrome/124.0.0.0 Safari/537.36', Accept: 'text/html,application/xhtml+xml,*/*;q=0.8', 'Accept-Language': 'en-US,en;q=0.9', 'Cache-Control': 'no-cache' },
+      })
+      clearTimeout(tid)
+    } catch (err) {
+      return res.status(502).json({ error: 'Could not reach mint page', detail: err.message })
+    }
+    const ct = fetchRes.headers.get('content-type') || ''
+    if (!ct.includes('text/html') && !ct.includes('application/xhtml')) return res.status(415).json({ error: 'Not an HTML page' })
+    let html
+    try { html = await fetchRes.text() } catch (err) { return res.status(502).json({ error: 'Failed to read page body' }) }
+    const origin = parsed.origin
+    const baseTag = html.includes('<base ') ? '' : `<base href="${origin}/">`
+    const injection = CAPTURE_INJECT + baseTag
+    if (/<head[^>]*>/i.test(html)) html = html.replace(/<head([^>]*)>/i, m => `${m}${injection}`)
+    else html = injection + html
+    res.setHeader('Content-Type', 'text/html; charset=utf-8')
+    res.setHeader('X-Frame-Options', 'SAMEORIGIN')
+    res.setHeader('Content-Security-Policy', "default-src * blob: data: 'unsafe-inline' 'unsafe-eval'; frame-ancestors 'self'")
+    res.setHeader('Cache-Control', 'no-store')
+    return res.status(200).send(html)
+  }
+
+  // All other capture actions require auth via Authorization header
+  const user = await requireUser(req, res)
+  if (!user) return
+  const supabase = createAnonClient()
+
+  // ── save ─────────────────────────────────────────────────────────────────────
+  if (subAction === 'save') {
+    if (req.method !== 'POST') return res.status(405).json({ error: 'POST required' })
+    const body = req.body || {}
+    const contractAddress = normCaptureAddr(body.contractAddress || body.contract_address)
+    if (!contractAddress) return res.status(400).json({ error: 'contractAddress required' })
+    const chain = normCaptureChain(body.chain)
+    const toAddress = normCaptureAddr(body.toAddress || body.to_address || body.tx?.to)
+    const calldata = String(body.calldata || body.tx?.data || '').toLowerCase() || null
+    const selector = calldata?.slice(0, 10) || null
+    const gasLimit = body.tx?.gas ? Number(body.tx.gas) : null
+    const profile = {
+      user_id: user.id, project_id: body.projectId || null, contract_address: contractAddress, chain,
+      to_address: toAddress, calldata, selector, value_wei: String(body.tx?.value || '0'), gas_limit: gasLimit,
+      mint_function: body.mintFunction || null, protocol: body.protocol || 'custom',
+      router_address: body.routerAddress || toAddress, proof_required: Boolean(body.proofRequired ?? false),
+      proof_shape: body.proofShape || 'none', multicall: false, gas_min: gasLimit, gas_max: gasLimit, gas_avg: gasLimit,
+      sample_count: 1, verified: false, shared: false, source: body.source || 'capture', captured_at: new Date().toISOString(),
+    }
+    try {
+      const { data: existing } = await supabase.from(CAPTURE_TABLE).select('id,sample_count,gas_avg').eq('contract_address', contractAddress).eq('chain', chain).eq('user_id', user.id).eq('selector', selector).maybeSingle()
+      if (existing) {
+        const n = (existing.sample_count || 0) + 1
+        const gAvg = existing.gas_avg && gasLimit ? Math.round(((existing.gas_avg * (n - 1)) + gasLimit) / n) : gasLimit || existing.gas_avg
+        const { data, error } = await supabase.from(CAPTURE_TABLE).update({ ...profile, sample_count: n, gas_avg: gAvg, updated_at: new Date().toISOString() }).eq('id', existing.id).select().single()
+        if (error) throw error
+        return res.status(200).json({ ok: true, profile: data, merged: true })
+      }
+      const { data, error } = await supabase.from(CAPTURE_TABLE).insert(profile).select().single()
+      if (error) throw error
+      return res.status(200).json({ ok: true, profile: data, merged: false })
+    } catch (err) {
+      if (captureSchemaError(err)) return res.status(200).json({ ok: true, profile, merged: false, tableNotReady: true })
+      return res.status(500).json({ error: 'Failed to save profile' })
+    }
+  }
+
+  // ── list ─────────────────────────────────────────────────────────────────────
+  if (subAction === 'list') {
+    const q = req.method === 'GET' ? req.query : (req.body || {})
+    const contractAddress = normCaptureAddr(q.contractAddress || q.contract_address)
+    const chain = q.chain ? normCaptureChain(q.chain) : null
+    try {
+      let query = supabase.from(CAPTURE_TABLE).select('id,contract_address,chain,selector,mint_function,protocol,router_address,proof_required,proof_shape,gas_avg,gas_min,gas_max,sample_count,verified,source,captured_at').eq('user_id', user.id).order('sample_count', { ascending: false }).limit(20)
+      if (contractAddress) query = query.eq('contract_address', contractAddress)
+      if (chain) query = query.eq('chain', chain)
+      const { data, error } = await query
+      if (error) throw error
+      return res.status(200).json({ ok: true, profiles: data || [] })
+    } catch (err) {
+      if (captureSchemaError(err)) return res.status(200).json({ ok: true, profiles: [] })
+      return res.status(500).json({ error: 'Failed to list profiles' })
+    }
+  }
+
+  // ── stats ─────────────────────────────────────────────────────────────────────
+  if (subAction === 'stats') {
+    const contractAddress = normCaptureAddr(req.query.contractAddress || req.query.contract_address)
+    if (!contractAddress) return res.status(400).json({ error: 'contractAddress required' })
+    try {
+      const { data, error } = await supabase.from(CAPTURE_TABLE).select('id,protocol,mint_function,selector,gas_avg,sample_count,verified,proof_required,source').eq('contract_address', contractAddress).order('sample_count', { ascending: false }).limit(5)
+      if (error) throw error
+      const profiles = data || []
+      const top = profiles[0] || null
+      return res.status(200).json({ ok: true, hasProfile: profiles.length > 0, totalSamples: profiles.reduce((s, p) => s + (p.sample_count || 1), 0), protocol: top?.protocol || null, mintFunction: top?.mint_function || null, gasAvg: top?.gas_avg || null, proofRequired: top?.proof_required || false, verified: top?.verified || false, profiles })
+    } catch (err) {
+      if (captureSchemaError(err)) return res.status(200).json({ ok: true, hasProfile: false, totalSamples: 0, profiles: [] })
+      return res.status(500).json({ error: 'Failed to load stats' })
+    }
+  }
+
+  // ── delete ─────────────────────────────────────────────────────────────────────
+  if (subAction === 'delete') {
+    if (req.method !== 'POST') return res.status(405).json({ error: 'POST required' })
+    const { profileId } = req.body || {}
+    if (!profileId) return res.status(400).json({ error: 'profileId required' })
+    try {
+      const { error } = await supabase.from(CAPTURE_TABLE).delete().eq('id', profileId).eq('user_id', user.id)
+      if (error && !captureSchemaError(error)) throw error
+      return res.status(200).json({ ok: true })
+    } catch (err) {
+      return res.status(500).json({ error: 'Failed to delete profile' })
+    }
+  }
+
+  return res.status(404).json({ error: 'Unknown capture action' })
 }
