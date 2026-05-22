@@ -186,6 +186,7 @@ function tabFilter(project, tab) {
   }
   // upcoming: must have a future mint_date + contract_address + chain, not ended
   if (!project.contract_address || !project.chain) return false
+  if (!project.mint_date) return false
   if (project.status === 'ended' || project.mint_status === 'ended') return false
   if (mintEnd != null && mintEnd < now) return false
   if (mintStart != null && mintStart <= now && !live) return false
@@ -531,6 +532,42 @@ export default function CalendarPage() {
         return true
       })
   }, [activeTab, chain, projects, query, shareCode])
+
+  // Counts derived from the same filtered set as visible cards — keeps stats honest
+  const tabCounts = useMemo(() => ({
+    liveCount:     projects.filter(p => tabFilter(p, 'live')).length,
+    upcomingCount: projects.filter(p => tabFilter(p, 'upcoming')).length,
+    pendingCount:  projects.filter(p => p.status === 'pending_review').length,
+  }), [projects])
+
+  // Diagnostic reason shown when the current tab renders zero cards
+  const emptyReason = useMemo(() => {
+    if (visibleProjects.length > 0) return null
+    const base = projects.filter(p =>
+      !shareCode || p.share_code?.toLowerCase() === shareCode.toLowerCase() || p.share_slug?.toLowerCase() === shareCode.toLowerCase()
+    )
+    if (!base.length) return 'No projects synced yet — run Sync to fetch drops.'
+    const passQuality = base.filter(p => isLaunchReadyCalendarProject(p))
+    if (!passQuality.length) {
+      const noContract  = base.filter(p => !p.contract_address).length
+      const noMintDate  = base.filter(p => !p.mint_date).length
+      const pending     = base.filter(p => p.status === 'pending_review').length
+      const lowQuality  = base.filter(p => calendarQualityScore(p) < 50).length
+      return `${base.length} loaded, none display-ready: ${noContract} no contract · ${noMintDate} no mint date · ${lowQuality} low quality · ${pending} pending review.`
+    }
+    const passStale = passQuality.filter(p => !isStaleCalendarProject(p))
+    if (!passStale.length) return `${passQuality.length} projects found but all are stale or ended.`
+    const passTab = passStale.filter(p => tabFilter(p, activeTab))
+    if (!passTab.length) {
+      const tabLabel = TABS.find(t => t.id === activeTab)?.label ?? activeTab
+      return `No "${tabLabel}" drops yet — try Upcoming or run Sync.`
+    }
+    const passChain = passTab.filter(p => chain === 'all' || normalizeChain(p.chain) === chain)
+    if (!passChain.length) return `No ${activeTab} drops on ${chain.toUpperCase()} — try switching chain to All.`
+    if (query.trim()) return 'No results match your search.'
+    return null
+  }, [visibleProjects, projects, activeTab, chain, query, shareCode])
+
 
   const runSync = async () => {
     if (calendarNotReady) {
@@ -1067,9 +1104,9 @@ export default function CalendarPage() {
       <div className="grid grid-cols-2 lg:grid-cols-5 gap-3 mb-5">
         <Metric label="Last Synced" value={timeAgo(status?.lastSync)} />
         <Metric label="Projects" value={status?.projectCount ?? projects.length} />
-        <Metric label="Upcoming" value={status?.upcomingCount ?? 0} tone="text-accent3" />
-        <Metric label="Live" value={status?.liveCount ?? 0} tone="text-green" />
-        <Metric label="Pending" value={isAdmin ? (status?.pendingCount ?? 0) : '-'} tone="text-muted" />
+        <Metric label="Upcoming" value={tabCounts.upcomingCount} tone="text-accent3" />
+        <Metric label="Live" value={tabCounts.liveCount} tone="text-green" />
+        <Metric label="Pending" value={isAdmin ? tabCounts.pendingCount : '-'} tone="text-muted" />
       </div>
 
       <div className="flex gap-2 mb-5 border-b border-border overflow-x-auto">
@@ -1131,7 +1168,7 @@ export default function CalendarPage() {
           <p className="text-sm text-muted mt-2 max-w-md">
             {calendarNotReady
               ? 'Alpha Radar storage is not ready yet. Apply the Alpha Radar SQL migration in Supabase before syncing real projects.'
-              : 'OpenSea, Alchemy, or Zora source data is needed for curated project listings. Low-confidence raw contracts stay out of the daily alpha feed until they are enriched.'}
+              : (emptyReason || 'OpenSea, Alchemy, or Zora source data is needed for curated project listings. Low-confidence raw contracts stay out of the daily alpha feed until they are enriched.')}
           </p>
           <div className="flex flex-col sm:flex-row gap-2 mt-4">
             {isAdmin && !calendarNotReady && <button onClick={runSync} disabled={syncing} className="btn-primary text-xs">{syncing ? 'Syncing...' : 'Run Sync Now'}</button>}

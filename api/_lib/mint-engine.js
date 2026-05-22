@@ -423,6 +423,7 @@ export async function prepareMintTransaction(body, _clientOverride = null, _supa
     : [primaryUrl, ...fallbackUrls].filter(Boolean).map(url => ({ activeClient: publicClient(chain, url, executionProfile), url }))
 
   let lastError = null
+  let seaDropError = null
   let attemptCount = 0
 
   for (const { activeClient: activeRpc, url: activeUrl } of rpcQueue) {
@@ -458,7 +459,6 @@ export async function prepareMintTransaction(body, _clientOverride = null, _supa
 
     // Protocol detection: SeaDrop contracts must be minted via the SeaDrop router
     let protocolCandidates = []
-    let seaDropError = null
     if (isSeaDropContract(verifiedAbi)) {
       protocolCandidates = await buildSeaDropCandidates(contract, quantity, walletAddress, activeRpc).catch(e => {
         console.log('[mint-benchmark] seadrop_setup_fail', { error: String(e.message || '').slice(0, 80) })
