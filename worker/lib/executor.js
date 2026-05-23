@@ -233,7 +233,7 @@ export async function executeIntent(supabase, queuedIntent) {
     if (!to) throw new Error('Intent has no contract address (mint_contract_address / to / contract_address)')
 
     const value = BigInt(intent.mint_price || intent.value || '0')
-    const data = intent.call_data || intent.data || undefined
+    const data = intent.call_data || intent.data || intent.calldata || intent.tx_data || undefined
     const gas = intent.gas_limit ? BigInt(intent.gas_limit) : undefined
 
     // Populate trace vars for use in the catch block

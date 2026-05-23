@@ -51,9 +51,9 @@ function resolveTestnetValue(intent) {
   return BigInt(intent.mint_price || intent.value || '0')
 }
 
-/** How executor.js resolves `data` — the reference implementation */
+/** How executor.js resolves `data` (post GAP-L4 fix) */
 function resolveLiveData(intent) {
-  return intent.call_data || intent.data || undefined
+  return intent.call_data || intent.data || intent.calldata || intent.tx_data || undefined
 }
 
 /** How simulator.js resolves `data` */
@@ -192,21 +192,23 @@ function resolveTestnetGas(intent) {
 }
 
 {
-  // GAP-L4 (documented): calldata is NOT in live/sim data chain — only testnet has it
+  // GAP-L4 FIXED: calldata is now in live's data chain
   const intent = { calldata: '0x11223344' }
-  assert.equal(resolveLiveData(intent),    undefined,     'live: misses calldata field')
-  assert.equal(resolveSimData(intent),     undefined,     'sim: misses calldata field')
-  assert.equal(resolveTestnetData(intent), '0x11223344',  'testnet: has calldata backward-compat fallback')
-  console.log('✓ [data] GAP-L4 documented: calldata only in testnet chain; live/sim return undefined')
+  assert.equal(resolveLiveData(intent),    '0x11223344', 'live now reads calldata (fixed)')
+  assert.equal(resolveSimData(intent),     undefined,    'sim still misses calldata (sim gap remains)')
+  assert.equal(resolveTestnetData(intent), '0x11223344', 'testnet reads calldata')
+  assert.equal(resolveLiveData(intent), resolveTestnetData(intent), 'live and testnet now agree on calldata')
+  console.log('✓ [data] GAP-L4 FIXED: live now reads calldata (sim still misses it — separate gap)')
 }
 
 {
-  // GAP-L4 (documented): tx_data also only in testnet chain
+  // GAP-L4 FIXED: tx_data is now in live's data chain
   const intent = { tx_data: '0xaabbccdd' }
-  assert.equal(resolveLiveData(intent),    undefined,    'live: misses tx_data field')
-  assert.equal(resolveSimData(intent),     undefined,    'sim: misses tx_data field')
-  assert.equal(resolveTestnetData(intent), '0xaabbccdd', 'testnet: has tx_data backward-compat fallback')
-  console.log('✓ [data] GAP-L4 documented: tx_data only in testnet chain; live/sim return undefined')
+  assert.equal(resolveLiveData(intent),    '0xaabbccdd', 'live now reads tx_data (fixed)')
+  assert.equal(resolveSimData(intent),     undefined,    'sim still misses tx_data (sim gap remains)')
+  assert.equal(resolveTestnetData(intent), '0xaabbccdd', 'testnet reads tx_data')
+  assert.equal(resolveLiveData(intent), resolveTestnetData(intent), 'live and testnet now agree on tx_data')
+  console.log('✓ [data] GAP-L4 FIXED: live now reads tx_data (sim still misses it — separate gap)')
 }
 
 {
@@ -657,10 +659,12 @@ function resolveTestnetGas(intent) {
 console.log(`
 Live executor field resolution: executor.js is the reference — sim and testnet now match.
 
-Documented gaps (structural, not functional breakages):
+GAP-L4 FIXED: data field now reads call_data || data || calldata || tx_data (matches testnet)
+
+Remaining documented gaps (structural, not functional breakages):
   GAP-L1: dryRunIntent to field missing || contract_address (logging only — does not affect tx)
   GAP-L2: Catch block uses raw .update() for FAILED state (bypasses transitionIntent validation)
   GAP-L3: onRetry sets RETRYING via raw .update() (bypasses transitionIntent validation)
-  GAP-L4: data field has no calldata/tx_data backward-compat (testnet has them; live/sim don't)
+  SIM-GAP: sim data chain still misses calldata/tx_data backward-compat (sim has no real-tx risk)
 
 All live-parity tests passed.`)
