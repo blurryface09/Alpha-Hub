@@ -385,6 +385,38 @@ await test('BUG-6: attempt.to ?? project.contract_address — non-SeaDrop uses N
   assert.equal(txTo, NFT, 'non-SeaDrop attempt uses project contract address')
 })
 
+// ─── BUG-7: viem positional array for getPublicDrop ──────────────────────────
+
+console.log('\n=== BUG-7: viem getPublicDrop positional array decoding ===\n')
+
+await test('BUG-7: viem returns positional array for multi-output functions (not named object)', () => {
+  // viem decodeFunctionResult returns values array when outputs.length > 1
+  // getPublicDrop: returns (uint80 mintPrice, uint48 startTime, uint48 endTime, ...)
+  // drop.mintPrice is undefined; must use drop[0], drop[1], drop[2]
+  const viemDrop = [1000000000000000n, 1700000000n, 0n, 3n, 500n, true]  // simulated viem return
+  const mintPrice = BigInt(viemDrop[0] || 0n)
+  const startTime = BigInt(viemDrop[1] || 0n)
+  const endTime   = BigInt(viemDrop[2] || 0n)
+  const now = BigInt(Math.floor(Date.now() / 1000))
+  const isActive = startTime > 0n && startTime <= now && (endTime === 0n || endTime > now)
+  assert.equal(mintPrice, 1000000000000000n, 'mintPrice decoded from index 0')
+  assert.equal(startTime, 1700000000n, 'startTime decoded from index 1')
+  assert.equal(endTime, 0n, 'endTime decoded from index 2')
+  assert.equal(isActive, true, 'isActive correctly true when startTime is past and endTime is 0')
+})
+
+await test('BUG-7: named property access on viem array returns undefined (the old broken path)', () => {
+  const viemDrop = [1000000000000000n, 1700000000n, 0n, 3n, 500n, true]
+  // old code: drop.mintPrice, drop.startTime, drop.endTime
+  assert.equal(viemDrop.mintPrice, undefined, 'named .mintPrice access on array is undefined')
+  assert.equal(viemDrop.startTime, undefined, 'named .startTime access on array is undefined')
+  // old isActive: startTime = BigInt(undefined || 0n) = 0n → isActive = false
+  const brokenStartTime = BigInt(viemDrop.startTime || 0n)
+  const now = BigInt(Math.floor(Date.now() / 1000))
+  const brokenIsActive = brokenStartTime > 0n && brokenStartTime <= now
+  assert.equal(brokenIsActive, false, 'old named access always produced isActive=false')
+})
+
 // ─── Section 5: Safety edge cases ────────────────────────────────────────────
 
 console.log('\n=== Section 5: Safety ===\n')

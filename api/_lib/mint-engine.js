@@ -622,11 +622,13 @@ async function buildSeaDropCandidates(nftContract, chain, quantity, walletAddres
   const feeRecipient = feeRecipients[0] || SEADROP_FEE_RECIPIENT_FALLBACK
   const drop = dropResult.status === 'fulfilled' ? dropResult.value : null
   const merkleRoot = merkleResult.status === 'fulfilled' ? merkleResult.value : null
-  const mintPrice = drop ? BigInt(drop.mintPrice || 0n) : 0n
+  // viem returns positional array for multi-output functions (decodeFunctionResult lines 22-23)
+  // getPublicDrop: [0]=mintPrice, [1]=startTime, [2]=endTime, [3]=maxTotalMintableByWallet, [4]=feeBps, [5]=restrictFeeRecipients
+  const mintPrice = drop ? BigInt(drop[0] || 0n) : 0n
   const totalValue = mintPrice * quantity
   const now = BigInt(Math.floor(Date.now() / 1000))
-  const startTime = drop ? BigInt(drop.startTime || 0n) : 0n
-  const endTime = drop ? BigInt(drop.endTime || 0n) : 0n
+  const startTime = drop ? BigInt(drop[1] || 0n) : 0n
+  const endTime = drop ? BigInt(drop[2] || 0n) : 0n
   const isActive = startTime > 0n && startTime <= now && (endTime === 0n || endTime > now)
   const hasAllowlist = Boolean(merkleRoot && merkleRoot !== '0x' + '0'.repeat(64))
   console.log('[mint-benchmark] seadrop_detected', {
@@ -1052,9 +1054,10 @@ async function probeCapability(contract, chain, quantity, walletAddress, clientO
 
       if (isConfirmedSeaDrop || feeRecipients.length > 0 || drop) {
         // This IS a SeaDrop contract — classify its state
-        const startTime = drop ? BigInt(drop.startTime || 0n) : 0n
-        const endTime = drop ? BigInt(drop.endTime || 0n) : 0n
-        const mintPrice = drop ? BigInt(drop.mintPrice || 0n) : 0n
+        // viem positional array: [0]=mintPrice, [1]=startTime, [2]=endTime
+        const startTime = drop ? BigInt(drop[1] || 0n) : 0n
+        const endTime = drop ? BigInt(drop[2] || 0n) : 0n
+        const mintPrice = drop ? BigInt(drop[0] || 0n) : 0n
         const now = BigInt(Math.floor(Date.now() / 1000))
         const isActive = startTime > 0n && startTime <= now && (endTime === 0n || endTime > now)
 
