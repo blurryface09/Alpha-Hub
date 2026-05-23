@@ -353,28 +353,42 @@ function resolveTestnetGas(intent) {
   console.log(`✓ [fsm] All ${invalidLiveTransitions.length} invalid live path transitions rejected`)
 }
 
-// ─── Section 7: Terminal state guard gap ─────────────────────────────────────
+// ─── Section 7: Terminal state guard — FIXED ─────────────────────────────────
 
 {
-  // INTENT_STATES.SUCCESS is NOT a key in the TRANSITIONS map.
-  // transitionIntent's guard: if (allowed && !allowed.has(toState)) — when allowed is
-  // undefined (key not in map), the guard is silently skipped.
-  // This means transitions FROM 'success' are unguarded — any to-state would be accepted.
+  // success, cancelled, and expired are now in TRANSITIONS with empty Sets.
+  // The guard was also tightened: !allowed || !allowed.has(toState) — a missing
+  // map entry now throws instead of silently passing.
 
-  const TRANSITIONS_KEYS = new Set([
-    'pending', 'armed', 'queued', 'executing', 'executing_simulation',
-    'executing_testnet', 'retrying', 'failed', 'simulated_failure',
-    'simulated_success', 'testnet_failed', 'testnet_success',
-  ])
+  const mockSupabase = {
+    from: () => ({
+      update: () => ({
+        eq: () => ({
+          select: () => ({
+            single: async () => ({ data: { id: 'test', status: 'armed' }, error: null }),
+          }),
+        }),
+      }),
+    }),
+  }
 
-  assert.ok(!TRANSITIONS_KEYS.has(INTENT_STATES.SUCCESS),
-    'success state is NOT in TRANSITIONS map — transitions from it are unguarded')
-  assert.ok(TRANSITIONS_KEYS.has(INTENT_STATES.PENDING),
-    'pending state IS in TRANSITIONS map — transitions from it are guarded')
-  assert.ok(TRANSITIONS_KEYS.has(INTENT_STATES.FAILED),
-    'failed state IS in TRANSITIONS map — transitions from it are guarded')
+  await assert.rejects(
+    () => transitionIntent(mockSupabase, 'test-id', INTENT_STATES.SUCCESS, INTENT_STATES.ARMED),
+    /Invalid intent state transition/,
+    'success → armed is rejected (terminal state)',
+  )
+  await assert.rejects(
+    () => transitionIntent(mockSupabase, 'test-id', INTENT_STATES.CANCELLED, INTENT_STATES.ARMED),
+    /Invalid intent state transition/,
+    'cancelled → armed is rejected (terminal state)',
+  )
+  await assert.rejects(
+    () => transitionIntent(mockSupabase, 'test-id', INTENT_STATES.EXPIRED, INTENT_STATES.ARMED),
+    /Invalid intent state transition/,
+    'expired → armed is rejected (terminal state)',
+  )
 
-  console.log('✓ [fsm] GAP documented: success state not in TRANSITIONS map — transitionIntent silently passes any from-success transition')
+  console.log('✓ [fsm] FIXED: success/cancelled/expired are terminal — transitionIntent rejects all outbound transitions')
 }
 
 // ─── Section 9: GAP-L2 FIXED — catch block uses transitionIntent(currentState → FAILED) ──

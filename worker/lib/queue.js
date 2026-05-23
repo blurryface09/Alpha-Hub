@@ -48,6 +48,10 @@ const TRANSITIONS = new Map([
   [INTENT_STATES.SIM_SUCCESS,       new Set([INTENT_STATES.ARMED, INTENT_STATES.EXECUTING_TESTNET, INTENT_STATES.CANCELLED])],
   [INTENT_STATES.TESTNET_FAILED,    new Set([INTENT_STATES.SIM_SUCCESS, INTENT_STATES.CANCELLED])],
   [INTENT_STATES.TESTNET_SUCCESS,   new Set([INTENT_STATES.CANCELLED])],
+  // Terminal states — empty Set rejects all transitions
+  [INTENT_STATES.SUCCESS,           new Set()],
+  [INTENT_STATES.CANCELLED,         new Set()],
+  [INTENT_STATES.EXPIRED,           new Set()],
 ])
 
 /** States that the worker can atomically claim for execution */
@@ -130,7 +134,7 @@ export async function transitionIntent(supabase, intentId, fromState, toState, p
   const intentLog = createLogger(intentId, null)
 
   const allowed = TRANSITIONS.get(fromState)
-  if (allowed && !allowed.has(toState)) {
+  if (!allowed || !allowed.has(toState)) {
     throw new Error(
       `Invalid intent state transition: ${fromState} → ${toState} (intent: ${intentId})`,
     )
