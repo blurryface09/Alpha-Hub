@@ -159,6 +159,25 @@ export async function simulateArmedIntent(supabase, queuedIntent) {
     }
   }
 
+  // ── NOT_READY: timing gate not yet open — requeue rather than fail ──────────
+  if (result.outcome === SIM_OUTCOMES.NOT_READY) {
+    log.info('sim_not_ready', 'Timing gate not open — requeuing intent to armed', {
+      intent_id:        intent.id,
+      ms_until_execute: result.ms_until_execute,
+    })
+    await supabase.from('mint_execution_events').insert({
+      intent_id: intent.id,
+      user_id:   intent.user_id,
+      state:     'sim_requeue',
+      message:   `Simulation early — timing gate opens in ${result.ms_until_execute}ms. Requeued.`,
+      metadata:  { ms_until_execute: result.ms_until_execute, in_prewarm: result.in_prewarm },
+    }).catch(() => null)
+    await transitionIntent(supabase, intent.id, INTENT_STATES.EXECUTING_SIM, INTENT_STATES.ARMED, {
+      last_state: `Sim requeue — execute in ${result.ms_until_execute}ms`,
+    })
+    return null
+  }
+
   const succeeded = result.outcome === SIM_OUTCOMES.SUCCESS
   const toState   = succeeded ? INTENT_STATES.SIM_SUCCESS : INTENT_STATES.SIM_FAILED
 

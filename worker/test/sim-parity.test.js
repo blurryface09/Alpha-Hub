@@ -89,11 +89,12 @@ function createMockDb(rows = []) {
 // Mirrors simulator.js lines 137-146 exactly for inline comparison.
 
 function resolveSimFields(intent) {
-  const to = intent.mint_contract_address || intent.to
+  const to = intent.mint_contract_address || intent.to || intent.contract_address
     || '0x0000000000000000000000000000000000000000'
   const value = BigInt(intent.mint_price || intent.value || '0')
   const data = intent.call_data || intent.data || undefined
-  return { to, value, data }
+  const gas = intent.gas_limit ? BigInt(intent.gas_limit) : undefined
+  return { to, value, data, gas }
 }
 
 // Mirrors executor.js lines 232-244 exactly.
@@ -164,11 +165,10 @@ await test('P1-2: when only `to` set, both use it', async () => {
   assert.equal(exec.to, '0xTO')
 })
 
-await test('P1-3: sim falls back to zero address when only contract_address set', async () => {
+await test('P1-3: sim uses contract_address as final fallback (parity with executor)', async () => {
   const intent = { id: 'p1c', contract_address: '0xCA', value: '0' }
   const sim = resolveSimFields(intent)
-  assert.equal(sim.to, '0x0000000000000000000000000000000000000000',
-    'sim ignores contract_address and uses zero address — known gap')
+  assert.equal(sim.to, '0xCA', 'sim and executor now both use contract_address as final fallback')
 })
 
 await test('P1-4: executor uses contract_address as final fallback', async () => {
@@ -225,15 +225,19 @@ await test('P1-10: data absent — both return undefined', async () => {
   assert.equal(exec.data, undefined)
 })
 
-await test('P1-11: executor resolves gas_limit to BigInt gas field', async () => {
+await test('P1-11: both resolve gas_limit to BigInt gas field', async () => {
   const intent = { id: 'p1k', contract_address: '0x1', gas_limit: '300000' }
+  const sim = resolveSimFields(intent)
   const exec = resolveExecFields(intent)
+  assert.equal(sim.gas, 300000n)
   assert.equal(exec.gas, 300000n)
 })
 
-await test('P1-12: executor has no gas field when gas_limit absent', async () => {
+await test('P1-12: both have no gas field when gas_limit absent', async () => {
   const intent = { id: 'p1l', contract_address: '0x1' }
+  const sim = resolveSimFields(intent)
   const exec = resolveExecFields(intent)
+  assert.equal(sim.gas, undefined)
   assert.equal(exec.gas, undefined)
 })
 
@@ -443,6 +447,20 @@ await test('P4-9: executing → armed is valid (requeue on timing/dry-run)', asy
   const db = createMockDb([{ id: 't9', status: INTENT_STATES.EXECUTING, user_id: 'u1' }])
   await assert.doesNotReject(() =>
     transitionIntent(db, 't9', INTENT_STATES.EXECUTING, INTENT_STATES.ARMED),
+  )
+})
+
+await test('P4-10: armed → executing is now valid in TRANSITIONS map (GAP-4 fixed)', async () => {
+  const db = createMockDb([{ id: 't10', status: INTENT_STATES.ARMED, user_id: 'u1' }])
+  await assert.doesNotReject(() =>
+    transitionIntent(db, 't10', INTENT_STATES.ARMED, INTENT_STATES.EXECUTING),
+  )
+})
+
+await test('P4-11: executing_simulation → armed is valid (NOT_READY requeue, GAP-3 fixed)', async () => {
+  const db = createMockDb([{ id: 't11', status: INTENT_STATES.EXECUTING_SIM, user_id: 'u1' }])
+  await assert.doesNotReject(() =>
+    transitionIntent(db, 't11', INTENT_STATES.EXECUTING_SIM, INTENT_STATES.ARMED),
   )
 })
 
@@ -731,35 +749,28 @@ await test('P8-5: nonceTracker.clear removes address', () => {
 console.log('\n─── Documented parity gaps ──────────────────────────────────────────')
 
 gap(
-  'GAP-1: `to` zero-address fallback in simulator',
-  'simulator.js:137 falls back to 0x0000...0000 when mint_contract_address and to are absent. ' +
-  'executor.js:232 falls back to contract_address. ' +
-  'Impact: if an intent has contract_address but no mint_contract_address/to, sim sends to wrong address. ' +
-  'Fix: update simulator.js `to` resolution to include contract_address as third option.',
+  'GAP-1: FIXED — sim `to` field now matches executor',
+  'simulator.js now resolves: mint_contract_address → to → contract_address → zero (same as executor). ' +
+  'P1-3 and P1-4 confirm parity.',
 )
 
 gap(
-  'GAP-2: gas_limit ignored by simulator',
-  'executor.js:237 reads intent.gas_limit and passes as `gas` in baseTx. ' +
-  'simulator.js never reads gas_limit. ' +
-  'Impact: sim succeeds with lower gas than executor will use; gas-sensitive contracts may behave differently. ' +
-  'Fix: pass gas_limit through in simulateIntent tx build.',
+  'GAP-2: FIXED — simulator now passes gas_limit through',
+  'simulator.js now reads intent.gas_limit and passes as `gas` in sendTransaction (matching executor.js). ' +
+  'P1-11 confirms both paths resolve gas_limit identically.',
 )
 
 gap(
-  'GAP-3: NOT_READY outcome → simulated_failure (no requeue)',
-  'sim-executor.js line: succeeded = outcome === SUCCESS; all other outcomes → SIM_FAILED. ' +
-  'If a timing-gated intent enters the sim path early, it is permanently marked simulated_failure. ' +
-  'Executor handles this differently: reverts to armed for requeue. ' +
-  'Fix: in sim-executor, NOT_READY outcome should requeue to armed instead of failing.',
+  'GAP-3: FIXED — NOT_READY in sim now requeues to armed',
+  'sim-executor.js now checks result.outcome === NOT_READY before the succeeded/failed branch. ' +
+  'On NOT_READY: inserts sim_requeue event and transitions executing_simulation → armed. ' +
+  'P4-11 confirms executing_simulation → armed is now a valid transition.',
 )
 
 gap(
-  'GAP-4: armed → executing not in TRANSITIONS map',
-  'TRANSITIONS map (queue.js:41) does not include ARMED → EXECUTING. ' +
-  'executor.js claimIntent bypasses transitionIntent and does a direct DB update. ' +
-  'This means the live executor path is invisible to the state machine validator. ' +
-  'Note: by design (atomic CAS claim), but creates a documentation/audit gap.',
+  'GAP-4: FIXED — armed → executing added to TRANSITIONS map',
+  'queue.js TRANSITIONS now includes ARMED → EXECUTING, making the live executor claim path ' +
+  'visible to the state machine validator. P4-10 confirms the transition is accepted.',
 )
 
 // ─── Summary ──────────────────────────────────────────────────────────────────

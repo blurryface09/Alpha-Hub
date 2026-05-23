@@ -134,10 +134,11 @@ export async function simulateIntent(intent, options = {}) {
   })
 
   // ── Phase 4: Build tx payload ─────────────────────────────────────────────
-  const to = intent.mint_contract_address || intent.to
+  const to = intent.mint_contract_address || intent.to || intent.contract_address
     || '0x0000000000000000000000000000000000000000'
   const value = BigInt(intent.mint_price || intent.value || '0')
   const data = intent.call_data || intent.data || undefined
+  const gas = intent.gas_limit ? BigInt(intent.gas_limit) : undefined
 
   replay.record('prepare', 'Transaction payload built', {
     to,
@@ -178,6 +179,7 @@ export async function simulateIntent(intent, options = {}) {
         to,
         value,
         data,
+        ...(gas !== undefined ? { gas } : {}),
         nonce: attempt,
         ...currentGasParams,
       })
