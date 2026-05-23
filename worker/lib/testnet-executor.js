@@ -283,7 +283,7 @@ export async function executeTestnetIntent(supabase, queuedIntent) {
     const contractAddress = intent.mint_contract_address || intent.to || intent.contract_address
     if (!contractAddress) throw new Error('No contract address on intent')
 
-    const valueWei  = BigInt(intent.mint_price || intent.max_mint_price || intent.value || '0')
+    const valueWei  = BigInt(intent.mint_price || intent.value || '0')
     const txData    = intent.call_data || intent.data || intent.calldata || intent.tx_data || '0x'
     const gasLimit  = intent.gas_limit ? BigInt(intent.gas_limit) : undefined
 

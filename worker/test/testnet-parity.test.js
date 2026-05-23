@@ -47,7 +47,7 @@ function resolveSimTo(intent) {
 
 /** How testnet-executor.js calculates value (post GAP-T2 fix) */
 function resolveTestnetValue(intent) {
-  return BigInt(intent.mint_price || intent.max_mint_price || intent.value || '0')
+  return BigInt(intent.mint_price || intent.value || '0')
 }
 
 /** How simulator.js and executor.js calculate value */
@@ -138,25 +138,24 @@ function resolveSimGas(intent) {
 }
 
 {
-  // Missing mint_price — testnet falls back to max_mint_price (unique to testnet); sim falls back to value
-  const intent = { max_mint_price: '1000000000000000', value: '1000000000000000' }
+  // value fallback: both read intent.value when mint_price is absent
+  const intent = { value: '1000000000000000' }
   const testnetFallback = resolveTestnetValue(intent)
   const simFallback     = resolveSimValue(intent)
 
-  assert.equal(testnetFallback, 1000000000000000n, 'testnet correctly reads max_mint_price as wei string')
-  assert.equal(simFallback,     1000000000000000n, 'sim correctly reads value as wei string')
-  console.log('✓ [T2] Fallback fields: testnet reads max_mint_price, sim reads value — both correct as wei strings')
+  assert.equal(testnetFallback, 1000000000000000n, 'testnet reads value as wei string')
+  assert.equal(simFallback,     1000000000000000n, 'sim reads value as wei string')
+  assert.equal(testnetFallback, simFallback, 'both agree on value fallback')
+  console.log('✓ [T2] Both fall back to intent.value correctly')
 }
 
 {
-  // Testnet-only fallback: max_mint_price (sim doesn't read this field)
-  const intent = { max_mint_price: '500000000000000' } // no mint_price, no value
-  const testnetFallback = resolveTestnetValue(intent)
-  const simFallback     = resolveSimValue(intent)
-
-  assert.equal(testnetFallback, 500000000000000n, 'testnet reads max_mint_price wei correctly')
-  assert.equal(simFallback,     0n,               'sim falls back to 0 (no mint_price or value)')
-  console.log('✓ [T2] max_mint_price is testnet-only fallback; sim falls back to 0 when absent')
+  // max_mint_price is NOT in the value chain — it is a cap field (ETH float format)
+  // Putting it in BigInt() would throw if stored as "0.07" (ETH float string)
+  const intent = { max_mint_price: '0.07' } // ETH float as stored by enforceSpendCap
+  const testnetValue = resolveTestnetValue(intent) // falls through to 0n
+  assert.equal(testnetValue, 0n, 'max_mint_price excluded from value chain — avoids BigInt float throw')
+  console.log('✓ [T2] max_mint_price excluded from value chain (ETH float format incompatible with direct BigInt)')
 }
 
 // ─── Section 3: GAP-T3 — data field naming ───────────────────────────────────
@@ -711,7 +710,7 @@ function resolveSimGas(intent) {
 console.log(`
 All 5 parity gaps fixed in testnet-executor.js:
   GAP-T1 FIXED: to field now reads mint_contract_address || intent.to || contract_address
-  GAP-T2 FIXED: value now reads mint_price as wei string (BigInt direct), not ETH float
+  GAP-T2 FIXED: value now reads mint_price as wei string (BigInt direct); max_mint_price excluded (ETH float format)
   GAP-T3 FIXED: data field now reads call_data || data || calldata || tx_data || '0x'
   GAP-T4 FIXED: gas_limit now passed to baseTx as gas (BigInt)
   GAP-T5 FIXED: failure path now sets strike_enabled: false
