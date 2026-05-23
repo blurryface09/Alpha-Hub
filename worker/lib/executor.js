@@ -129,6 +129,12 @@ export async function executeIntent(supabase, queuedIntent) {
   let wallet = null
   let txHash = null
   let currentNonce = null
+  // Hoisted so the catch block can include them in failure traces
+  let tracedTo = null
+  let tracedValue = null
+  let tracedGas = null
+  let tracedFn = null
+  let tracedSource = null
 
   // ── Step 1: Atomic claim ──────────────────────────────────────────────────
   log.info('claim', 'Attempting to claim intent')
@@ -229,6 +235,13 @@ export async function executeIntent(supabase, queuedIntent) {
     const data = intent.call_data || intent.data || undefined
     const gas = intent.gas_limit ? BigInt(intent.gas_limit) : undefined
 
+    // Populate trace vars for use in the catch block
+    tracedTo     = to
+    tracedValue  = value.toString()
+    tracedGas    = gas?.toString() || null
+    tracedFn     = intent.function_name || (data ? 'prewarmed' : null)
+    tracedSource = data ? 'prewarm_cache' : null
+
     const baseTx = {
       to,
       value,
@@ -242,6 +255,11 @@ export async function executeIntent(supabase, queuedIntent) {
 
     await insertEvent(supabase, intent, 'simulate', 'Broadcasting Strike transaction.', {
       chain: chainKey,
+      fn: tracedFn,
+      source: tracedSource,
+      to: to.slice(0, 10),
+      value: tracedValue,
+      gas: tracedGas,
       strategy: gasParams.strategy,
       base_fee_gwei: gasParams.baseFeeGwei,
     })
@@ -475,9 +493,10 @@ export async function executeIntent(supabase, queuedIntent) {
     await supabase.from('mint_intents').update({
       status: INTENT_STATES.FAILED,
       strike_enabled: false,
+      strike_error: message,
       simulation_status: 'failed',
       simulation_error: message,
-      last_state: 'Strike failed safely',
+      last_state: `Strike failed: ${message.slice(0, 120)}`,
       updated_at: now(),
     }).eq('id', intent.id).catch(() => null)
     await insertEvent(
@@ -485,7 +504,19 @@ export async function executeIntent(supabase, queuedIntent) {
       intent,
       'failed',
       'Strike failed safely. No duplicate transaction will be sent.',
-      { error: message, error_type: classification.type, latency_ms: latencyMs },
+      {
+        error: message,
+        raw_error: (err?.rawReason || err?.message || '').slice(0, 300),
+        error_type: classification.type,
+        fn: tracedFn,
+        source: tracedSource,
+        to: tracedTo?.slice(0, 10),
+        value: tracedValue,
+        gas: tracedGas,
+        chain: chainKey,
+        rpc: rpcLabel,
+        latency_ms: latencyMs,
+      },
     ).catch(() => null)
   }
 }

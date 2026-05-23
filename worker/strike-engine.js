@@ -388,7 +388,11 @@ async function legacyProcessIntent(supabase, queuedIntent) {
     }
     await insertEvent(supabase, intent, 'simulating', 'Mint simulation passed. Broadcasting Strike transaction.', {
       functionName: prepared.functionName,
+      source: prepared.source,
       chainId: prepared.chainId,
+      to: prepared.to?.slice(0, 10),
+      value: prepared.value,
+      gas: prepared.gas,
       rpc: selectedRpc.label,
     })
 
@@ -494,12 +498,24 @@ async function legacyProcessIntent(supabase, queuedIntent) {
     await supabase.from('mint_intents').update({
       status: 'failed',
       strike_enabled: false,
+      strike_error: message,
       simulation_status: 'failed',
       simulation_error: message,
-      last_state: 'Strike failed safely',
+      last_state: `Strike failed: ${message.slice(0, 120)}`,
       updated_at: new Date().toISOString(),
     }).eq('id', intent.id).catch(() => null)
-    await insertEvent(supabase, intent, 'failed', 'Strike failed safely. No duplicate transaction will be sent.', { error: message }).catch(() => null)
+    await insertEvent(supabase, intent, 'failed', 'Strike failed safely. No duplicate transaction will be sent.', {
+      error: message,
+      raw_error: (error?.rawReason || error?.message || '').slice(0, 300),
+      fn: prepared?.functionName,
+      source: prepared?.source,
+      to: prepared?.to?.slice(0, 10),
+      value: prepared?.value,
+      gas: prepared?.gas,
+      chain,
+      rpc: selectedRpc?.label,
+      prepare_latency_ms: prepareLatencyMs,
+    }).catch(() => null)
     legacyLog('failed', intent.id, message)
   }
 }
