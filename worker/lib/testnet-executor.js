@@ -280,16 +280,18 @@ export async function executeTestnetIntent(supabase, queuedIntent) {
 
     // ── Prepare transaction ───────────────────────────────────────────────
     profiler.phase('prepare')
-    const contractAddress = intent.contract_address ?? intent.mint_contract_address
+    const contractAddress = intent.mint_contract_address || intent.to || intent.contract_address
     if (!contractAddress) throw new Error('No contract address on intent')
 
-    const mintPriceStr = intent.mint_price ?? intent.max_mint_price ?? '0'
-    const valueWei     = BigInt(Math.round(parseFloat(mintPriceStr) * 1e18))
+    const valueWei  = BigInt(intent.mint_price || intent.max_mint_price || intent.value || '0')
+    const txData    = intent.call_data || intent.data || intent.calldata || intent.tx_data || '0x'
+    const gasLimit  = intent.gas_limit ? BigInt(intent.gas_limit) : undefined
 
     const baseTx = {
       to:    contractAddress,
-      data:  intent.calldata ?? intent.tx_data ?? '0x',
+      data:  txData,
       value: valueWei,
+      ...(gasLimit !== undefined ? { gas: gasLimit } : {}),
     }
 
     // ── Security checks ───────────────────────────────────────────────────
@@ -459,6 +461,7 @@ export async function executeTestnetIntent(supabase, queuedIntent) {
 
     await transitionIntent(supabase, intent.id, INTENT_STATES.EXECUTING_TESTNET, INTENT_STATES.TESTNET_FAILED, {
       simulation_error: errMsg,
+      strike_enabled:   false,
       last_state:       `Testnet failed: ${errMsg.slice(0, 100)}`,
     }).catch(() => null)
 
