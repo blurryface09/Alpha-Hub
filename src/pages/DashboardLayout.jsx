@@ -3,7 +3,7 @@ import { Outlet, NavLink, useNavigate } from 'react-router-dom'
 import { motion, AnimatePresence } from 'framer-motion'
 import {
   Home, Shield, Radar, Search,
-  User, Bell, LogOut, Menu, X, Zap, Compass
+  User, Bell, LogOut, Menu, X, Zap, Compass, Activity
 } from 'lucide-react'
 import { useAccount } from 'wagmi'
 import { useAuthStore, useNotificationStore, useMonitorStore, useWalletIntelStore } from '../store'
@@ -127,6 +127,17 @@ export default function DashboardLayout() {
               <span className="badge text-[10px] px-1.5 py-0.5 rounded bg-amber-500/10 text-amber-400 border border-amber-500/20">
                 YOU
               </span>
+            </NavLink>
+          )}
+          {isAdmin && (
+            <NavLink
+              to="/monitor"
+              className={({ isActive }) => 'nav-link ' + (isActive ? 'active' : '')}
+              onClick={() => setSidebarOpen(false)}
+            >
+              <Activity size={16} />
+              <span className="flex-1">Monitor</span>
+              <span className="badge badge-cyan text-[10px]">LIVE</span>
             </NavLink>
           )}
         </nav>

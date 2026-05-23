@@ -21,6 +21,7 @@ const WhaleRadarPage = React.lazy(() => import('./pages/WhaleRadarPage'))
 const AlphaPage = React.lazy(() => import('./pages/AlphaPage'))
 const SettingsPage = React.lazy(() => import('./pages/SettingsPage'))
 const AdminPage = React.lazy(() => import('./pages/AdminPage'))
+const ExecutionMonitorPage = React.lazy(() => import('./pages/ExecutionMonitorPage'))
 
 function PageLoader() {
   return (
@@ -120,6 +121,7 @@ function App() {
             <Route path="alpha" element={<PremiumRoute requiredPlan="pro" featureName="Wallet forensics"><Suspense fallback={<PageLoader />}><AlphaPage /></Suspense></PremiumRoute>} />
             <Route path="settings" element={<Suspense fallback={<PageLoader />}><SettingsPage /></Suspense>} />
             <Route path="admin" element={<AdminRoute><Suspense fallback={<PageLoader />}><AdminPage /></Suspense></AdminRoute>} />
+            <Route path="monitor" element={<AdminRoute><Suspense fallback={<PageLoader />}><ExecutionMonitorPage /></Suspense></AdminRoute>} />
           </Route>
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
