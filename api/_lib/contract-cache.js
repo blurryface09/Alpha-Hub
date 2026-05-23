@@ -102,7 +102,8 @@ export async function loadCachedExecution(contract, chain, supabase) {
       source:        'db_cache',
       successCount:  data.success_count || 1,
       lastLatencyMs: data.last_latency_ms,
-      at:            new Date(data.last_success_at).getTime(),
+      // Fallback to now if last_success_at is missing — avoids instant expiry on new Date(null)
+      at:            data.last_success_at ? new Date(data.last_success_at).getTime() : Date.now(),
     }
     execCache.set(cacheKey(contract, chain), entry)
     return entry

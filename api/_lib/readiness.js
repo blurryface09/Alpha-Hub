@@ -11,7 +11,7 @@
  *  < 40  not_ready
  */
 
-import { getCachedAbi, getCachedExecution, getAvgLatency } from './contract-cache.js'
+import { getCachedAbi, getCachedExecution, getCachedProbeResult, getAvgLatency } from './contract-cache.js'
 import { getRpcHealth } from './rpc.js'
 
 export const READINESS_STATUS = {
@@ -114,6 +114,20 @@ export function computeReadiness(contract, chain) {
   if (cacheFresh) score += W.cache_fresh
   if (staleCache) warnings.push('Execution cache stale — auto-refresh triggered')
 
+  // ── 6. Live probe state (informational — no score contribution) ──────────────
+  // Probe cache has 15min TTL. A negative state means the last gas simulation failed
+  // for a known reason — surface it as a warning so the UI can show it.
+  const PROBE_NEGATIVE = new Set(['not_started', 'paused', 'sold_out', 'allowlist_only',
+    'unsupported_execution', 'wrong_function', 'proof_unavailable', 'wallet_not_eligible'])
+  const probe = contractOk ? getCachedProbeResult(contract, chain) : null
+  const probeNegative = probe && PROBE_NEGATIVE.has(probe.execution_status)
+  checks.probe_state = {
+    pass:   !probeNegative,
+    label:  'Contract state',
+    detail: probe ? probe.execution_status : 'Not probed',
+  }
+  if (probeNegative) warnings.push(`Contract state: ${probe.execution_status}`)
+
   score = Math.min(100, Math.max(0, score))
   const status = score >= 75
     ? READINESS_STATUS.EXECUTION_READY
@@ -122,13 +136,14 @@ export function computeReadiness(contract, chain) {
       : READINESS_STATUS.NOT_READY
 
   console.log('[execution-ready] readiness_computed', {
-    contract:   contract?.slice(0, 10),
+    contract:    contract?.slice(0, 10),
     chain,
     score,
     status,
-    fn:         exec?.functionName || null,
-    stale:      staleCache,
-    rpc:        { total: rpcHealth.length, healthy: healthyRpcs.length },
+    fn:          exec?.functionName || null,
+    stale:       staleCache,
+    probe_state: probe?.execution_status || null,
+    rpc:         { total: rpcHealth.length, healthy: healthyRpcs.length },
   })
 
   return {
@@ -139,6 +154,7 @@ export function computeReadiness(contract, chain) {
     blockers,
     warnings,
     staleCache,
+    probeState:    probe?.execution_status || null,
     functionName:  exec?.functionName  || null,
     gasEstimate:   exec?.gas           || null,
     successCount:  exec?.successCount  || 0,

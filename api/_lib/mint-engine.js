@@ -758,9 +758,11 @@ export async function prepareMintTransaction(body, _clientOverride = null, _supa
   // Warm in-memory cache from Supabase on cold start (no-op if already warm or no client)
   if (_supabase) await loadCachedExecution(contract, chain, _supabase)
 
-  // Cache fast path: if we know which function worked before, skip bytecode+ABI+iteration
+  // Cache fast path: if we know which function worked before, skip bytecode+ABI+iteration.
+  // Skip for SeaDrop: the fast path always uses to=contract and common_signature ABI which
+  // are both wrong for SeaDrop — gas estimation would fail and fall through anyway.
   const cachedExec = getCachedExecution(contract, chain)
-  if (cachedExec) {
+  if (cachedExec && cachedExec.source !== 'seadrop') {
     // Prefer fallback candidate (reconstructs correct args for current quantity/wallet)
     const fastCandidate = fallbackCandidates(quantity, walletAddress).find(c => c.functionName === cachedExec.functionName)
     if (fastCandidate) {

@@ -24,6 +24,7 @@ import {
   syncNonceAfterFailure,
   waitForReceiptWithRecovery,
 } from './tx-resilience.js'
+import { invalidateCachedExecution } from '../../api/_lib/contract-cache.js'
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -452,6 +453,13 @@ export async function executeIntent(supabase, queuedIntent) {
         last_state: 'Strike transaction confirmed',
       }).catch(() => null)
     } else if (recovery.status === 'reverted' || recovery.status === 'dropped') {
+      if (recovery.status === 'reverted') {
+        // Cached function/gas may be wrong — force fresh detection next time
+        invalidateCachedExecution(
+          intent.contract_address || intent.to || intent.mint_contract_address,
+          chainKey,
+        )
+      }
       await transitionIntent(supabase, intent.id, INTENT_STATES.PENDING, INTENT_STATES.FAILED, {
         tx_hash: txHash,
         strike_enabled: false,
