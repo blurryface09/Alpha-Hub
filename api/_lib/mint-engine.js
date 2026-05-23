@@ -193,6 +193,9 @@ function classifyExecutionStatus(error, { seaDropError = null } = {}) {
   if (seaDropError && !error) return 'router_required'
   const msg = String(error?.shortMessage || error?.message || error || '').toLowerCase()
   if (msg.includes('insufficient funds') || msg.includes('exceeds the balance') || msg.includes('exceeds balance') || msg.includes('total cost')) return 'live'
+  // Payment mismatch: contract is live but value sent is wrong — treat as live so the probe
+  // cache is not poisoned when prewarm runs with mintPrice=0
+  if (msg.includes('incorrect payment') || msg.includes('incorrectpayment') || msg.includes('wrong value') || msg.includes('incorrect value') || msg.includes('msg.value') || msg.includes('wrong payment')) return 'live'
   // Allowlist-specific states — check before generic seadrop/allowlist catches
   if (msg.includes('seadrop proof unavailable') || msg.includes('proof could not be fetched')) return 'proof_unavailable'
   if (msg.includes('seadrop wallet not eligible') || msg.includes('not on the allowlist') || msg.includes('wallet not eligible') || msg.includes('not in the on-chain allowlist')) return 'wallet_not_eligible'
@@ -211,7 +214,10 @@ function classifyExecutionStatus(error, { seaDropError = null } = {}) {
   if (msg.includes('max supply') || msg.includes('sold out') || msg.includes('exceeds max') || msg.includes('supply exceeded') || msg.includes('max per wallet') || msg.includes('already minted') || msg.includes('max mint') || msg.includes('limit reached')) return 'sold_out'
   if (msg.includes('function') || msg.includes('selector') || msg.includes('unknown mint') || msg.includes('no standard mint')) return 'wrong_function'
   if (msg.includes('rpc') || msg.includes('fetch failed') || msg.includes('network error') || msg.includes('econnrefused') || msg.includes('etimedout') || msg.includes('timeout')) return 'error'
-  return 'paused'
+  // Unknown revert: contract rejected the call for an unrecognized reason.
+  // Use 'not_started' rather than 'paused' — the most common cause is the mint not being open yet.
+  if (msg.includes('revert') || msg.includes('execution reverted')) return 'not_started'
+  return 'unsupported_execution'
 }
 
 function publicClient(chain, rpcUrl, executionProfile) {
@@ -748,6 +754,9 @@ export async function prepareMintTransaction(body, _clientOverride = null, _supa
   const quantity = BigInt(Math.max(1, Number(body.quantity || body.max_mint || 1)))
   const value = parseEther(cleanPrice(body.mintPrice || body.mint_price || body.price)) * quantity
   const maxSpend = spendLimitWei(body)
+
+  // Warm in-memory cache from Supabase on cold start (no-op if already warm or no client)
+  if (_supabase) await loadCachedExecution(contract, chain, _supabase)
 
   // Cache fast path: if we know which function worked before, skip bytecode+ABI+iteration
   const cachedExec = getCachedExecution(contract, chain)
@@ -1444,8 +1453,13 @@ export async function handleMintAction(req, res, action) {
         probe_age_s:      probeResult ? Math.round((Date.now() - probeResult.at) / 1000) : null,
       })
 
-      // Auto-trigger background prewarm when stale or function not yet detected
+      // Auto-trigger background prewarm when stale or function not yet detected.
+      // Only fire when we don't already have a definitive positive probe result — avoids
+      // running value=0 gas estimation against contracts that are live with a price, which
+      // would overwrite a valid 'live' probe status with a spurious failure.
+      const positiveProbe = probeResult && ['live', 'not_started', 'allowlist_ready', 'captured_ready'].includes(probeResult.execution_status)
       if (contract && SUPPORTED_EXECUTION_CHAINS.has(chain) &&
+          !positiveProbe &&
           (readiness.staleCache || !readiness.checks.function_cached?.pass)) {
         prepareMintTransaction({
           chain,

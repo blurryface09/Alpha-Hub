@@ -222,8 +222,8 @@ export async function executeIntent(supabase, queuedIntent) {
     }
 
     // ── Step 7: Build transaction ───────────────────────────────────────────
-    const to = intent.mint_contract_address || intent.to
-    if (!to) throw new Error('Intent has no contract address (mint_contract_address / to)')
+    const to = intent.mint_contract_address || intent.to || intent.contract_address
+    if (!to) throw new Error('Intent has no contract address (mint_contract_address / to / contract_address)')
 
     const value = BigInt(intent.mint_price || intent.value || '0')
     const data = intent.call_data || intent.data || undefined

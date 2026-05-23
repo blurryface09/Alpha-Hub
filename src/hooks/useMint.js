@@ -12,8 +12,6 @@ const CHAIN_MAP = {
   'base-sepolia': baseSepolia.id,
 }
 
-const MINT_FUNCTIONS = ['mint', 'publicMint', 'mintPublic', 'safeMint', 'mintNFT', 'claim', 'freeMint']
-
 // Returns { text, fault } — fault is 'collection' | 'wallet' | 'app'
 function classifyMintError(message) {
   const msg = (message || '').toLowerCase()
@@ -73,10 +71,6 @@ function classifyMintError(message) {
   }
 
   return { text: message || 'Mint failed. Please try again.', fault: 'app' }
-}
-
-function isFunctionNotFound(msg) {
-  return /function not found|unknown function|no function|cannot find|not found in abi/i.test(msg || '')
 }
 
 export function useMint() {
@@ -190,42 +184,9 @@ export function useMint() {
       } else {
         const firstErr = firstResult?.error || ''
         const serverReason = firstResult?.reason || ''
-        if (!isFunctionNotFound(firstErr)) {
-          // Non-function-detection error — surface immediately with context
-          const classified = classifyMintError(firstErr || 'Mint preparation failed')
-          console.debug('[mint-exec] error', { stage: 'prepare', reason: firstErr, serverReason, fault: classified.fault, httpStatus: firstResponse.status })
-          throw Object.assign(new Error(classified.text), { fault: classified.fault })
-        }
-        // API could not detect function — probe each candidate name explicitly
-        for (const funcName of MINT_FUNCTIONS) {
-          console.debug('[mint-exec] candidate_probe', { fn: funcName })
-          try {
-            const res = await fetch('/api/mint/prepare', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-              body: JSON.stringify({ ...apiParams, functionName: funcName }),
-              signal: AbortSignal.timeout(10000),
-            })
-            const result = await res.json().catch(() => ({}))
-            if (!res.ok || result?.ok === false || !result?.preparedTransaction) {
-              const errMsg = result?.error || ''
-              if (isFunctionNotFound(errMsg)) continue
-              const classified = classifyMintError(errMsg || 'Mint preparation failed')
-              console.debug('[mint-exec] error', { stage: 'candidate_probe', fn: funcName, reason: errMsg, serverReason: result?.reason || '', fault: classified.fault })
-              throw Object.assign(new Error(classified.text), { fault: classified.fault })
-            }
-            prepared = result
-            console.debug('[mint-exec] candidate_ok', { fn: funcName, duration_ms: Date.now() - benchStart })
-            break
-          } catch (e) {
-            if (isFunctionNotFound(e.message)) continue
-            throw e
-          }
-        }
-        if (!prepared) {
-          console.debug('[mint-exec] error', { stage: 'candidate_probe', reason: 'all_candidates_failed' })
-          throw new Error('Contract mint function not found. Check contract address or try manual mint.')
-        }
+        const classified = classifyMintError(firstErr || 'Mint preparation failed')
+        console.debug('[mint-exec] error', { stage: 'prepare', reason: firstErr, serverReason, fault: classified.fault, httpStatus: firstResponse.status })
+        throw Object.assign(new Error(classified.text), { fault: classified.fault })
       }
 
       const tx = prepared.preparedTransaction

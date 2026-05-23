@@ -320,14 +320,16 @@ async function legacyProcessIntent(supabase, queuedIntent) {
     const rpcCandidates = orderRpcCandidates(chain, executionProfile, CHAIN_RPCS[chain] || [])
     if (!rpcCandidates.length) throw new Error('Strike RPC is not configured for this chain.')
 
-    // Fast path: use prewarmed call_data + gas_limit if available (skips RPC function detection)
+    // Fast path: use prewarmed call_data + gas_limit if available (skips RPC function detection).
+    // 'to' may be the SeaDrop router (not the NFT contract) — use intent.to when set.
+    // 'value' is the exact wei amount stored by prewarm — required for paid mints.
     if (intent.call_data) {
       selectedRpc = rpcCandidates[0]
       const startedAt = Date.now()
       prepared = {
-        to: intent.contract_address,
+        to: intent.to || intent.contract_address,
         data: intent.call_data,
-        value: '0',
+        value: intent.value || '0',
         gas: intent.gas_limit || null,
         functionName: intent.function_name || 'prewarmed',
         source: 'prewarm_cache',
@@ -337,6 +339,8 @@ async function legacyProcessIntent(supabase, queuedIntent) {
       prepareLatencyMs = Date.now() - startedAt
       workerLog('prewarm', 'Using prewarmed call_data — skipping function detection', {
         intent_id: intent.id,
+        to: prepared.to?.slice(0, 10),
+        value: prepared.value,
         gas: intent.gas_limit,
         rpc: selectedRpc?.label,
       })

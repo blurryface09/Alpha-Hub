@@ -107,12 +107,17 @@ export async function prewarmIntent(supabase, intent, opts = {}) {
       confidence:  prewarmStatus.confidence,
     })
 
-    // Persist call_data + gas_limit so executor skips detection at T=0
+    // Persist call_data + gas_limit + to + value so executor has everything at T=0 without
+    // re-running prepareMintTransaction. 'to' may differ from contract_address for SeaDrop
+    // (router address). 'value' is the exact wei amount required (computed from getPublicDrop).
     await supabase.from('mint_intents').update({
-      call_data:  prepared.data,
-      gas_limit:  prepared.gas,
-      last_state: `Prewarmed: ${prepared.functionName} (${latencyMs}ms, ${prewarmStatus.confidence}% confidence)`,
-      updated_at: new Date().toISOString(),
+      call_data:     prepared.data,
+      gas_limit:     prepared.gas,
+      to:            prepared.to,
+      value:         prepared.value,
+      function_name: prepared.functionName,
+      last_state:    `Prewarmed: ${prepared.functionName} (${latencyMs}ms, ${prewarmStatus.confidence}% confidence)`,
+      updated_at:    new Date().toISOString(),
     }).eq('id', intent.id).catch(() => null)
 
     await supabase.from('mint_execution_events').insert({

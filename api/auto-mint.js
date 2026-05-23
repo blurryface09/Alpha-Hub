@@ -45,6 +45,7 @@ const SEADROP_ADDRESS = '0x00005EA00Ac477B1030CE78506496e8C2dE24bf5'
 const SEADROP_ABI = parseAbi([
   'function mintPublic(address nftContract, address feeRecipient, address minterIfNotPayer, uint256 quantity) payable',
   'function getAllowedFeeRecipients(address nftContract) view returns (address[])',
+  'function getPublicDrop(address nftContract) view returns (uint80 mintPrice, uint48 startTime, uint48 endTime, uint16 maxMintablePerWallet, uint16 feeBps, bool restrictFeeRecipients)',
 ])
 const SEADROP_FEE_RECIPIENT_FALLBACK = '0x0000a26b00c1F0DF003000390027140000fAa719'
 
@@ -196,23 +197,38 @@ async function prepareMintTransaction(project, account) {
     )
     if (seadropFn) {
       let feeRecipient = SEADROP_FEE_RECIPIENT_FALLBACK
+      let seadropActive = false
       try {
         const seadropPc = createPublicClient({ chain: chainCfg.chain, transport: fallbackTransport(chainKey) })
-        const recipients = await seadropPc.readContract({
-          address: SEADROP_ADDRESS,
-          abi: SEADROP_ABI,
-          functionName: 'getAllowedFeeRecipients',
-          args: [project.contract_address],
-        })
+        const [recipients, drop] = await Promise.all([
+          seadropPc.readContract({
+            address: SEADROP_ADDRESS,
+            abi: SEADROP_ABI,
+            functionName: 'getAllowedFeeRecipients',
+            args: [project.contract_address],
+          }),
+          seadropPc.readContract({
+            address: SEADROP_ADDRESS,
+            abi: SEADROP_ABI,
+            functionName: 'getPublicDrop',
+            args: [project.contract_address],
+          }),
+        ])
         if (recipients?.[0]) feeRecipient = recipients[0]
+        const nowTs = BigInt(Math.floor(Date.now() / 1000))
+        const startTime = BigInt(drop[1])
+        const endTime   = BigInt(drop[2])
+        seadropActive = startTime > 0n && startTime <= nowTs && (endTime === 0n || endTime > nowTs)
       } catch {}
-      attempts.push({
-        abi: SEADROP_ABI,
-        to: SEADROP_ADDRESS,
-        functionName: 'mintPublic',
-        args: [project.contract_address, feeRecipient, account.address, quantity],
-        source: 'seadrop.mintPublic',
-      })
+      if (seadropActive) {
+        attempts.push({
+          abi: SEADROP_ABI,
+          to: SEADROP_ADDRESS,
+          functionName: 'mintPublic',
+          args: [project.contract_address, feeRecipient, account.address, quantity],
+          source: 'seadrop.mintPublic',
+        })
+      }
     } else {
       const mintFn = findMintFn(verifiedAbi)
       if (mintFn) {
