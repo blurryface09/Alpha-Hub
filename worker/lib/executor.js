@@ -130,6 +130,9 @@ export async function executeIntent(supabase, queuedIntent) {
   let wallet = null
   let txHash = null
   let currentNonce = null
+  // Tracks intent state so the catch block can call transitionIntent with the correct fromState.
+  // Initialized to EXECUTING because claim (outside try) must succeed before try runs.
+  let currentState = INTENT_STATES.EXECUTING
   // Hoisted so the catch block can include them in failure traces
   let tracedTo = null
   let tracedValue = null
@@ -362,12 +365,19 @@ export async function executeIntent(supabase, queuedIntent) {
             error: errMsg,
           }).catch(() => null)
 
-          // Mark as retrying in DB
-          await supabase.from('mint_intents').update({
-            status: INTENT_STATES.RETRYING,
-            last_state: `Retry ${attempt + 1}: ${classification.type}`,
-            updated_at: now(),
-          }).eq('id', intent.id).catch(() => null)
+          // Mark as retrying via state machine (first retry: EXECUTING → RETRYING;
+          // subsequent retries: already in RETRYING, just update last_state)
+          if (attempt === 0) {
+            await transitionIntent(supabase, intent.id, INTENT_STATES.EXECUTING, INTENT_STATES.RETRYING, {
+              last_state: `Retry ${attempt + 1}: ${classification.type}`,
+            }).catch(() => null)
+            currentState = INTENT_STATES.RETRYING
+          } else {
+            await supabase.from('mint_intents').update({
+              last_state: `Retry ${attempt + 1}: ${classification.type}`,
+              updated_at: now(),
+            }).eq('id', intent.id).catch(() => null)
+          }
         },
       },
     )
@@ -399,6 +409,7 @@ export async function executeIntent(supabase, queuedIntent) {
       strike_enabled: false,
       last_state: 'Transaction pending on-chain',
     })
+    currentState = INTENT_STATES.PENDING
     await insertEvent(supabase, intent, 'pending', 'Strike transaction submitted and pending confirmation.', {
       tx_hash: txHash,
       latency_ms: latencyMs,
@@ -498,15 +509,13 @@ export async function executeIntent(supabase, queuedIntent) {
       message: 'Transaction recovery recorded after execution failure.',
     }).catch(() => null)
     await recordAttempt(supabase, intent, 'failed', { error_message: message }).catch(() => null)
-    await supabase.from('mint_intents').update({
-      status: INTENT_STATES.FAILED,
+    await transitionIntent(supabase, intent.id, currentState, INTENT_STATES.FAILED, {
       strike_enabled: false,
       strike_error: message,
       simulation_status: 'failed',
       simulation_error: message,
       last_state: `Strike failed: ${message.slice(0, 120)}`,
-      updated_at: now(),
-    }).eq('id', intent.id).catch(() => null)
+    }).catch(() => null)
     await insertEvent(
       supabase,
       intent,
