@@ -445,12 +445,10 @@ function resolveTestnetGas(intent) {
 // ─── Section 9: GAP-L1 — dryRunIntent `to` field ────────────────────────────
 
 {
-  // dryRunIntent logs: to: intent.mint_contract_address || intent.to
-  // Missing || intent.contract_address — inconsistent with the actual baseTx resolution
-  // This is logging only, but can mislead debugging
+  // GAP-L1 FIXED: dryRunIntent to field now includes || contract_address
 
   function dryRunLoggedTo(intent) {
-    return intent.mint_contract_address || intent.to // as written in dryRunIntent
+    return intent.mint_contract_address || intent.to || intent.contract_address // fixed
   }
 
   function actualBaseTxTo(intent) {
@@ -458,10 +456,10 @@ function resolveTestnetGas(intent) {
   }
 
   const intent = { contract_address: '0xOnlyContractAddr', mint_contract_address: undefined, to: undefined }
-  assert.equal(dryRunLoggedTo(intent),   undefined,         'dryRunIntent logs undefined — misleading')
-  assert.equal(actualBaseTxTo(intent),   '0xOnlyContractAddr', 'actual baseTx would use contract_address')
-  assert.notEqual(dryRunLoggedTo(intent), actualBaseTxTo(intent), 'GAP-L1: dry run log diverges from actual tx')
-  console.log('✓ [GAP-L1] Documented: dryRunIntent to field missing || contract_address (logging only)')
+  assert.equal(dryRunLoggedTo(intent),  '0xOnlyContractAddr', 'dryRunIntent now logs contract_address correctly')
+  assert.equal(actualBaseTxTo(intent),  '0xOnlyContractAddr', 'baseTx resolves to contract_address')
+  assert.equal(dryRunLoggedTo(intent), actualBaseTxTo(intent), 'GAP-L1 fixed: dry run log matches actual tx')
+  console.log('✓ [GAP-L1] FIXED: dryRunIntent to field now matches baseTx resolution')
 }
 
 // ─── Section 10: Safety gate — LIVE_EXECUTION_ENABLED ────────────────────────
@@ -662,7 +660,7 @@ Live executor field resolution: executor.js is the reference — sim and testnet
 GAP-L4 FIXED: data field now reads call_data || data || calldata || tx_data (matches testnet)
 
 Remaining documented gaps (structural, not functional breakages):
-  GAP-L1: dryRunIntent to field missing || contract_address (logging only — does not affect tx)
+  GAP-L1 FIXED: dryRunIntent to field now reads mint_contract_address || to || contract_address
   GAP-L2: Catch block uses raw .update() for FAILED state (bypasses transitionIntent validation)
   GAP-L3: onRetry sets RETRYING via raw .update() (bypasses transitionIntent validation)
   SIM-GAP: sim data chain still misses calldata/tx_data backward-compat (sim has no real-tx risk)

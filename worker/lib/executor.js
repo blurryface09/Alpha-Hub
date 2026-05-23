@@ -95,7 +95,7 @@ export async function dryRunIntent(intent, gasParams, wallet) {
   const log = createLogger(intent.id, intent.user_id)
   log.info('execute', '[DRY RUN] Would send transaction', {
     dry_run: true,
-    to: intent.mint_contract_address || intent.to,
+    to: intent.mint_contract_address || intent.to || intent.contract_address,
     value: intent.mint_price || intent.value || '0',
     chain: normaliseChain(intent.chain),
     wallet_address: wallet?.address,
