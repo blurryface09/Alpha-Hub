@@ -143,7 +143,7 @@ export async function sweepOrphanedExecutions(supabase, timeoutMs = ORPHAN_TIMEO
         orphaned_since:  intent.updated_at,
         timeout_ms:      timeoutMs,
       },
-    }).catch(() => null)
+    }).then(r => r, () => null)
 
     log.info('recovery', 'Orphaned intent recovered', {
       intent_id:  intent.id,

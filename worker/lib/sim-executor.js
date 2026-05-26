@@ -54,13 +54,15 @@ export async function simulateArmedIntent(supabase, queuedIntent) {
         risk_level: pf.risk_level,
       })
       // Insert preflight-failed event without claiming
-      await supabase.from('mint_execution_events').insert({
-        intent_id: queuedIntent.id,
-        user_id:   queuedIntent.user_id,
-        state:     'preflight_failed',
-        message:   `Preflight blocked: ${pf.blockers.join('; ')}`,
-        metadata:  { risk_score: pf.risk_score, risk_level: pf.risk_level, blockers: pf.blockers },
-      }).catch(() => null)
+      try {
+        await supabase.from('mint_execution_events').insert({
+          intent_id: queuedIntent.id,
+          user_id:   queuedIntent.user_id,
+          state:     'preflight_failed',
+          message:   `Preflight blocked: ${pf.blockers.join('; ')}`,
+          metadata:  { risk_score: pf.risk_score, risk_level: pf.risk_level, blockers: pf.blockers },
+        })
+      } catch {}
       return null
     }
 
@@ -165,13 +167,15 @@ export async function simulateArmedIntent(supabase, queuedIntent) {
       intent_id:        intent.id,
       ms_until_execute: result.ms_until_execute,
     })
-    await supabase.from('mint_execution_events').insert({
-      intent_id: intent.id,
-      user_id:   intent.user_id,
-      state:     'sim_requeue',
-      message:   `Simulation early — timing gate opens in ${result.ms_until_execute}ms. Requeued.`,
-      metadata:  { ms_until_execute: result.ms_until_execute, in_prewarm: result.in_prewarm },
-    }).catch(() => null)
+    try {
+      await supabase.from('mint_execution_events').insert({
+        intent_id: intent.id,
+        user_id:   intent.user_id,
+        state:     'sim_requeue',
+        message:   `Simulation early — timing gate opens in ${result.ms_until_execute}ms. Requeued.`,
+        metadata:  { ms_until_execute: result.ms_until_execute, in_prewarm: result.in_prewarm },
+      })
+    } catch {}
     await transitionIntent(supabase, intent.id, INTENT_STATES.EXECUTING_SIM, INTENT_STATES.ARMED, {
       last_state: `Sim requeue — execute in ${result.ms_until_execute}ms`,
     })
@@ -209,15 +213,17 @@ export async function simulateArmedIntent(supabase, queuedIntent) {
   })
 
   // ── Summary + profile events ─────────────────────────────────────────────────
-  await supabase.from('mint_execution_events').insert({
-    intent_id: intent.id,
-    user_id:   intent.user_id,
-    state:     toState,
-    message:   succeeded
-      ? `Simulation passed. tx: ${result.tx_hash ?? 'sim-hash'}. Latency: ${result.latency_ms}ms.`
-      : `Simulation failed. Outcome: ${result.outcome}. Error: ${result.error ?? 'unknown'}.`,
-    metadata:  result.summary ?? {},
-  }).catch(() => null)
+  try {
+    await supabase.from('mint_execution_events').insert({
+      intent_id: intent.id,
+      user_id:   intent.user_id,
+      state:     toState,
+      message:   succeeded
+        ? `Simulation passed. tx: ${result.tx_hash ?? 'sim-hash'}. Latency: ${result.latency_ms}ms.`
+        : `Simulation failed. Outcome: ${result.outcome}. Error: ${result.error ?? 'unknown'}.`,
+      metadata:  result.summary ?? {},
+    })
+  } catch {}
 
   const profile = profiler.finish(result.outcome)
   recordProfile(profile)

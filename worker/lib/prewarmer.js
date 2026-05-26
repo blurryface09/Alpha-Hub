@@ -118,7 +118,7 @@ export async function prewarmIntent(supabase, intent, opts = {}) {
       function_name: prepared.functionName,
       last_state:    `Prewarmed: ${prepared.functionName} (${latencyMs}ms, ${prewarmStatus.confidence}% confidence)`,
       updated_at:    new Date().toISOString(),
-    }).eq('id', intent.id).catch(() => null)
+    }).eq('id', intent.id).then(r => r, () => null)
 
     await supabase.from('mint_execution_events').insert({
       intent_id: intent.id,
@@ -134,7 +134,7 @@ export async function prewarmIntent(supabase, intent, opts = {}) {
         confidence:  prewarmStatus.confidence,
         wallet:      walletAddress.slice(0, 10),
       },
-    }).catch(() => null)
+    }).then(r => r, () => null)
 
     return { ok: true, cacheHit: prepared.cacheHit, functionName: prepared.functionName, latencyMs, confidence: prewarmStatus.confidence }
 

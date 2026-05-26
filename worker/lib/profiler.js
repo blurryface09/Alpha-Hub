@@ -106,13 +106,15 @@ export function createProfiler(intentId = null, userId = null) {
     async persist(supabase) {
       if (!supabase || !intentId) return
       const snap = this.snapshot()
-      await supabase.from('mint_execution_events').insert({
-        intent_id: intentId,
-        user_id:   userId,
-        state:     'execution_profile',
-        message:   `Profile: ${snap.outcome ?? 'running'} | ${snap.latency_ms}ms | ${snap.retries}r | ${snap.gas_escalations}e | pattern:${snap.mint_pattern ?? '?'}`,
-        metadata:  snap,
-      }).catch(() => null)
+      try {
+        await supabase.from('mint_execution_events').insert({
+          intent_id: intentId,
+          user_id:   userId,
+          state:     'execution_profile',
+          message:   `Profile: ${snap.outcome ?? 'running'} | ${snap.latency_ms}ms | ${snap.retries}r | ${snap.gas_escalations}e | pattern:${snap.mint_pattern ?? '?'}`,
+          metadata:  snap,
+        })
+      } catch {}
     },
   }
 }

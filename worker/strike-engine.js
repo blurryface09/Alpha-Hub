@@ -495,15 +495,17 @@ async function legacyProcessIntent(supabase, queuedIntent) {
       errorMessage: message,
     })
     await recordAttempt(supabase, intent, 'failed', { error_message: message }).catch(() => null)
-    await supabase.from('mint_intents').update({
-      status: 'failed',
-      strike_enabled: false,
-      strike_error: message,
-      simulation_status: 'failed',
-      simulation_error: message,
-      last_state: `Strike failed: ${message.slice(0, 120)}`,
-      updated_at: new Date().toISOString(),
-    }).eq('id', intent.id).catch(() => null)
+    try {
+      await supabase.from('mint_intents').update({
+        status: 'failed',
+        strike_enabled: false,
+        strike_error: message,
+        simulation_status: 'failed',
+        simulation_error: message,
+        last_state: `Strike failed: ${message.slice(0, 120)}`,
+        updated_at: new Date().toISOString(),
+      }).eq('id', intent.id)
+    } catch {}
     await insertEvent(supabase, intent, 'failed', 'Strike failed safely. No duplicate transaction will be sent.', {
       error: message,
       raw_error: (error?.rawReason || error?.message || '').slice(0, 300),

@@ -1643,7 +1643,7 @@ export async function handleMintAction(req, res, action) {
           walletAddress: vault.address || vault.wallet_address,
           // Pass learned function name to skip ABI iteration
           functionName: intent.functionName || captureProfile?.mint_function || null,
-        })
+        }, null, supabase)
         console.log('[strike-prep]', { stage: 'arm_prepare_ok', contract: intent.contract_address?.slice(0, 12), chain: intent.chain, usedProfile: Boolean(captureProfile) })
       } catch (error) {
         const msg = error.rawReason ? error.message : safeMessage(error)
@@ -1745,7 +1745,7 @@ export async function handleMintAction(req, res, action) {
             ...body,
             walletAddress: walletAddress || '0x0000000000000000000000000000000000000001',
             mintPrice: body.mintPrice || body.mint_price || '0',
-          })
+          }, null, supabase)
           contractValid = true
           functionName = prepared.functionName
           estimatedGas = prepared.gas ? String(prepared.gas) : null

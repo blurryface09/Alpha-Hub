@@ -376,7 +376,7 @@ export async function executeIntent(supabase, queuedIntent) {
             await supabase.from('mint_intents').update({
               last_state: `Retry ${attempt + 1}: ${classification.type}`,
               updated_at: now(),
-            }).eq('id', intent.id).catch(() => null)
+            }).eq('id', intent.id).then(r => r, () => null)
           }
         },
       },

@@ -65,25 +65,27 @@ export async function logSigningEvent(supabase, event) {
 
   if (!supabase) return
 
-  await supabase.from('mint_execution_events').insert({
-    intent_id: intentId,
-    user_id:   userId,
-    state:     'signing_audit',
-    message,
-    metadata: {
-      action,
-      address,
-      chain:       chain ?? null,
-      tx_hash:     txHash ?? null,
-      block_number: blockNumber ?? null,
-      gas_params:  gasParams ?? null,
-      worker_id:   workerId,
-      ts:          new Date().toISOString(),
-      ...metadata,
-    },
-  }).catch(err => {
+  try {
+    await supabase.from('mint_execution_events').insert({
+      intent_id: intentId,
+      user_id:   userId,
+      state:     'signing_audit',
+      message,
+      metadata: {
+        action,
+        address,
+        chain:       chain ?? null,
+        tx_hash:     txHash ?? null,
+        block_number: blockNumber ?? null,
+        gas_params:  gasParams ?? null,
+        worker_id:   workerId,
+        ts:          new Date().toISOString(),
+        ...metadata,
+      },
+    })
+  } catch (err) {
     log.warn('audit', 'Failed to persist signing audit event', { error: err.message, action })
-  })
+  }
 }
 
 // ─── Audit trail reader ───────────────────────────────────────────────────────

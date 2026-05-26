@@ -236,13 +236,15 @@ export async function persistRpcHealth(supabase) {
   const entries  = Object.keys(snapshot).length
   if (!entries) return
 
-  await supabase.from('mint_execution_events').insert({
-    intent_id: null,
-    user_id:   null,
-    state:     'rpc_health_snapshot',
-    message:   `RPC health snapshot: ${entries} providers`,
-    metadata:  snapshot,
-  }).catch(() => null) // always advisory
+  try {
+    await supabase.from('mint_execution_events').insert({
+      intent_id: null,
+      user_id:   null,
+      state:     'rpc_health_snapshot',
+      message:   `RPC health snapshot: ${entries} providers`,
+      metadata:  snapshot,
+    })
+  } catch {} // always advisory
 }
 
 /**
