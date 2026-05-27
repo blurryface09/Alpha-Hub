@@ -170,6 +170,14 @@ export async function rpcFetch(chain, method, params = [], timeoutMs = 8000) {
 export function createViemTransport(chain) {
   return custom({
     async request({ method, params }) {
+      // eth_fillTransaction is a non-standard Geth method not supported by public RPCs.
+      // Intercept it immediately — otherwise every execution burns 8s× per fallback URL
+      // (mainnet.base.org returns "unsupported", base.llamarpc.com times out) for a total
+      // ~27s delay before eth_sendRawTransaction is ever attempted. Viem handles this
+      // error gracefully and falls back to assembling the transaction itself.
+      if (method === 'eth_fillTransaction') {
+        throw Object.assign(new Error('eth_fillTransaction not supported'), { code: -32601 })
+      }
       const { result } = await rpcFetch(chain, method, params || [])
       return result
     },
