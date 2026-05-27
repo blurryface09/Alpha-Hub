@@ -615,6 +615,44 @@ export async function executeIntent(supabase, queuedIntent) {
         strike_enabled: false,
         last_state: 'Strike transaction confirmed',
       }).catch(() => null)
+
+      // ── Telegram notification ──────────────────────────────────────────────
+      // Fire-and-forget — never let a notification failure kill the success path
+      ;(async () => {
+        try {
+          const botToken = process.env.TELEGRAM_BOT_TOKEN
+          if (!botToken) return
+          const { data: profile } = await supabase
+            .from('profiles')
+            .select('telegram_chat_id')
+            .eq('id', intent.user_id)
+            .maybeSingle()
+          const chatId = profile?.telegram_chat_id
+          if (!chatId) return
+          const CHAIN_EXPLORERS = {
+            base: 'https://basescan.org',
+            eth:  'https://etherscan.io',
+            bnb:  'https://bscscan.com',
+            apechain: 'https://apescan.io',
+          }
+          const explorerBase = CHAIN_EXPLORERS[chainKey] || 'https://basescan.org'
+          const projectLabel = intent.project_name || intent.contract_address?.slice(0, 10) || 'Strike'
+          const msg = [
+            `⚡ <b>Strike Confirmed: ${projectLabel}</b>`,
+            ``,
+            `TX: <code>${txHash}</code>`,
+            `<a href="${explorerBase}/tx/${txHash}">View on explorer →</a>`,
+          ].join('\n')
+          await fetch(`https://api.telegram.org/bot${botToken}/sendMessage`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ chat_id: chatId, text: msg, parse_mode: 'HTML', disable_web_page_preview: true }),
+          })
+        } catch (tgErr) {
+          log.warn('notify', 'Telegram notification failed (non-fatal)', { error: String(tgErr?.message || tgErr).slice(0, 80) })
+        }
+      })()
+
     } else if (recovery.status === 'reverted' || recovery.status === 'dropped') {
       if (recovery.status === 'reverted') {
         // Cached function/gas may be wrong — force fresh detection next time
