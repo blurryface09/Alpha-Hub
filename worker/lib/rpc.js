@@ -130,7 +130,25 @@ export async function rpcFetch(chain, method, params = [], timeoutMs = 8000) {
       })
       const body = await response.json().catch(() => null)
       if (!response.ok || body?.error) {
-        throw new Error(body?.error?.message || `HTTP ${response.status}`)
+        const rpcErr = body?.error
+        // Execution reverts (JSON-RPC code 3, or "execution reverted" in message) are
+        // contract-level errors — the RPC node responded correctly but the simulated
+        // call failed.  All nodes return the same result for the same deterministic call,
+        // so there is no point retrying other URLs.  Throw immediately and skip
+        // recordFailure so healthy RPCs aren't penalised for contract behaviour.
+        // This also preserves the decoded revert reason (e.g. "wrong ETH") so the
+        // executor's paid-mint detection can read it from failedFns.
+        if (rpcErr && (
+          rpcErr.code === 3 ||
+          String(rpcErr.message || '').toLowerCase().includes('execution reverted')
+        )) {
+          clearTimeout(timer)
+          const execErr = new Error(rpcErr.message || 'execution reverted')
+          if (rpcErr.data !== undefined) execErr.data = rpcErr.data
+          execErr._isExecutionRevert = true
+          throw execErr
+        }
+        throw new Error(rpcErr?.message || `HTTP ${response.status}`)
       }
       const latencyMs = Date.now() - started
       recordSuccess(url, latencyMs)
@@ -145,6 +163,10 @@ export async function rpcFetch(chain, method, params = [], timeoutMs = 8000) {
       return { result: body.result, rpcUrl: url, latencyMs, rpcIndex: index }
     } catch (error) {
       clearTimeout(timer)
+      // Execution reverts are contract-level — don't penalise the RPC or attempt
+      // other URLs (they'd return the same revert).  Bubble up immediately so the
+      // caller gets the actual revert reason instead of a timeout error.
+      if (error._isExecutionRevert) throw error
       lastError = error
       recordFailure(url)
       globalLog.warn('tick', `rpc attempt failed`, {
