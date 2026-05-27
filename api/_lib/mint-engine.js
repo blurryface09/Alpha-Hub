@@ -155,7 +155,7 @@ function safeMessage(error) {
   if (msg.includes('sale not active') || msg.includes('sale is not active') || msg.includes('not started') || msg.includes('not open') || msg.includes('mint closed') || msg.includes('mint has not') || msg.includes('minting is not') || msg.includes('paused')) return 'Mint is not open yet or has ended. Check the official mint page for the correct time.'
   if (msg.includes('allowlist') || msg.includes('not whitelisted') || msg.includes('not eligible') || msg.includes('merkle') || msg.includes('not in whitelist')) return 'Mint rejected — your wallet is not on the allowlist for this phase.'
   if (msg.includes('already minted') || msg.includes('max per wallet') || msg.includes('max mint') || msg.includes('limit reached') || msg.includes('max tokens') || msg.includes('token limit')) return 'Max mints reached — this wallet has hit the limit for this mint.'
-  if (msg.includes('max supply') || msg.includes('sold out') || msg.includes('exceeds max') || msg.includes('supply exceeded')) return 'Sold out — this mint has reached maximum supply.'
+  if (msg.includes('max supply') || msg.includes('sold out') || msg.includes('exceeds max') || msg.includes('supply exceeded') || msg.includes('supply exhausted')) return 'Sold out — this mint has reached maximum supply.'
   if (msg.includes('wrong eth') || msg.includes('msg.value') || msg.includes('wrong value') || msg.includes('incorrect value') || msg.includes('invalid price') || msg.includes('price mismatch')) return 'Wrong mint price — check the price on the official mint page.'
   if (msg.includes('execution reverted') || msg.includes('revert')) return 'Mint simulation failed — contract rejected the transaction. The mint may be closed or require an allowlist.'
   if (msg.includes('function') || msg.includes('selector') || msg.includes('unknown mint') || msg.includes('no standard mint')) return 'Could not detect the mint function. Use the official mint site or add contract details.'
@@ -211,7 +211,7 @@ function classifyExecutionStatus(error, { seaDropError = null } = {}) {
     msg.includes('public drop not configured') || msg.includes('not currently active')
   ) return 'not_started'
   if (msg.includes('allowlist') || msg.includes('not whitelisted') || msg.includes('not eligible') || msg.includes('merkle') || msg.includes('not in whitelist') || msg.includes('invalid proof') || msg.includes('proof verification')) return 'allowlist_only'
-  if (msg.includes('max supply') || msg.includes('sold out') || msg.includes('exceeds max') || msg.includes('supply exceeded') || msg.includes('max per wallet') || msg.includes('already minted') || msg.includes('max mint') || msg.includes('limit reached')) return 'sold_out'
+  if (msg.includes('max supply') || msg.includes('sold out') || msg.includes('exceeds max') || msg.includes('supply exceeded') || msg.includes('supply exhausted') || msg.includes('max per wallet') || msg.includes('already minted') || msg.includes('max mint') || msg.includes('limit reached')) return 'sold_out'
   if (msg.includes('function') || msg.includes('selector') || msg.includes('unknown mint') || msg.includes('no standard mint')) return 'wrong_function'
   if (msg.includes('rpc') || msg.includes('fetch failed') || msg.includes('network error') || msg.includes('econnrefused') || msg.includes('etimedout') || msg.includes('timeout')) return 'error'
   // Unknown revert: contract rejected the call for an unrecognized reason.

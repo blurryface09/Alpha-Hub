@@ -338,6 +338,60 @@ export async function executeIntent(supabase, queuedIntent) {
         }
       }
 
+      // ── Paid mint fallback ────────────────────────────────────────────────
+      // If all zero-value attempts failed with "wrong ETH", the contract has a
+      // non-zero mintPrice.  Read it directly and retry with the correct value.
+      if (!detectionSuccess && failedFns.some(f => f.toLowerCase().includes('wrong eth'))) {
+        try {
+          const mintPriceAbi = parseAbi(['function mintPrice() view returns (uint256)'])
+          const onChainPrice = await publicClient.readContract({
+            address: to, abi: mintPriceAbi, functionName: 'mintPrice',
+          })
+          if (onChainPrice > 0n) {
+            const paidValue = onChainPrice * qty
+            log.info('prepare', 'Paid mint detected — retrying with on-chain price', {
+              mintPrice: onChainPrice.toString(), paidValue: paidValue.toString(),
+            })
+            const paidFailures = []
+            for (const candidate of INLINE_CANDIDATES) {
+              try {
+                const candidateAbi  = parseAbi([candidate.sig])
+                const candidateData = encodeFunctionData({
+                  abi: candidateAbi, functionName: candidate.fn, args: candidate.args,
+                })
+                const gasEstimate = await publicClient.estimateGas({
+                  account: walletAddr, to, data: candidateData, value: paidValue,
+                })
+                data  = candidateData
+                gas   = gasEstimate
+                value = paidValue   // update value for the actual tx
+                detectionSuccess = true
+                log.info('prepare', 'Paid inline detection succeeded', {
+                  fn: candidate.fn, gas: gasEstimate.toString(), paidValue: paidValue.toString(),
+                })
+                await insertEvent(supabase, intent, 'prewarm',
+                  `Inline detection (paid): ${candidate.fn} (${gasEstimate} gas, price=${onChainPrice})`, {
+                    fn: candidate.fn, gas: gasEstimate.toString(),
+                    mint_price: onChainPrice.toString(), source: 'inline_paid',
+                  }).catch(() => null)
+                supabase.from('mint_intents').update({
+                  call_data:     data,
+                  gas_limit:     gasEstimate.toString(),
+                  function_name: candidate.fn,
+                  mint_price:    onChainPrice.toString(),
+                }).eq('id', intent.id).then(() => null, () => null)
+                break
+              } catch (e) {
+                paidFailures.push(`${candidate.fn}:${String(e?.shortMessage || e?.message || '').slice(0, 40)}`)
+              }
+            }
+            if (!detectionSuccess) failedFns.push(...paidFailures)
+          }
+        } catch {
+          // mintPrice() not available on this contract — continue to full fallback
+        }
+      }
+
       // Fallback: delegate to prepareMintTransaction (full detection pipeline)
       if (!detectionSuccess) {
         log.warn('prepare', 'Direct detection failed for all candidates — falling back to prepareMintTransaction', {
