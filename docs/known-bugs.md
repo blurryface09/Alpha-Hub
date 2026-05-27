@@ -124,6 +124,47 @@ Additionally, all 18 workflow runs showed `steps: []` due to a separate GitHub a
 
 ---
 
+## BUG-9 — Stale in-process nonce cache causes "nonce too low"
+
+**Status**: Fixed  
+**File**: `worker/lib/executor.js`  
+**Commit**: `13a1dc6`  
+**Discovered via**: Phase 1 E2E public mint validation (2026-05-27)
+
+**Problem**: The worker's in-memory `nonceTracker` (module-level `Map`) persists across intent executions within the same Railway process lifetime. If the vault wallet sends transactions outside the worker (e.g., the E2E test script deploying a contract), the cached nonce becomes stale. All subsequent broadcast attempts fail with `nonce too low: next nonce N, tx nonce 0`.
+
+The error was further masked because all three RPC providers rejected the tx, and the last provider's error (`HTTP 526`) caused viem to surface "An unknown RPC error occurred" — hiding the real cause from the retry classifier, which kept retrying instead of refreshing the nonce.
+
+**Fix**: Fetch `eth_getTransactionCount(pending)` and seed `nonceTracker` at the start of every intent execution, before entering `withRetry`. The tracker still handles atomic increments within the retry cycle.
+
+---
+
+## BUG-10 — Base gas fee inflation (hardcoded Ethereum priority fee)
+
+**Status**: Fixed  
+**File**: `worker/lib/gas.js`  
+**Commit**: `1d94f49`  
+**Discovered via**: Phase 1 E2E public mint validation (2026-05-27)
+
+**Problem**: Priority fee constants were calibrated for Ethereum mainnet (balanced = 1.5 gwei). On Base (typical base fee ~0.007 gwei), this produced `maxFeePerGas = 1.514 gwei` — 200× the actual market rate. For an 80k-gas mint, the required balance was `0.000121 ETH` before any escalation. After 3 gas escalations (1.25× each), it reached `0.000236 ETH`, exceeding a wallet funded with just $0.20.
+
+**Fix**: Cap the priority fee at `min(strategyFee, max(baseFee × 2, 0.001 gwei))`. On Base this yields `0.014 gwei`; on Ethereum mainnet (base fee ~20+ gwei) the cap is `40+ gwei` — no effect on existing behaviour.
+
+---
+
+## BUG-11 — E2E test: `pending` treated as terminal state
+
+**Status**: Fixed  
+**File**: `worker/test/e2e-public-mint.test.mjs`  
+**Commit**: `c7ebe18`  
+**Discovered via**: Phase 1 E2E public mint validation (2026-05-27)
+
+**Problem**: The test's terminal-state set included `pending`. The intent enters `pending` when the tx is broadcast but before it's confirmed on-chain. Stopping the poll at `pending` caused the ownership check to read `balanceOf = 0` even though the tx was in-flight and would succeed seconds later.
+
+**Fix**: Remove `pending` from the terminal set. The poll continues until `success`, `failed`, `expired`, or `cancelled` — states that reflect a fully settled outcome.
+
+---
+
 ## Open / Watch List
 
 | Issue | Status | Notes |

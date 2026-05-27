@@ -4,6 +4,15 @@
 
 | Feature | Commit | Notes |
 |---------|--------|-------|
+| **🏆 MILESTONE: First production public mint via Strike** | `c7ebe18` | Base mainnet · block 46541462 · 73,061 gas · 113.7 s |
+| Fix: pending treated as terminal in E2E test (BUG-11) | `c7ebe18` | Wait for `success`, not `pending` |
+| Fix: Base gas fee inflation — cap priority fee to 2× baseFee (BUG-10) | `1d94f49` | No-op on Ethereum; fixes L2 over-pricing |
+| Fix: stale nonce cache causes "nonce too low" (BUG-9) | `13a1dc6` | Resync `eth_getTransactionCount` at intent-start |
+| Add: public mint E2E validation test suite | `6123ea3` | Deploys contract, arms intent, verifies NFT ownership |
+| Fix: replace all `.catch()` on Supabase query builders | `afd05d7` | Prevent silent swallowing of DB errors |
+| Fix: terminal-state guard gap in `transitionIntent` | `e9a38a1` | Prevents double-state transitions |
+| Fix: live executor data field reads `calldata`/`tx_data` | `fc7f1c1` | BUG-L4 parity |
+| Add: strike engine orchestration test suite (27 tests) | `31c2d07` | Full pipeline unit coverage |
 | SeaDrop allowlist proof — on-chain merkle | `b270553` | Etherscan events → IPFS → local merkle |
 | Fix: eligible allowlist mint + correct calldata | `a5c9953` | SeaDrop `mintAllowList` path |
 | Pre-arm capability — Strike without live mint | `c4ee723` | `waiting_public_drop` allows pre-arm |
@@ -12,6 +21,20 @@
 | Capture API merge (12-function limit fix) | `b93a6cf` | Merged capture into calendar handler |
 | Fix: viem positional array for getPublicDrop | `b7a58b5` | BUG-7 — SeaDrop public mints now work |
 | Fix: GitHub Actions workflow (bash -eo pipefail) | `f16f1fb` | BUG-8 — cron now fails gracefully |
+
+---
+
+## Phase 2 Validation (Next)
+
+Real-user flow validation on mainnet. No direct DB insertion unless required for diagnosis.
+
+| ID | Validation | Goal | Pass criteria |
+|----|-----------|------|---------------|
+| P2-1 | **Paid public mint** | `value > 0` path through Strike | Receipt confirmed, NFT minted, correct ETH deducted |
+| P2-2 | **SeaDrop public mint** | SeaDrop router path end-to-end | Tx `to` = SeaDrop router, NFT minted to vault |
+| P2-3 | **UI-driven Strike** | Full user flow without DB manipulation | UI arms → worker executes → receipt + ownership confirmed |
+
+See `docs/validation-matrix.md` → Phase 2 for full test plans.
 
 ---
 

@@ -1,5 +1,87 @@
 # Validation Matrix
 
+---
+
+## Phase 1 Milestone — First Production Public Mint ✅
+
+**Date**: 2026-05-27  
+**Chain**: Base mainnet (chain ID 8453)  
+**Milestone**: First successful end-to-end public mint through the full Strike pipeline on mainnet.
+
+| Field | Value |
+|-------|-------|
+| Contract | `0xddc3310cb0dfbf9ad973834a2a0d12002ba747e0` (TestMintNFT, deployed same run) |
+| Intent ID | `2279cdfc-7794-44aa-8fba-511d43895c74` |
+| Tx hash | `0x43cd7e2d5ed8cc07bfc0627fe382f1aa658ff68d876afc2458ab97f5e6a0a951` |
+| Block | 46541462 |
+| Gas used | 73,061 |
+| Elapsed | 113.7 s (arm → confirmed) |
+| State flow | `armed → executing → success` |
+| Explorer | [basescan.org](https://basescan.org/tx/0x43cd7e2d5ed8cc07bfc0627fe382f1aa658ff68d876afc2458ab97f5e6a0a951) |
+
+**Verified during this run**:
+
+| Check | Result |
+|-------|--------|
+| Vault wallet creation & DB load | ✅ |
+| Wallet decryption (AES-256-GCM) | ✅ |
+| Prewarm calldata path (`call_data` fast-path) | ✅ |
+| Worker atomic claim (`armed → executing`) | ✅ |
+| On-chain nonce sync before broadcast | ✅ (BUG-9 found & fixed) |
+| Gas strategy (Base-appropriate fee) | ✅ (BUG-10 found & fixed) |
+| Tx broadcast via Alchemy | ✅ |
+| Receipt polling & confirmation | ✅ |
+| Intent state → `success` | ✅ |
+| `balanceOf(vault) = 1` | ✅ |
+| `ownerOf(1) = vault wallet` | ✅ |
+| Telemetry chain (6 events) | ✅ |
+
+---
+
+## Phase 2 Validation Plan
+
+### P2-1 — Paid public mint
+
+**Goal**: Confirm the Strike pipeline handles `value > 0` mints correctly — gas + value doesn't exceed balance, the payment reaches the contract, and the NFT is minted to the vault wallet.
+
+**Approach**:
+1. Use UI to find a live paid public mint (or arm directly against a known paid-mint contract).
+2. Arm via Strike UI (not DB insert) if the UI is wired; direct DB insert only for diagnosis.
+3. Verify: `receipt.status = success`, `balanceOf(vault) > 0`.
+
+**Pass criteria**: NFT minted, tx confirmed, correct ETH deducted from vault wallet.
+
+---
+
+### P2-2 — SeaDrop public mint
+
+**Goal**: Validate the SeaDrop detection → `mintPublic` → SeaDrop router path end-to-end on mainnet.
+
+**Approach**:
+1. Identify an active SeaDrop v1 collection on Base or Ethereum.
+2. Run `prepareMintTransaction` via the prewarm path to confirm `prepared_execution_status = public_live`.
+3. Arm via Strike UI. Worker should execute via SeaDrop router (`0x00005EA00Ac477B1030CE78506496e8C2dE24bf5`).
+4. Verify: receipt confirmed, NFT ownership.
+
+**Pass criteria**: Tx `to` = SeaDrop router, NFT minted to vault wallet.
+
+---
+
+### P2-3 — UI-driven Strike validation
+
+**Goal**: Prove the full user flow — from project page → Strike → execution — works without any direct DB manipulation.
+
+**Approach**:
+1. Open a live mint project in the Alpha Hub UI.
+2. Click "Strike" — review modal appears.
+3. Confirm → intent armed via API (not direct DB insert).
+4. Monitor intent state in UI until `success`.
+5. Verify tx on-chain and NFT ownership.
+
+**Pass criteria**: Full UI flow completes without touching Supabase directly, receipt + ownership confirmed.
+
+---
+
 ## Supported Execution Chains
 
 ```js
