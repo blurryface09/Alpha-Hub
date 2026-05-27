@@ -279,7 +279,8 @@ head('Stages 5–7: Pipeline monitoring')
 console.log(`  Intent:   ${intentId}`)
 console.log(`  Polling every ${POLL_INTERVAL_MS / 1000}s | timeout ${POLL_TIMEOUT_MS / 60000}min\n`)
 
-const TERMINAL = new Set(['success', 'pending', 'failed', 'expired', 'cancelled'])
+// 'pending' is NOT terminal — the worker still needs to confirm and transition to 'success'
+const TERMINAL = new Set(['success', 'failed', 'expired', 'cancelled'])
 const seenStates = new Set()
 let finalState = null
 let txHash = null
