@@ -339,7 +339,7 @@ export async function executeIntent(supabase, queuedIntent) {
           }).eq('id', intent.id).then(() => null, () => null)
           break
         } catch (e) {
-          failedFns.push(`${candidate.fn}:${String(e?.shortMessage || e?.message || '').slice(0, 40)}`)
+          failedFns.push(`${candidate.fn}:${String(e?.shortMessage || e?.message || '').slice(0, 100)}`)
         }
       }
 
@@ -348,12 +348,15 @@ export async function executeIntent(supabase, queuedIntent) {
       // confirmed block may have block.timestamp 1-2s behind wall clock, so the
       // contract's `require(block.timestamp >= startTime)` reverts with "not started".
       // Waiting one block (3s) lets the chain advance and the retry succeeds.
-      // Only do this when EVERY candidate failed with a timing-gate error — not when
-      // there are genuine wrong-function or wrong-ETH failures mixed in.
+      //
+      // NOTE: only the function whose ABI matches the contract (usually `mint`) gets
+      // the decoded revert reason ("not started").  All wrong-signature candidates
+      // return "Execution reverted for an unknown reason", so .every() is always false.
+      // We use .some() to trigger the retry when ANY candidate hit a timing-gate error.
       const NOT_STARTED_PATTERNS = ['not started', 'not open', 'not active', 'sale not active', 'mint not active', 'mint has not', 'not yet']
-      const allNotStarted =
+      const anyNotStarted =
         failedFns.length > 0 &&
-        failedFns.every(f => NOT_STARTED_PATTERNS.some(p => f.toLowerCase().includes(p)))
+        failedFns.some(f => NOT_STARTED_PATTERNS.some(p => f.toLowerCase().includes(p)))
 
       // Only trigger the block-timing retry if we fired within 5 s of execute_at.
       // When execute_at is far from now (e.g. startTime is genuinely in the future),
@@ -361,9 +364,9 @@ export async function executeIntent(supabase, queuedIntent) {
       // the paid-mint fallback and prepareMintTransaction instead.
       const msSinceExec = executeAt ? (Date.now() - executeAt) : 0
       const likelyTimingLag = msSinceExec < 5000
-      if (!detectionSuccess && allNotStarted && likelyTimingLag) {
+      if (!detectionSuccess && anyNotStarted && likelyTimingLag) {
         const BLOCK_WAIT_MS = 3000
-        log.warn('prepare', 'All candidates failed with "not started" — likely block-timestamp lag at T=0, waiting for next block', {
+        log.warn('prepare', 'At least one candidate failed with "not started" — likely block-timestamp lag at T=0, waiting for next block', {
           wait_ms: BLOCK_WAIT_MS, ms_since_exec: msSinceExec, failures: failedFns,
         })
         await insertEvent(supabase, intent, 'prewarm',
@@ -401,7 +404,7 @@ export async function executeIntent(supabase, queuedIntent) {
             }).eq('id', intent.id).then(() => null, () => null)
             break
           } catch (e) {
-            retryFailedFns.push(`${candidate.fn}:${String(e?.shortMessage || e?.message || '').slice(0, 40)}`)
+            retryFailedFns.push(`${candidate.fn}:${String(e?.shortMessage || e?.message || '').slice(0, 100)}`)
           }
         }
         if (!detectionSuccess) failedFns.push(...retryFailedFns)
@@ -451,7 +454,7 @@ export async function executeIntent(supabase, queuedIntent) {
                 }).eq('id', intent.id).then(() => null, () => null)
                 break
               } catch (e) {
-                paidFailures.push(`${candidate.fn}:${String(e?.shortMessage || e?.message || '').slice(0, 40)}`)
+                paidFailures.push(`${candidate.fn}:${String(e?.shortMessage || e?.message || '').slice(0, 100)}`)
               }
             }
             if (!detectionSuccess) failedFns.push(...paidFailures)
