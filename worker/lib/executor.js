@@ -279,6 +279,15 @@ export async function executeIntent(supabase, queuedIntent) {
         // prepareMintTransaction causes it to simulate with that ETH value, which makes any
         // free contract revert with "wrong ETH" before we can detect the mint function.
         const mintPriceEth = value === 0n ? '0' : String(Number(value) / 1e18)
+        log.info('prepare', 'Inline detection params', {
+          walletAddr: walletAddr?.slice(0, 10),
+          contractTo: to?.slice(0, 10),
+          mintPriceEth,
+          intentMintPrice: intent.mint_price,
+          intentMaxMintPrice: intent.max_mint_price,
+          quantity: intent.quantity || 1,
+          chain: normaliseChain(intent.chain),
+        })
         const prepared = await prepareMintTransaction({
           chain:           normaliseChain(intent.chain),
           contractAddress: to,
