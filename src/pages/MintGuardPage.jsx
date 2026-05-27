@@ -452,7 +452,12 @@ export default function MintGuardPage() {
           maxTotalSpend: project.max_total_spend || '0.05',
           maxGasFee: project.max_gas_fee || null,
           mintDate: project.mint_date || new Date().toISOString(),
-          strikeExecuteAt: project.mint_date || new Date().toISOString(),
+          // If mint_date is already in the past, arm with execute_at = now so the worker
+          // fires immediately instead of expiring (sweep kills intents where execute_at
+          // is > 5 min old before fetchReadyIntents even claims them).
+          strikeExecuteAt: (project.mint_date && new Date(project.mint_date).getTime() > Date.now())
+            ? project.mint_date
+            : new Date().toISOString(),
           acknowledgeRisk: true,
           simulationOnly: opts.simulationOnly ?? true,
         }),
