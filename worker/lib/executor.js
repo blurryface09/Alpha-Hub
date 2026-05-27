@@ -284,9 +284,14 @@ export async function executeIntent(supabase, queuedIntent) {
           log.info('prepare', 'Inline prewarm succeeded', { fn: fresh.function_name })
         }
       } else {
-        log.warn('prepare', 'Inline prewarm failed — proceeding without calldata', {
+        // Surface the real error to DB so it's visible in execution history
+        await insertEvent(supabase, intent, 'prewarm_failed', 'Inline prewarm failed — cannot detect mint function.', {
           error: prewarmResult.error,
-        })
+        }).catch(() => null)
+        // Hard-fail: do NOT send a tx with null calldata — that causes confusing
+        // "unknown RPC error" from estimateGas on a bare call to a contract with
+        // no fallback(). Throw cleanly instead so the intent fails with the real reason.
+        throw new Error(`Mint function detection failed: ${prewarmResult.error || 'unknown'}. Re-arm the Strike to retry.`)
       }
     }
 
