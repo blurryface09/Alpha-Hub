@@ -16,7 +16,7 @@ Every release should pass all scenarios against this contract before production.
 | Network | Address | Explorer |
 |---------|---------|---------|
 | Base Sepolia | *(run deploy script — see below)* | [sepolia.basescan.org](https://sepolia.basescan.org) |
-| Base mainnet | *(deploy after Sepolia validation)* | [basescan.org](https://basescan.org) |
+| Base mainnet | `0x1ee151e31999bd8441f6c1ab221f66cd2c8bbde7` | [basescan.org/address/0x1ee151e31999bd8441f6c1ab221f66cd2c8bbde7](https://basescan.org/address/0x1ee151e31999bd8441f6c1ab221f66cd2c8bbde7) |
 
 ---
 

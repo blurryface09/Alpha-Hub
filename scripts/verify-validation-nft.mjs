@@ -236,10 +236,17 @@ if (runFree) {
         no('Receipt status', `status=${receipt.status}`)
       }
 
-      const [supplyAfter, balAfter] = await Promise.all([
-        publicClient.readContract({ address: CONTRACT, abi: ABI, functionName: 'totalSupply' }),
-        publicClient.readContract({ address: CONTRACT, abi: ABI, functionName: 'balanceOf', args: [account.address] }),
-      ])
+      // Retry reads — RPC nodes may return stale state right after confirmation
+      let supplyAfter = supplyBefore, balAfter = balBefore
+      for (let attempt = 1; attempt <= 6; attempt++) {
+        await sleep(2000 * attempt)
+        ;[supplyAfter, balAfter] = await Promise.all([
+          publicClient.readContract({ address: CONTRACT, abi: ABI, functionName: 'totalSupply' }),
+          publicClient.readContract({ address: CONTRACT, abi: ABI, functionName: 'balanceOf', args: [account.address] }),
+        ])
+        if (supplyAfter > supplyBefore) break
+      }
+
       if (supplyAfter === supplyBefore + 1n) ok('totalSupply incremented', `${supplyBefore} → ${supplyAfter}`)
       else no('totalSupply', `expected ${supplyBefore + 1n}, got ${supplyAfter}`)
 
@@ -406,15 +413,25 @@ if (isOwner && (scenario === 'all' || scenario === 'free')) {
   head('5. Access control')
 
   // A second account would be needed for full test; we verify the owner path works
+  await sleep(3000)  // let prior tx state settle
   try {
     const h = await walletClient.writeContract({ address: CONTRACT, abi: ABI, functionName: 'setMaxPerTx', args: [10n] })
     await publicClient.waitForTransactionReceipt({ hash: h, confirmations: 1, timeout: 60000 })
-    const cfg = await publicClient.readContract({ address: CONTRACT, abi: ABI, functionName: 'mintConfig' })
+
+    // Retry read — stale RPC may return old value right after confirmation
+    let cfg = await publicClient.readContract({ address: CONTRACT, abi: ABI, functionName: 'mintConfig' })
+    for (let i = 1; i <= 5 && cfg[7] !== 10n; i++) {
+      await sleep(2000 * i)
+      cfg = await publicClient.readContract({ address: CONTRACT, abi: ABI, functionName: 'mintConfig' })
+    }
     if (cfg[7] === 10n) ok('setMaxPerTx(10) succeeded', 'owner write confirmed')
     else no('setMaxPerTx', `expected 10, got ${cfg[7]}`)
 
-    // Restore
-    await walletClient.writeContract({ address: CONTRACT, abi: ABI, functionName: 'setMaxPerTx', args: [20n] })
+    // Restore — wait for confirmation to avoid nonce races
+    await sleep(1000)
+    const h2 = await walletClient.writeContract({ address: CONTRACT, abi: ABI, functionName: 'setMaxPerTx', args: [20n] })
+    await publicClient.waitForTransactionReceipt({ hash: h2, confirmations: 1, timeout: 60000 })
+    ok('setMaxPerTx restored to 20', h2)
   } catch (e) {
     no('Admin write', e.message.slice(0, 80))
   }

@@ -196,15 +196,9 @@ if (balance === 0n) {
 const mintPriceWei = priceEth > 0 ? parseEther(priceEth.toString()) : 0n
 const startTimestamp = startDelay > 0 ? BigInt(Math.floor(Date.now() / 1000) + startDelay) : 0n
 
-// Estimate gas
-process.stdout.write('  Estimating deployment gas... ')
-const gasEst = await publicClient.estimateGas({
-  account: account.address,
-  data: bytecode,
-})
+// Fee info (estimation handled by deployContract internally)
 const feeData = await publicClient.estimateFeesPerGas()
-const estCostEth = formatEther(gasEst * feeData.maxFeePerGas)
-console.log(`✓  ~${gasEst} gas  (~${parseFloat(estCostEth).toFixed(8)} ETH)`)
+console.log(`  Base fee:    ${(Number(feeData.maxFeePerGas) / 1e9).toFixed(4)} gwei`)
 
 // Deploy
 console.log('\n  Deploying...')
