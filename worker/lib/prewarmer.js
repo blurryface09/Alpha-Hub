@@ -147,7 +147,15 @@ export async function prewarmIntent(supabase, intent, opts = {}) {
     const lower = error.toLowerCase()
     let prewarmMsg = null
     let prewarmState = null
-    if (lower.includes('not started') || lower.includes('not open') || lower.includes('not active') || lower.includes('sale not active') || lower.includes('mint not active')) {
+    // Note: prepareMintTransaction converts raw revert reasons via safeMessage(), so we also
+    // match the converted strings (e.g. "not open yet" from "Mint is not open yet or has ended").
+    if (
+      lower.includes('not started') || lower.includes('not open') ||
+      lower.includes('not active')  || lower.includes('sale not active') ||
+      lower.includes('mint not active') || lower.includes('not yet') ||
+      lower.includes('has not started') || lower.includes('not currently active') ||
+      lower.includes('may be closed') || lower.includes('mint simulation failed')
+    ) {
       prewarmMsg  = '⏳ Mint not open yet — Strike is armed and will fire at the scheduled time.'
       prewarmState = 'not_started'
     } else if (lower.includes('sold out') || lower.includes('supply exhausted') || lower.includes('max supply')) {

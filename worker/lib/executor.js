@@ -338,6 +338,59 @@ export async function executeIntent(supabase, queuedIntent) {
         }
       }
 
+      // ── Block-timing retry ───────────────────────────────────────────────
+      // Base blocks are ~2s.  If we fire at execute_at == startTime the LATEST
+      // confirmed block may have block.timestamp 1-2s behind wall clock, so the
+      // contract's `require(block.timestamp >= startTime)` reverts with "not started".
+      // Waiting one block (3s) lets the chain advance and the retry succeeds.
+      // Only do this when EVERY candidate failed with a timing-gate error — not when
+      // there are genuine wrong-function or wrong-ETH failures mixed in.
+      const NOT_STARTED_PATTERNS = ['not started', 'not open', 'not active', 'sale not active', 'mint not active', 'mint has not', 'not yet']
+      const allNotStarted =
+        failedFns.length > 0 &&
+        failedFns.every(f => NOT_STARTED_PATTERNS.some(p => f.toLowerCase().includes(p)))
+
+      if (!detectionSuccess && allNotStarted) {
+        const BLOCK_WAIT_MS = 3000
+        log.warn('prepare', 'All candidates failed with "not started" — likely block-timestamp lag at T=0, waiting for next block', {
+          wait_ms: BLOCK_WAIT_MS, failures: failedFns,
+        })
+        await insertEvent(supabase, intent, 'prewarm',
+          '⏳ Mint start-time gate — waiting for next block before retrying...', {
+            reason: 'not_started_block_timing_retry', wait_ms: BLOCK_WAIT_MS,
+          }).catch(() => null)
+
+        await new Promise(resolve => setTimeout(resolve, BLOCK_WAIT_MS))
+
+        const retryFailedFns = []
+        for (const candidate of INLINE_CANDIDATES) {
+          try {
+            const candidateAbi  = parseAbi([candidate.sig])
+            const candidateData = encodeFunctionData({ abi: candidateAbi, functionName: candidate.fn, args: candidate.args })
+            const gasEstimate   = await publicClient.estimateGas({ account: walletAddr, to, data: candidateData, value })
+            data = candidateData
+            gas  = gasEstimate
+            detectionSuccess = true
+            log.info('prepare', 'Inline detection succeeded after block-timing retry', {
+              fn: candidate.fn, gas: gasEstimate.toString(),
+            })
+            await insertEvent(supabase, intent, 'prewarm',
+              `Inline detection (block-retry): ${candidate.fn} (${gasEstimate} gas)`, {
+                fn: candidate.fn, gas: gasEstimate.toString(), source: 'inline_block_retry',
+              }).catch(() => null)
+            supabase.from('mint_intents').update({
+              call_data:     data,
+              gas_limit:     gasEstimate.toString(),
+              function_name: candidate.fn,
+            }).eq('id', intent.id).then(() => null, () => null)
+            break
+          } catch (e) {
+            retryFailedFns.push(`${candidate.fn}:${String(e?.shortMessage || e?.message || '').slice(0, 40)}`)
+          }
+        }
+        if (!detectionSuccess) failedFns.push(...retryFailedFns)
+      }
+
       // ── Paid mint fallback ────────────────────────────────────────────────
       // If all zero-value attempts failed with "wrong ETH", the contract has a
       // non-zero mintPrice.  Read it directly and retry with the correct value.
