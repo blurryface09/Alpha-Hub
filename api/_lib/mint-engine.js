@@ -1440,6 +1440,11 @@ export async function handleMintAction(req, res, action) {
       const chain    = normalizeChain(body.chain)
       const contract = normalizeOptionalText(body.contractAddress || body.contract_address)
 
+      // Warm the in-memory cache from DB before scoring — the Railway worker writes
+      // successful execution configs to mint_contract_cache but Vercel's in-memory
+      // Map is cold on every serverless invocation.  loadCachedExecution is a no-op
+      // when the cache is already warm (in-memory hit skips the DB round-trip).
+      if (contract) await loadCachedExecution(contract, chain, supabase).catch(() => null)
       const readiness = computeReadiness(contract, chain)
 
       // Derive execution_status from probe cache (15-min TTL), with exec cache as fallback.

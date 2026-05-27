@@ -24,7 +24,7 @@ import {
   syncNonceAfterFailure,
   waitForReceiptWithRecovery,
 } from './tx-resilience.js'
-import { invalidateCachedExecution } from '../../api/_lib/contract-cache.js'
+import { invalidateCachedExecution, setCachedExecution } from '../../api/_lib/contract-cache.js'
 import { prewarmIntent } from './prewarmer.js'
 import { prepareMintTransaction } from '../../api/_lib/mint-engine.js'
 
@@ -337,6 +337,13 @@ export async function executeIntent(supabase, queuedIntent) {
             gas_limit:     gasEstimate.toString(),
             function_name: candidate.fn,
           }).eq('id', intent.id).then(() => null, () => null)
+          // Write to shared execution cache so the readiness panel reflects this discovery
+          setCachedExecution(to, chainKey, {
+            functionName: candidate.fn,
+            argsSummary:  candidate.args.map(String),
+            gas:          gasEstimate.toString(),
+            source:       'inline_direct',
+          }, supabase)
           break
         } catch (e) {
           const errStr = String(e?.shortMessage || e?.message || '').slice(0, 100)
@@ -459,6 +466,13 @@ export async function executeIntent(supabase, queuedIntent) {
                   function_name: candidate.fn,
                   mint_price:    onChainPrice.toString(),
                 }).eq('id', intent.id).then(() => null, () => null)
+                // Write to shared execution cache so the readiness panel reflects this discovery
+                setCachedExecution(to, chainKey, {
+                  functionName: candidate.fn,
+                  argsSummary:  candidate.args.map(String),
+                  gas:          gasEstimate.toString(),
+                  source:       'inline_paid',
+                }, supabase)
                 break
               } catch (e) {
                 paidFailures.push(`${candidate.fn}:${String(e?.shortMessage || e?.message || '').slice(0, 100)}`)
