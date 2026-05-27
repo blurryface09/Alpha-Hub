@@ -560,7 +560,7 @@ export async function executeIntent(supabase, queuedIntent) {
     supabase.from('mint_intents').update({
       last_state: 'Strike worker: broadcasting transaction...',
       updated_at: new Date().toISOString(),
-    }).eq('id', intent.id).catch(() => null)
+    }).eq('id', intent.id).then(r => r, () => null)
     insertEvent(supabase, intent, 'simulate', 'Broadcasting Strike transaction.', {
       chain: chainKey,
       fn: tracedFn,
