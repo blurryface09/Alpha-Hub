@@ -3,7 +3,7 @@
  * Ties together: claim → wallet → gas → timing → execute → retry → confirm.
  */
 
-import { createPublicClient } from 'viem'
+import { createPublicClient, encodeFunctionData, parseAbi } from 'viem'
 import { FLAGS, flagEnabled } from './flags.js'
 import { createLogger } from './logger.js'
 import { createViemTransport, getRpcUrls } from './rpc.js'
@@ -260,68 +260,134 @@ export async function executeIntent(supabase, queuedIntent) {
 
     // ── Step 7b: Inline mint detection fallback ────────────────────────────
     // If call_data is missing (prewarm had no time to run because execute_at
-    // was set too close to now), detect the mint function on-the-fly using
-    // prepareMintTransaction directly — no DB round-trip, result used in-memory.
-    // Without calldata, sendTransaction would auto-call eth_estimateGas on an
-    // empty transfer to a contract with no fallback(), hanging per-RPC-URL for
-    // 8s each before failing with an opaque "unknown RPC error".
+    // was set too close to now), detect the mint function on-the-fly.
+    //
+    // Strategy: use the WORKER's own publicClient (with the tested RPC transport
+    // and fallback URLs) to directly run estimateGas for common mint signatures.
+    // This is faster and more reliable than delegating to prepareMintTransaction,
+    // which uses mint-engine's own RPC setup that may differ on Railway.
+    //
+    // If the direct approach fails we fall back to prepareMintTransaction.
     if (!data) {
       log.warn('prepare', 'call_data missing — detecting mint function inline')
       await insertEvent(supabase, intent, 'prewarm', 'call_data missing — detecting mint function inline.', {
         reason: 'execute_at_too_soon',
       }).catch(() => null)
 
-      try {
-        const walletAddr = wallet?.address || intent.wallet_address
-        // Convert the already-computed `value` (wei) to ETH string for prepareMintTransaction.
-        // IMPORTANT: do NOT use intent.max_mint_price here — that's the user's spending cap,
-        // not the contract's actual mint price.  Passing a non-zero spending cap to
-        // prepareMintTransaction causes it to simulate with that ETH value, which makes any
-        // free contract revert with "wrong ETH" before we can detect the mint function.
-        const mintPriceEth = value === 0n ? '0' : String(Number(value) / 1e18)
-        log.info('prepare', 'Inline detection params', {
-          walletAddr: walletAddr?.slice(0, 10),
-          contractTo: to?.slice(0, 10),
-          mintPriceEth,
-          intentMintPrice: intent.mint_price,
-          intentMaxMintPrice: intent.max_mint_price,
-          quantity: intent.quantity || 1,
-          chain: normaliseChain(intent.chain),
+      const walletAddr = wallet?.address || intent.wallet_address
+      const qty = BigInt(Math.max(1, Number(intent.quantity || 1)))
+      log.info('prepare', 'Inline detection params', {
+        walletAddr: walletAddr?.slice(0, 10),
+        contractTo: to?.slice(0, 10),
+        valueWei: value.toString(),
+        qty: qty.toString(),
+        chain: normaliseChain(intent.chain),
+      })
+
+      // Ordered by popularity — first success wins
+      const INLINE_CANDIDATES = [
+        { sig: 'function mint(uint256 quantity) payable',      fn: 'mint',        args: [qty] },
+        { sig: 'function publicMint(uint256 quantity) payable', fn: 'publicMint',  args: [qty] },
+        { sig: 'function mintPublic(uint256 quantity) payable', fn: 'mintPublic',  args: [qty] },
+        { sig: 'function allowlistMint(uint256 quantity) payable', fn: 'allowlistMint', args: [qty] },
+        { sig: 'function purchase(uint256 numberOfTokens) payable', fn: 'purchase', args: [qty] },
+        { sig: 'function claim(uint256 quantity) payable',     fn: 'claim',       args: [qty] },
+        { sig: 'function mintNFT(uint256 quantity) payable',   fn: 'mintNFT',     args: [qty] },
+        { sig: 'function freeMint(uint256 quantity) payable',  fn: 'freeMint',    args: [qty] },
+        { sig: 'function mint() payable',                      fn: 'mint',        args: [] },
+        { sig: 'function claim() payable',                     fn: 'claim',       args: [] },
+        { sig: 'function safeMint(address to) payable',        fn: 'safeMint',    args: [walletAddr] },
+      ]
+
+      let detectionSuccess = false
+      const failedFns = []
+
+      for (const candidate of INLINE_CANDIDATES) {
+        try {
+          const candidateAbi = parseAbi([candidate.sig])
+          const candidateData = encodeFunctionData({
+            abi: candidateAbi,
+            functionName: candidate.fn,
+            args: candidate.args,
+          })
+          const gasEstimate = await publicClient.estimateGas({
+            account: walletAddr,
+            to,
+            data: candidateData,
+            value,
+          })
+          data = candidateData
+          gas  = gasEstimate
+          detectionSuccess = true
+          log.info('prepare', 'Inline detection succeeded (direct)', {
+            fn: candidate.fn, gas: gasEstimate.toString(), triedFirst: failedFns,
+          })
+          await insertEvent(supabase, intent, 'prewarm',
+            `Inline detection (direct): ${candidate.fn} (${gasEstimate} gas)`, {
+              fn: candidate.fn, gas: gasEstimate.toString(), source: 'inline_direct',
+            }).catch(() => null)
+          // Persist so future retries skip detection
+          supabase.from('mint_intents').update({
+            call_data:     data,
+            gas_limit:     gasEstimate.toString(),
+            function_name: candidate.fn,
+          }).eq('id', intent.id).then(() => null, () => null)
+          break
+        } catch (e) {
+          failedFns.push(`${candidate.fn}:${String(e?.shortMessage || e?.message || '').slice(0, 40)}`)
+        }
+      }
+
+      // Fallback: delegate to prepareMintTransaction (full detection pipeline)
+      if (!detectionSuccess) {
+        log.warn('prepare', 'Direct detection failed for all candidates — falling back to prepareMintTransaction', {
+          failedFns,
         })
-        const prepared = await prepareMintTransaction({
-          chain:           normaliseChain(intent.chain),
-          contractAddress: to,
-          walletAddress:   walletAddr,
-          mintPrice:       mintPriceEth,
-          quantity:        intent.quantity || 1,
-        }, null, supabase)
+        try {
+          const mintPriceEth = value === 0n ? '0' : String(Number(value) / 1e18)
+          const prepared = await prepareMintTransaction({
+            chain:           normaliseChain(intent.chain),
+            contractAddress: to,
+            walletAddress:   walletAddr,
+            mintPrice:       mintPriceEth,
+            quantity:        Number(qty),
+          }, null, supabase)
 
-        data  = prepared.data
-        gas   = prepared.gas  ? BigInt(prepared.gas)   : gas
-        to    = prepared.to   || to
-        value = prepared.value ? BigInt(prepared.value) : value
+          data  = prepared.data
+          gas   = prepared.gas  ? BigInt(prepared.gas)   : gas
+          to    = prepared.to   || to
+          value = prepared.value ? BigInt(prepared.value) : value
+          detectionSuccess = true
 
-        log.info('prepare', 'Inline detection succeeded', { fn: prepared.functionName, gas: prepared.gas })
-        await insertEvent(supabase, intent, 'prewarm', `Inline detection: ${prepared.functionName} (${prepared.gas} gas, source=${prepared.source})`, {
-          fn: prepared.functionName, gas: prepared.gas, source: prepared.source,
-        }).catch(() => null)
+          log.info('prepare', 'Fallback detection succeeded (prepareMintTransaction)', {
+            fn: prepared.functionName, gas: prepared.gas,
+          })
+          await insertEvent(supabase, intent, 'prewarm',
+            `Inline detection (fallback): ${prepared.functionName} (${prepared.gas} gas, source=${prepared.source})`, {
+              fn: prepared.functionName, gas: prepared.gas, source: prepared.source,
+            }).catch(() => null)
+          supabase.from('mint_intents').update({
+            call_data:     data,
+            gas_limit:     prepared.gas,
+            to:            prepared.to,
+            value:         prepared.value,
+            function_name: prepared.functionName,
+          }).eq('id', intent.id).then(() => null, () => null)
 
-        // Persist to intent so future retries skip detection
-        supabase.from('mint_intents').update({
-          call_data:     data,
-          gas_limit:     prepared.gas,
-          to:            prepared.to,
-          value:         prepared.value,
-          function_name: prepared.functionName,
-        }).eq('id', intent.id).then(() => null, () => null)
-
-      } catch (detectionErr) {
-        const detectionMsg = String(detectionErr?.shortMessage || detectionErr?.message || detectionErr).slice(0, 200)
-        log.error('prepare', 'Inline mint detection failed', { error: detectionMsg })
-        await insertEvent(supabase, intent, 'prewarm_failed', 'Inline mint detection failed — cannot build transaction.', {
-          error: detectionMsg,
-        }).catch(() => null)
-        throw new Error(`Mint function detection failed: ${detectionMsg}`)
+        } catch (detectionErr) {
+          const detectionMsg = String(detectionErr?.shortMessage || detectionErr?.message || detectionErr).slice(0, 200)
+          const rawReason    = detectionErr?.rawReason?.slice?.(0, 200) || null
+          log.error('prepare', 'All inline detection paths failed', {
+            error: detectionMsg, rawReason, failedDirectFns: failedFns,
+          })
+          await insertEvent(supabase, intent, 'prewarm_failed',
+            'Inline mint detection failed — cannot build transaction.', {
+              error:           detectionMsg,
+              raw_reason:      rawReason,
+              direct_failures: failedFns,
+            }).catch(() => null)
+          throw new Error(`Mint function detection failed: ${detectionMsg}`)
+        }
       }
     }
 
