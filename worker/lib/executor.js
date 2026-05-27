@@ -25,6 +25,7 @@ import {
   waitForReceiptWithRecovery,
 } from './tx-resilience.js'
 import { invalidateCachedExecution } from '../../api/_lib/contract-cache.js'
+import { prewarmIntent } from './prewarmer.js'
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -249,12 +250,45 @@ export async function executeIntent(supabase, queuedIntent) {
     }
 
     // ── Step 7: Build transaction ───────────────────────────────────────────
-    const to = intent.mint_contract_address || intent.to || intent.contract_address
+    let to = intent.mint_contract_address || intent.to || intent.contract_address
     if (!to) throw new Error('Intent has no contract address (mint_contract_address / to / contract_address)')
 
-    const value = BigInt(intent.mint_price || intent.value || '0')
-    const data = intent.call_data || intent.data || intent.calldata || intent.tx_data || undefined
-    const gas = intent.gas_limit ? BigInt(intent.gas_limit) : undefined
+    let value = BigInt(intent.mint_price || intent.value || '0')
+    let data  = intent.call_data || intent.data || intent.calldata || intent.tx_data || undefined
+    let gas   = intent.gas_limit ? BigInt(intent.gas_limit) : undefined
+
+    // ── Step 7b: Inline prewarm fallback ───────────────────────────────────
+    // If call_data is missing (e.g. execute_at was set too close to now and
+    // prewarm had no time to run), detect the mint function on-the-fly.
+    // Without calldata, sendTransaction would estimate gas on a bare transfer
+    // to the contract which has no fallback() — the EVM reverts with empty
+    // data and viem surfaces an opaque "unknown RPC error".
+    if (!data) {
+      log.warn('prepare', 'call_data missing — running inline prewarm before execution')
+      await insertEvent(supabase, intent, 'prewarm', 'call_data missing — detecting mint function inline.', {
+        reason: 'execute_at_too_soon',
+      }).catch(() => null)
+      const prewarmResult = await prewarmIntent(supabase, intent)
+      if (prewarmResult.ok) {
+        // Reload the fields prewarm wrote to DB
+        const { data: fresh } = await supabase
+          .from('mint_intents')
+          .select('call_data, gas_limit, to, value, function_name')
+          .eq('id', intent.id)
+          .single()
+        if (fresh?.call_data) {
+          data  = fresh.call_data
+          gas   = fresh.gas_limit ? BigInt(fresh.gas_limit) : gas
+          to    = fresh.to || to
+          value = BigInt(fresh.value || intent.mint_price || '0')
+          log.info('prepare', 'Inline prewarm succeeded', { fn: fresh.function_name })
+        }
+      } else {
+        log.warn('prepare', 'Inline prewarm failed — proceeding without calldata', {
+          error: prewarmResult.error,
+        })
+      }
+    }
 
     // Populate trace vars for use in the catch block
     tracedTo     = to
