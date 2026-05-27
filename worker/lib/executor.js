@@ -339,7 +339,14 @@ export async function executeIntent(supabase, queuedIntent) {
           }).eq('id', intent.id).then(() => null, () => null)
           break
         } catch (e) {
-          failedFns.push(`${candidate.fn}:${String(e?.shortMessage || e?.message || '').slice(0, 100)}`)
+          const errStr = String(e?.shortMessage || e?.message || '').slice(0, 100)
+          failedFns.push(`${candidate.fn}:${errStr}`)
+          // Short-circuit: a value-mismatch revert means this is a paid mint.
+          // The remaining zero-value candidates will all fail for unrelated reasons
+          // (wrong function selector) — skip them so the paid-mint path fires
+          // immediately rather than after waiting through all N candidates.
+          const PAID_SIGNALS = ['wrong eth', 'incorrect payment', 'wrong value', 'incorrect value', 'msg.value', 'wrong payment']
+          if (PAID_SIGNALS.some(p => errStr.toLowerCase().includes(p))) break
         }
       }
 
