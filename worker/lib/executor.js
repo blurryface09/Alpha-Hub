@@ -26,6 +26,7 @@ import {
 } from './tx-resilience.js'
 import { invalidateCachedExecution } from '../../api/_lib/contract-cache.js'
 import { prewarmIntent } from './prewarmer.js'
+import { prepareMintTransaction } from '../../api/_lib/mint-engine.js'
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -257,41 +258,55 @@ export async function executeIntent(supabase, queuedIntent) {
     let data  = intent.call_data || intent.data || intent.calldata || intent.tx_data || undefined
     let gas   = intent.gas_limit ? BigInt(intent.gas_limit) : undefined
 
-    // ── Step 7b: Inline prewarm fallback ───────────────────────────────────
-    // If call_data is missing (e.g. execute_at was set too close to now and
-    // prewarm had no time to run), detect the mint function on-the-fly.
-    // Without calldata, sendTransaction would estimate gas on a bare transfer
-    // to the contract which has no fallback() — the EVM reverts with empty
-    // data and viem surfaces an opaque "unknown RPC error".
+    // ── Step 7b: Inline mint detection fallback ────────────────────────────
+    // If call_data is missing (prewarm had no time to run because execute_at
+    // was set too close to now), detect the mint function on-the-fly using
+    // prepareMintTransaction directly — no DB round-trip, result used in-memory.
+    // Without calldata, sendTransaction would auto-call eth_estimateGas on an
+    // empty transfer to a contract with no fallback(), hanging per-RPC-URL for
+    // 8s each before failing with an opaque "unknown RPC error".
     if (!data) {
-      log.warn('prepare', 'call_data missing — running inline prewarm before execution')
+      log.warn('prepare', 'call_data missing — detecting mint function inline')
       await insertEvent(supabase, intent, 'prewarm', 'call_data missing — detecting mint function inline.', {
         reason: 'execute_at_too_soon',
       }).catch(() => null)
-      const prewarmResult = await prewarmIntent(supabase, intent)
-      if (prewarmResult.ok) {
-        // Reload the fields prewarm wrote to DB
-        const { data: fresh } = await supabase
-          .from('mint_intents')
-          .select('call_data, gas_limit, to, value, function_name')
-          .eq('id', intent.id)
-          .single()
-        if (fresh?.call_data) {
-          data  = fresh.call_data
-          gas   = fresh.gas_limit ? BigInt(fresh.gas_limit) : gas
-          to    = fresh.to || to
-          value = BigInt(fresh.value || intent.mint_price || '0')
-          log.info('prepare', 'Inline prewarm succeeded', { fn: fresh.function_name })
-        }
-      } else {
-        // Surface the real error to DB so it's visible in execution history
-        await insertEvent(supabase, intent, 'prewarm_failed', 'Inline prewarm failed — cannot detect mint function.', {
-          error: prewarmResult.error,
+
+      try {
+        const walletAddr = wallet?.address || intent.wallet_address
+        const prepared = await prepareMintTransaction({
+          chain:           normaliseChain(intent.chain),
+          contractAddress: to,
+          walletAddress:   walletAddr,
+          mintPrice:       intent.max_mint_price || intent.mint_price || '0',
+          quantity:        intent.quantity || 1,
+        }, null, supabase)
+
+        data  = prepared.data
+        gas   = prepared.gas  ? BigInt(prepared.gas)   : gas
+        to    = prepared.to   || to
+        value = prepared.value ? BigInt(prepared.value) : value
+
+        log.info('prepare', 'Inline detection succeeded', { fn: prepared.functionName, gas: prepared.gas })
+        await insertEvent(supabase, intent, 'prewarm', `Inline detection: ${prepared.functionName} (${prepared.gas} gas, source=${prepared.source})`, {
+          fn: prepared.functionName, gas: prepared.gas, source: prepared.source,
         }).catch(() => null)
-        // Hard-fail: do NOT send a tx with null calldata — that causes confusing
-        // "unknown RPC error" from estimateGas on a bare call to a contract with
-        // no fallback(). Throw cleanly instead so the intent fails with the real reason.
-        throw new Error(`Mint function detection failed: ${prewarmResult.error || 'unknown'}. Re-arm the Strike to retry.`)
+
+        // Persist to intent so future retries skip detection
+        supabase.from('mint_intents').update({
+          call_data:     data,
+          gas_limit:     prepared.gas,
+          to:            prepared.to,
+          value:         prepared.value,
+          function_name: prepared.functionName,
+        }).eq('id', intent.id).then(() => null, () => null)
+
+      } catch (detectionErr) {
+        const detectionMsg = String(detectionErr?.shortMessage || detectionErr?.message || detectionErr).slice(0, 200)
+        log.error('prepare', 'Inline mint detection failed', { error: detectionMsg })
+        await insertEvent(supabase, intent, 'prewarm_failed', 'Inline mint detection failed — cannot build transaction.', {
+          error: detectionMsg,
+        }).catch(() => null)
+        throw new Error(`Mint function detection failed: ${detectionMsg}`)
       }
     }
 
