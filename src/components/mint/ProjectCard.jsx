@@ -163,7 +163,12 @@ function ExecutionHistoryPanel({ project, expanded }) {
     }
 
     loadHistory()
-    return function() { active = false }
+
+    // Auto-refresh every 5s while panel is open so prewarm events and execution
+    // status changes appear without the user having to close and reopen the panel.
+    const poll = setInterval(() => { if (active) loadHistory() }, 5000)
+
+    return function() { active = false; clearInterval(poll) }
   }, [expanded, project?.id])
 
   if (!expanded) return null

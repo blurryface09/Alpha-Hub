@@ -142,23 +142,34 @@ export default function MintGuardPage() {
   }, [user])
 
   // First load with spinner, subsequent interval refreshes silent
-  const initialLoad = React.useRef(false)
   const lastVisibilityRefresh = React.useRef(0)
+  // Track the last user ID that triggered a full reset — only clear+reload when user identity
+  // actually changes (login/logout), not on token refresh which recreates fetchProjects with
+  // the same user object reference before the store fix lands in all environments.
+  const lastLoadedUserId = React.useRef(null)
 
   useEffect(() => {
-    setProjects([])
-    setLoading(true)
-    initialLoad.current = false
-    if (!initialLoad.current) {
-      initialLoad.current = true
-      fetchProjects(true) // show spinner on first load
+    const currentUserId = user?.id ?? null
+    const userChanged = currentUserId !== lastLoadedUserId.current
+    lastLoadedUserId.current = currentUserId
+
+    if (userChanged) {
+      // Real identity change (login/logout) — reset everything and show spinner
+      setProjects([])
+      setLoading(true)
+      fetchProjects(true)
+    } else {
+      // Same user, fetchProjects was silently recreated (e.g. stale closure) — refresh quietly
+      fetchProjects(false)
     }
+
     if (location.state?.openAdd) {
       setShowAddModal(true)
       setInitialContract(location.state.contract)
       setInitialChain(location.state.chain)
     }
-    // Silent background refresh every 60s -- never clears projects
+
+    // Silent background refresh every 60s — never clears projects
     const interval = setInterval(() => fetchProjects(false), 60000)
 
     // Re-fetch when tab/app becomes visible — small delay lets Supabase finish token refresh first
@@ -174,7 +185,7 @@ export default function MintGuardPage() {
       clearInterval(interval)
       document.removeEventListener('visibilitychange', onVisibility)
     }
-  }, [fetchProjects])
+  }, [fetchProjects, user?.id])
 
   // Real-time client-side status tick every 30s — no DB round-trip needed for UI updates
   useEffect(() => {

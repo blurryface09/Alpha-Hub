@@ -34,8 +34,18 @@ export const useAuthStore = create((set, get) => ({
           clearTimeout(signedOutDebounce)
           signedOutDebounce = null
           if (session?.user) {
-            set({ user: session.user })
-            await get().fetchProfile(session.user.id)
+            const currentUser = get().user
+            // Only replace the user object when the identity actually changes.
+            // TOKEN_REFRESHED fires with a new session object for the SAME user — if we
+            // always call set({ user }) we create a new object reference, which causes every
+            // useCallback([user]) dependency to recreate and wipes the projects list on tab switch.
+            if (!currentUser || currentUser.id !== session.user.id) {
+              set({ user: session.user })
+              await get().fetchProfile(session.user.id)
+            } else {
+              // Same user — silently refresh profile without changing user reference
+              get().fetchProfile(session.user.id).catch(() => {})
+            }
           }
         } else if (event === 'SIGNED_OUT') {
           // Debounce: Supabase briefly fires SIGNED_OUT during token refresh before
@@ -63,7 +73,10 @@ export const useAuthStore = create((set, get) => ({
           } catch {}
           const { data: { session } } = await supabase.auth.getSession()
           if (session?.user) {
-            set({ user: session.user })
+            const currentUser = get().user
+            if (!currentUser || currentUser.id !== session.user.id) {
+              set({ user: session.user })
+            }
             get().fetchProfile(session.user.id).catch(() => {})
           }
           window.dispatchEvent(new CustomEvent('alphahub:resume'))

@@ -165,6 +165,12 @@ export async function prewarmIntent(supabase, intent, opts = {}) {
         message:   prewarmMsg,
         metadata:  { prewarm_state: prewarmState, raw_error: error.slice(0, 100) },
       }).then(r => r, () => null)
+      // Also surface the status on the intent itself so the project card shows it
+      // without requiring the user to expand the execution history panel.
+      await supabase.from('mint_intents').update({
+        last_state: prewarmMsg,
+        updated_at: new Date().toISOString(),
+      }).eq('id', intent.id).then(r => r, () => null)
     }
 
     return { ok: false, error }
