@@ -182,15 +182,24 @@ let contractAddress
   ok('deploy', 'Deploy tx submitted', txHash)
   info('explorer', `https://basescan.org/tx/${txHash}`)
 
-  const receipt = await publicClient.waitForTransactionReceipt({ hash: txHash, confirmations: 1, timeout: 60000 })
+  const receipt = await publicClient.waitForTransactionReceipt({ hash: txHash, confirmations: 2, timeout: 90000 })
   if (receipt.status !== 'success') { no('deploy', 'Deploy receipt', `status=${receipt.status}`); process.exit(1) }
 
   contractAddress = receipt.contractAddress
   ok('deploy', 'Contract deployed', contractAddress)
   info('explorer', `https://basescan.org/address/${contractAddress}`)
 
-  // Verify it works
-  const supply = await publicClient.readContract({ address: contractAddress, abi: SUPPLY_ABI, functionName: 'totalSupply' })
+  // Verify it works — retry up to 5× in case the node hasn't indexed the code yet
+  let supply
+  for (let attempt = 1; attempt <= 5; attempt++) {
+    try {
+      supply = await publicClient.readContract({ address: contractAddress, abi: SUPPLY_ABI, functionName: 'totalSupply' })
+      break
+    } catch (e) {
+      if (attempt === 5) { no('deploy', 'Contract live check', e.message.slice(0, 120)); process.exit(1) }
+      await sleep(2000 * attempt)
+    }
+  }
   ok('deploy', 'Contract live — totalSupply', supply.toString())
 }
 

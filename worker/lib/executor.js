@@ -231,6 +231,23 @@ export async function executeIntent(supabase, queuedIntent) {
       return
     }
 
+    // ── Step 6b: Resync on-chain nonce before building tx ──────────────────
+    // Always fetch the pending nonce from chain at intent-start so a stale
+    // in-process cache (e.g. wallet used outside the worker) never causes
+    // "nonce too low" on the first broadcast attempt.
+    try {
+      const freshNonce = await publicClient.getTransactionCount({
+        address: wallet.address,
+        blockTag: 'pending',
+      })
+      nonceTracker.set(wallet.address, freshNonce)
+      log.info('prepare', 'Nonce synced from chain', { address: wallet.address, nonce: freshNonce })
+    } catch (nonceErr) {
+      log.warn('prepare', 'Failed to pre-sync nonce — will fetch inside withRetry', {
+        error: nonceErr.message,
+      })
+    }
+
     // ── Step 7: Build transaction ───────────────────────────────────────────
     const to = intent.mint_contract_address || intent.to || intent.contract_address
     if (!to) throw new Error('Intent has no contract address (mint_contract_address / to / contract_address)')
