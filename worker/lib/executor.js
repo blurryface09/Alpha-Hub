@@ -327,7 +327,7 @@ export async function executeIntent(supabase, queuedIntent) {
           log.info('prepare', 'Inline detection succeeded (direct)', {
             fn: candidate.fn, gas: gasEstimate.toString(), triedFirst: failedFns,
           })
-          await insertEvent(supabase, intent, 'prewarm',
+          insertEvent(supabase, intent, 'prewarm',
             `Inline detection (direct): ${candidate.fn} (${gasEstimate} gas)`, {
               fn: candidate.fn, gas: gasEstimate.toString(), source: 'inline_direct',
             }).catch(() => null)
@@ -407,7 +407,7 @@ export async function executeIntent(supabase, queuedIntent) {
             log.info('prepare', 'Inline detection succeeded after block-timing retry', {
               fn: candidate.fn, gas: gasEstimate.toString(),
             })
-            await insertEvent(supabase, intent, 'prewarm',
+            insertEvent(supabase, intent, 'prewarm',
               `Inline detection (block-retry): ${candidate.fn} (${gasEstimate} gas)`, {
                 fn: candidate.fn, gas: gasEstimate.toString(), source: 'inline_block_retry',
               }).catch(() => null)
@@ -455,7 +455,7 @@ export async function executeIntent(supabase, queuedIntent) {
                 log.info('prepare', 'Paid inline detection succeeded', {
                   fn: candidate.fn, gas: gasEstimate.toString(), paidValue: paidValue.toString(),
                 })
-                await insertEvent(supabase, intent, 'prewarm',
+                insertEvent(supabase, intent, 'prewarm',
                   `Inline detection (paid): ${candidate.fn} (${gasEstimate} gas, price=${onChainPrice})`, {
                     fn: candidate.fn, gas: gasEstimate.toString(),
                     mint_price: onChainPrice.toString(), source: 'inline_paid',
@@ -556,12 +556,12 @@ export async function executeIntent(supabase, queuedIntent) {
       ? { maxFeePerGas: gasParams.maxFeePerGas, maxPriorityFeePerGas: gasParams.maxPriorityFeePerGas }
       : { gasPrice: gasParams.gasPrice }
 
-    // Surface final pre-send status so project card shows active progress
-    await supabase.from('mint_intents').update({
+    // Surface final pre-send status (fire-and-forget — never delay the broadcast)
+    supabase.from('mint_intents').update({
       last_state: 'Strike worker: broadcasting transaction...',
       updated_at: new Date().toISOString(),
-    }).eq('id', intent.id).then(() => null, () => null)
-    await insertEvent(supabase, intent, 'simulate', 'Broadcasting Strike transaction.', {
+    }).eq('id', intent.id).catch(() => null)
+    insertEvent(supabase, intent, 'simulate', 'Broadcasting Strike transaction.', {
       chain: chainKey,
       fn: tracedFn,
       source: tracedSource,
@@ -570,7 +570,7 @@ export async function executeIntent(supabase, queuedIntent) {
       gas: tracedGas,
       strategy: gasParams.strategy,
       base_fee_gwei: gasParams.baseFeeGwei,
-    })
+    }).catch(() => null)
 
     // ── Step 8: withRetry → sendTransaction ────────────────────────────────
     let currentGasParams = { ...gasParams }
