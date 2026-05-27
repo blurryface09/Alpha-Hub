@@ -158,6 +158,13 @@ export async function prewarmIntent(supabase, intent, opts = {}) {
     ) {
       prewarmMsg  = '⏳ Mint not open yet — Strike is armed and will fire at the scheduled time.'
       prewarmState = 'not_started'
+    } else if (
+      lower.includes('wrong eth') || lower.includes('incorrect payment') ||
+      lower.includes('wrong value') || lower.includes('incorrect value') ||
+      lower.includes('msg.value') || lower.includes('wrong payment')
+    ) {
+      prewarmMsg  = '💰 Paid mint detected — Strike will read on-chain price and execute at scheduled time.'
+      prewarmState = 'paid_mint'
     } else if (lower.includes('sold out') || lower.includes('supply exhausted') || lower.includes('max supply')) {
       prewarmMsg  = '⚠️ Mint appears sold out — Strike will attempt anyway at execute time.'
       prewarmState = 'sold_out'
