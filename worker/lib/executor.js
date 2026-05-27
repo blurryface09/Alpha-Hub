@@ -273,6 +273,11 @@ export async function executeIntent(supabase, queuedIntent) {
       await insertEvent(supabase, intent, 'prewarm', 'call_data missing — detecting mint function inline.', {
         reason: 'execute_at_too_soon',
       }).catch(() => null)
+      // Surface progress so the project card doesn't show "preparing execution" for 30s+
+      await supabase.from('mint_intents').update({
+        last_state: 'Strike worker: detecting mint function...',
+        updated_at: new Date().toISOString(),
+      }).eq('id', intent.id).then(() => null, () => null)
 
       const walletAddr = wallet?.address || intent.wallet_address
       const qty = BigInt(Math.max(1, Number(intent.quantity || 1)))
@@ -350,15 +355,26 @@ export async function executeIntent(supabase, queuedIntent) {
         failedFns.length > 0 &&
         failedFns.every(f => NOT_STARTED_PATTERNS.some(p => f.toLowerCase().includes(p)))
 
-      if (!detectionSuccess && allNotStarted) {
+      // Only trigger the block-timing retry if we fired within 5 s of execute_at.
+      // When execute_at is far from now (e.g. startTime is genuinely in the future),
+      // "not started" is a real gate and waiting 3 s won't help — skip straight to
+      // the paid-mint fallback and prepareMintTransaction instead.
+      const msSinceExec = executeAt ? (Date.now() - executeAt) : 0
+      const likelyTimingLag = msSinceExec < 5000
+      if (!detectionSuccess && allNotStarted && likelyTimingLag) {
         const BLOCK_WAIT_MS = 3000
         log.warn('prepare', 'All candidates failed with "not started" — likely block-timestamp lag at T=0, waiting for next block', {
-          wait_ms: BLOCK_WAIT_MS, failures: failedFns,
+          wait_ms: BLOCK_WAIT_MS, ms_since_exec: msSinceExec, failures: failedFns,
         })
         await insertEvent(supabase, intent, 'prewarm',
           '⏳ Mint start-time gate — waiting for next block before retrying...', {
-            reason: 'not_started_block_timing_retry', wait_ms: BLOCK_WAIT_MS,
+            reason: 'not_started_block_timing_retry', wait_ms: BLOCK_WAIT_MS, ms_since_exec: msSinceExec,
           }).catch(() => null)
+        // Surface progress update so the project card reflects the wait
+        await supabase.from('mint_intents').update({
+          last_state: '⏳ Strike: waiting for mint start gate (next block)...',
+          updated_at: new Date().toISOString(),
+        }).eq('id', intent.id).then(() => null, () => null)
 
         await new Promise(resolve => setTimeout(resolve, BLOCK_WAIT_MS))
 
@@ -516,6 +532,11 @@ export async function executeIntent(supabase, queuedIntent) {
       ? { maxFeePerGas: gasParams.maxFeePerGas, maxPriorityFeePerGas: gasParams.maxPriorityFeePerGas }
       : { gasPrice: gasParams.gasPrice }
 
+    // Surface final pre-send status so project card shows active progress
+    await supabase.from('mint_intents').update({
+      last_state: 'Strike worker: broadcasting transaction...',
+      updated_at: new Date().toISOString(),
+    }).eq('id', intent.id).then(() => null, () => null)
     await insertEvent(supabase, intent, 'simulate', 'Broadcasting Strike transaction.', {
       chain: chainKey,
       fn: tracedFn,
