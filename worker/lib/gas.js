@@ -103,8 +103,15 @@ export async function estimateGas(publicClient, strategy = 'balanced', retryAtte
   const isEip1559 = baseFee !== null
 
   if (isEip1559) {
-    const priorityFeeGwei = STRATEGY_PRIORITY_FEE_GWEI[normalised]
+    const rawPriorityFeeGwei = STRATEGY_PRIORITY_FEE_GWEI[normalised]
     const baseMultiplier = STRATEGY_BASE_MULTIPLIER[normalised]
+
+    // On low-fee chains (Base, L2s) the base fee can be < 1 gwei.
+    // Cap priority fee at 2× the base fee so we don't over-price on cheap chains,
+    // but keep at least 0.001 gwei. On Ethereum mainnet (base ~20+ gwei) this has
+    // no effect since the cap is always above the strategy value.
+    const baseFeeGweiNum = Number(baseFee) / 1e9
+    const priorityFeeGwei = Math.min(rawPriorityFeeGwei, Math.max(baseFeeGweiNum * 2, 0.001))
 
     const priorityFeeWei = gweiToBigInt(priorityFeeGwei)
     // maxFee = baseFee * multiplier + priorityFee
