@@ -141,6 +141,32 @@ export async function prewarmIntent(supabase, intent, opts = {}) {
   } catch (err) {
     const error = String(err?.shortMessage || err?.message || err).slice(0, 200)
     log.warn('prewarm', 'Prewarm failed (non-fatal — intent remains armed)', { intent_id: intent.id, error })
+
+    // Log an informative DB event for known contract states so the user sees
+    // meaningful feedback in the execution history panel instead of silence.
+    const lower = error.toLowerCase()
+    let prewarmMsg = null
+    let prewarmState = null
+    if (lower.includes('not started') || lower.includes('not open') || lower.includes('not active') || lower.includes('sale not active') || lower.includes('mint not active')) {
+      prewarmMsg  = '⏳ Mint not open yet — Strike is armed and will fire at the scheduled time.'
+      prewarmState = 'not_started'
+    } else if (lower.includes('sold out') || lower.includes('supply exhausted') || lower.includes('max supply')) {
+      prewarmMsg  = '⚠️ Mint appears sold out — Strike will attempt anyway at execute time.'
+      prewarmState = 'sold_out'
+    } else if (lower.includes('allowlist') || lower.includes('not eligible') || lower.includes('not whitelisted')) {
+      prewarmMsg  = '⚠️ Allowlist phase detected — Strike will attempt at execute time.'
+      prewarmState = 'allowlist'
+    }
+    if (prewarmMsg && supabase) {
+      await supabase.from('mint_execution_events').insert({
+        intent_id: intent.id,
+        user_id:   intent.user_id,
+        state:     'prewarm',
+        message:   prewarmMsg,
+        metadata:  { prewarm_state: prewarmState, raw_error: error.slice(0, 100) },
+      }).then(r => r, () => null)
+    }
+
     return { ok: false, error }
   }
 }

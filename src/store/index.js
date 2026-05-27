@@ -5,6 +5,11 @@ import { supabase } from '../lib/supabase'
 let resumeListenerAttached = false
 let lastResumeRefreshAt = 0
 const RESUME_REFRESH_MS = 4 * 60 * 1000
+// Debounce timer for SIGNED_OUT — Supabase fires SIGNED_OUT briefly during token
+// refresh, immediately followed by TOKEN_REFRESHED.  Without debouncing, the app
+// clears user state, wipes the project list, and shows a loading screen on every
+// tab switch that triggers a refresh.
+let signedOutDebounce = null
 
 // --- Auth Store --------------------------------------------------
 export const useAuthStore = create((set, get) => ({
@@ -25,12 +30,22 @@ export const useAuthStore = create((set, get) => ({
 
       const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, session) => {
         if (event === 'SIGNED_IN' || event === 'TOKEN_REFRESHED') {
+          // Cancel any pending sign-out clear — this was just a token refresh, not a real sign-out
+          clearTimeout(signedOutDebounce)
+          signedOutDebounce = null
           if (session?.user) {
             set({ user: session.user })
             await get().fetchProfile(session.user.id)
           }
         } else if (event === 'SIGNED_OUT') {
-          set({ user: null, profile: null })
+          // Debounce: Supabase briefly fires SIGNED_OUT during token refresh before
+          // TOKEN_REFRESHED arrives.  Wait 600ms — if TOKEN_REFRESHED cancels this,
+          // the UI never clears.  Only a genuine sign-out (no follow-up) clears state.
+          clearTimeout(signedOutDebounce)
+          signedOutDebounce = setTimeout(() => {
+            signedOutDebounce = null
+            set({ user: null, profile: null })
+          }, 600)
         }
       })
 
