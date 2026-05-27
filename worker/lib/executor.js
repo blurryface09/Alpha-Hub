@@ -273,11 +273,17 @@ export async function executeIntent(supabase, queuedIntent) {
 
       try {
         const walletAddr = wallet?.address || intent.wallet_address
+        // Convert the already-computed `value` (wei) to ETH string for prepareMintTransaction.
+        // IMPORTANT: do NOT use intent.max_mint_price here — that's the user's spending cap,
+        // not the contract's actual mint price.  Passing a non-zero spending cap to
+        // prepareMintTransaction causes it to simulate with that ETH value, which makes any
+        // free contract revert with "wrong ETH" before we can detect the mint function.
+        const mintPriceEth = value === 0n ? '0' : String(Number(value) / 1e18)
         const prepared = await prepareMintTransaction({
           chain:           normaliseChain(intent.chain),
           contractAddress: to,
           walletAddress:   walletAddr,
-          mintPrice:       intent.max_mint_price || intent.mint_price || '0',
+          mintPrice:       mintPriceEth,
           quantity:        intent.quantity || 1,
         }, null, supabase)
 

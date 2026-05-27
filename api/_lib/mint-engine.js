@@ -156,7 +156,7 @@ function safeMessage(error) {
   if (msg.includes('allowlist') || msg.includes('not whitelisted') || msg.includes('not eligible') || msg.includes('merkle') || msg.includes('not in whitelist')) return 'Mint rejected — your wallet is not on the allowlist for this phase.'
   if (msg.includes('already minted') || msg.includes('max per wallet') || msg.includes('max mint') || msg.includes('limit reached') || msg.includes('max tokens') || msg.includes('token limit')) return 'Max mints reached — this wallet has hit the limit for this mint.'
   if (msg.includes('max supply') || msg.includes('sold out') || msg.includes('exceeds max') || msg.includes('supply exceeded')) return 'Sold out — this mint has reached maximum supply.'
-  if (msg.includes('msg.value') || msg.includes('wrong value') || msg.includes('incorrect value') || msg.includes('invalid price') || msg.includes('price mismatch')) return 'Wrong mint price — check the price on the official mint page.'
+  if (msg.includes('wrong eth') || msg.includes('msg.value') || msg.includes('wrong value') || msg.includes('incorrect value') || msg.includes('invalid price') || msg.includes('price mismatch')) return 'Wrong mint price — check the price on the official mint page.'
   if (msg.includes('execution reverted') || msg.includes('revert')) return 'Mint simulation failed — contract rejected the transaction. The mint may be closed or require an allowlist.'
   if (msg.includes('function') || msg.includes('selector') || msg.includes('unknown mint') || msg.includes('no standard mint')) return 'Could not detect the mint function. Use the official mint site or add contract details.'
   if (msg.includes('chain') || msg.includes('network')) return 'Wrong chain — switch to the required network and try again.'
@@ -195,7 +195,7 @@ function classifyExecutionStatus(error, { seaDropError = null } = {}) {
   if (msg.includes('insufficient funds') || msg.includes('exceeds the balance') || msg.includes('exceeds balance') || msg.includes('total cost')) return 'live'
   // Payment mismatch: contract is live but value sent is wrong — treat as live so the probe
   // cache is not poisoned when prewarm runs with mintPrice=0
-  if (msg.includes('incorrect payment') || msg.includes('incorrectpayment') || msg.includes('wrong value') || msg.includes('incorrect value') || msg.includes('msg.value') || msg.includes('wrong payment')) return 'live'
+  if (msg.includes('wrong eth') || msg.includes('incorrect payment') || msg.includes('incorrectpayment') || msg.includes('wrong value') || msg.includes('incorrect value') || msg.includes('msg.value') || msg.includes('wrong payment')) return 'live'
   // Allowlist-specific states — check before generic seadrop/allowlist catches
   if (msg.includes('seadrop proof unavailable') || msg.includes('proof could not be fetched')) return 'proof_unavailable'
   if (msg.includes('seadrop wallet not eligible') || msg.includes('not on the allowlist') || msg.includes('wallet not eligible') || msg.includes('not in the on-chain allowlist')) return 'wallet_not_eligible'
