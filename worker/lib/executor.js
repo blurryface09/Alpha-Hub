@@ -638,7 +638,7 @@ export async function executeIntent(supabase, queuedIntent) {
           const explorerBase = CHAIN_EXPLORERS[chainKey] || 'https://basescan.org'
           const projectLabel = intent.project_name || intent.contract_address?.slice(0, 10) || 'Strike'
           const msg = [
-            `⚡ <b>Strike Confirmed: ${projectLabel}</b>`,
+            `✅ <b>Mint successful: ${projectLabel}</b>`,
             ``,
             `TX: <code>${txHash}</code>`,
             `<a href="${explorerBase}/tx/${txHash}">View on explorer →</a>`,
