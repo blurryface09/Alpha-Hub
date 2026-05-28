@@ -91,26 +91,51 @@ export async function estimateGas(publicClient, strategy = 'balanced', retryAtte
     ? strategy
     : 'balanced'
 
-  let block
-  try {
-    block = await publicClient.getBlock({ blockTag: 'latest' })
-  } catch (err) {
-    globalLog.warn('gas', 'Failed to fetch latest block for gas estimation', { error: err.message })
-    block = null
-  }
+  // Fetch block and market tip in parallel — both needed for gas params and adding
+  // an extra serial call at T=0 would cost 20-100ms on the critical FCFS path.
+  // Each call is individually guarded so a mock/node that lacks estimateMaxPriorityFeePerGas
+  // (e.g. older RPC nodes, test mocks) doesn't break the block fetch.
+  let block, marketTipRaw
+  ;[block, marketTipRaw] = await Promise.all([
+    publicClient.getBlock({ blockTag: 'latest' }).catch(err => {
+      globalLog.warn('gas', 'Failed to fetch latest block for gas estimation', { error: err.message })
+      return null
+    }),
+    Promise.resolve()
+      .then(() => publicClient.estimateMaxPriorityFeePerGas())
+      .catch(() => null),   // silently ignore — falls back to static strategy floor
+  ])
 
   const baseFee = block?.baseFeePerGas ?? null
   const isEip1559 = baseFee !== null
 
   if (isEip1559) {
-    const rawPriorityFeeGwei = STRATEGY_PRIORITY_FEE_GWEI[normalised]
-    const baseMultiplier = STRATEGY_BASE_MULTIPLIER[normalised]
+    const strategyFloorGwei = STRATEGY_PRIORITY_FEE_GWEI[normalised]
+    const baseMultiplier    = STRATEGY_BASE_MULTIPLIER[normalised]
+
+    const baseFeeGweiNum = Number(baseFee) / 1e9
+
+    // Dynamic tip: start from the live market rate the node recommends, apply a
+    // strategy premium on top so we outbid other txs at the same gas price.
+    // On congested Ethereum mainnet the market tip can be 5+ gwei — a hardcoded 3 gwei
+    // would under-bid. On quiet Base (~0.001 gwei) we fall back to the strategy floor.
+    //
+    // Premium multipliers: safe=1.1×, balanced=1.3×, aggressive=1.6×
+    // Floor: strategy minimum (1.0 / 1.5 / 3.0 gwei)
+    // Cap: 2× baseFee or 0.001 gwei minimum (prevents L2 over-pricing — BUG-10)
+    const DYNAMIC_PREMIUM = { safe: 1.1, balanced: 1.3, aggressive: 1.6 }
+    const marketTipGwei = marketTipRaw ? Number(marketTipRaw) / 1e9 : null
+    const dynamicTip    = marketTipGwei !== null
+      ? marketTipGwei * DYNAMIC_PREMIUM[normalised]
+      : strategyFloorGwei
+
+    // Always at least the strategy floor (prevents being too low on quiet chains)
+    const rawPriorityFeeGwei = Math.max(dynamicTip, strategyFloorGwei)
 
     // On low-fee chains (Base, L2s) the base fee can be < 1 gwei.
     // Cap priority fee at 2× the base fee so we don't over-price on cheap chains,
     // but keep at least 0.001 gwei. On Ethereum mainnet (base ~20+ gwei) this has
     // no effect since the cap is always above the strategy value.
-    const baseFeeGweiNum = Number(baseFee) / 1e9
     const priorityFeeGwei = Math.min(rawPriorityFeeGwei, Math.max(baseFeeGweiNum * 2, 0.001))
 
     const priorityFeeWei = gweiToBigInt(priorityFeeGwei)
@@ -125,6 +150,7 @@ export async function estimateGas(publicClient, strategy = 'balanced', retryAtte
       strategy: normalised,
       retry_attempt: retryAttempt,
       base_fee_gwei: bigIntToGwei(baseFee).toFixed(4),
+      market_tip_gwei: marketTipGwei !== null ? marketTipGwei.toFixed(6) : null,
       max_priority_fee_gwei: bigIntToGwei(maxPriorityFeePerGas).toFixed(4),
       max_fee_gwei: bigIntToGwei(maxFeePerGas).toFixed(4),
     })

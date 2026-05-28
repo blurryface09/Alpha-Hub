@@ -42,6 +42,25 @@ const PUBLIC_FALLBACKS = {
   ],
 }
 
+/**
+ * Build Alchemy endpoints from ALCHEMY_API_KEY if set.
+ * These are inserted between explicit env URLs and public fallbacks,
+ * giving a private dedicated node without overriding user-configured URLs.
+ */
+function getAlchemyUrls(chain) {
+  const key = process.env.ALCHEMY_API_KEY
+  if (!key) return []
+  const map = {
+    eth:            `https://eth-mainnet.g.alchemy.com/v2/${key}`,
+    base:           `https://base-mainnet.g.alchemy.com/v2/${key}`,
+    bnb:            null,   // Alchemy does not offer BNB chain
+    apechain:       null,
+    sepolia:        `https://eth-sepolia.g.alchemy.com/v2/${key}`,
+    'base-sepolia': `https://base-sepolia.g.alchemy.com/v2/${key}`,
+  }
+  return map[chain] ? [map[chain]] : []
+}
+
 // ─── Health scoring ───────────────────────────────────────────────────────────
 
 /**
@@ -82,8 +101,13 @@ export function getRpcUrls(chain) {
   const normalised = String(chain || 'eth').toLowerCase()
   const envKeys = CHAIN_RPC_ENV[normalised] || CHAIN_RPC_ENV.eth
   const envUrls = envKeys.map(k => process.env[k]).filter(Boolean)
+
+  // Alchemy is inserted between explicit env URLs and public fallbacks.
+  // If the user already configured the Alchemy URL as BASE_RPC_URL it gets deduplicated.
+  const alchemyUrls = getAlchemyUrls(normalised)
+
   const fallbacks = PUBLIC_FALLBACKS[normalised] || PUBLIC_FALLBACKS.eth
-  const all = [...new Set([...envUrls, ...fallbacks])]
+  const all = [...new Set([...envUrls, ...alchemyUrls, ...fallbacks])]
 
   // Sort: healthy (failCount < threshold) before degraded; within each group sort by EMA latency
   const healthy = all.filter(u => getHealth(u).failCount < FAIL_DEPRIORITISE_THRESHOLD)
