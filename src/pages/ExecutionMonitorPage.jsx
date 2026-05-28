@@ -2,7 +2,7 @@ import React, { useState, useEffect, useCallback, useRef } from 'react'
 import {
   Activity, RefreshCw, ChevronDown, ChevronUp,
   ExternalLink, Copy, AlertTriangle, CheckCircle2,
-  Clock, Loader2, Zap, Search, XCircle, Radio,
+  Clock, Loader2, Zap, Search, XCircle, Radio, Database,
 } from 'lucide-react'
 import { getAuthToken } from '../lib/supabase'
 
@@ -84,6 +84,31 @@ function explorerUrl(chain, txHash) {
 
 function copy(text) {
   navigator.clipboard.writeText(text).catch(() => {})
+}
+
+// ─── Countdown hook ───────────────────────────────────────────────────────────
+
+function useCountdown(targetIso) {
+  const [msLeft, setMsLeft] = useState(() => targetIso ? new Date(targetIso).getTime() - Date.now() : null)
+  useEffect(() => {
+    if (!targetIso) return
+    const update = () => setMsLeft(new Date(targetIso).getTime() - Date.now())
+    update()
+    const id = setInterval(update, 250)
+    return () => clearInterval(id)
+  }, [targetIso])
+  return msLeft
+}
+
+function fmtCountdown(ms) {
+  if (ms == null) return null
+  if (ms <= 0) return '00:00'
+  const totalSec = Math.ceil(ms / 1000)
+  const h = Math.floor(totalSec / 3600)
+  const m = Math.floor((totalSec % 3600) / 60)
+  const s = totalSec % 60
+  if (h > 0) return `${h}h ${String(m).padStart(2, '0')}m`
+  return `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`
 }
 
 // ─── Sub-components ───────────────────────────────────────────────────────────
@@ -186,6 +211,16 @@ function IntentRow({ intent, token }) {
   const hasFailed = intent.status === 'failed' || intent.status === 'expired'
   const hasError  = Boolean(intent.strike_error)
 
+  // Live countdown for armed intents with a future execute_at
+  const isArmedWithTimer = ['armed', 'watching', 'prepared'].includes(intent.status) && intent.strike_execute_at
+  const msLeft = useCountdown(isArmedWithTimer ? intent.strike_execute_at : null)
+  const countdown = fmtCountdown(msLeft)
+  const inPrewarm = msLeft != null && msLeft > 0 && msLeft < 30_000
+  const isFiring  = msLeft != null && msLeft <= 0
+
+  // Prewarm status from call_data field
+  const hasCallData = Boolean(intent.call_data)
+
   const loadEvents = useCallback(async () => {
     if (eventsState.loaded) return
     setEventsState(s => ({ ...s, loading: true }))
@@ -255,7 +290,7 @@ function IntentRow({ intent, token }) {
             </p>
           )}
 
-          {/* Row 4: tx hash + time */}
+          {/* Row 4: tx hash + time + countdown + prewarm badge */}
           <div className="flex items-center gap-3 flex-wrap">
             {intent.tx_hash ? (
               <a
@@ -272,9 +307,30 @@ function IntentRow({ intent, token }) {
               <span className="text-[10px] text-muted font-mono">no tx</span>
             )}
             <span className="text-[10px] text-muted">{relativeTime(intent.updated_at)}</span>
-            {intent.strike_execute_at && (
-              <span className="text-[10px] text-muted hidden sm:inline">
-                T={new Date(intent.strike_execute_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
+
+            {/* Live countdown for armed intents */}
+            {countdown && msLeft > 0 && (
+              <span className={`text-[10px] font-mono flex items-center gap-1 ${
+                inPrewarm ? 'text-amber-300 animate-pulse' : 'text-cyan-400'
+              }`}>
+                <Clock size={9} />
+                {countdown}
+                {inPrewarm && <span className="text-[9px] text-amber-300/70">prewarming</span>}
+              </span>
+            )}
+            {isFiring && (
+              <span className="text-[10px] font-mono text-green-400 flex items-center gap-1 animate-pulse">
+                <Zap size={9} /> FIRING
+              </span>
+            )}
+
+            {/* Prewarm / call_data ready badge */}
+            {hasCallData && isArmedWithTimer && (
+              <span
+                title="Call data precomputed — executor will skip function detection at T=0"
+                className="text-[10px] font-mono text-green-400/80 flex items-center gap-1"
+              >
+                <Database size={9} /> prewarmed
               </span>
             )}
           </div>

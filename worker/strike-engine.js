@@ -829,6 +829,37 @@ async function main() {
     heartbeat_interval: HEARTBEAT_INTERVAL,
   })
 
+  // ── Telegram boot alert ─────────────────────────────────────────────────────
+  // Notifies admin when worker starts so restarts are visible in real-time.
+  // Uses ADMIN_TELEGRAM_CHAT_ID (admin personal chat) + TELEGRAM_BOT_TOKEN.
+  ;(async () => {
+    try {
+      const botToken    = process.env.TELEGRAM_BOT_TOKEN
+      const adminChatId = process.env.ADMIN_TELEGRAM_CHAT_ID
+      if (!botToken || !adminChatId) return
+
+      const live = FLAGS?.LIVE_EXECUTION_ENABLED
+      const sim  = FLAGS?.SIMULATION_MODE
+      const mode = live ? '🟢 LIVE' : sim ? '🟡 SIM' : '⚪ IDLE'
+
+      await fetch(`https://api.telegram.org/bot${botToken}/sendMessage`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          chat_id: adminChatId,
+          parse_mode: 'HTML',
+          text: [
+            `<b>⚡ Strike Worker Started</b>`,
+            `Mode: ${mode}`,
+            `Prewarm: ${FLAGS?.PREWARM_ENABLED ? '✓' : '✗'} · Retry: ${FLAGS?.RETRY_ENABLED ? '✓' : '✗'}`,
+            `Interval: ${LOOP_MS}ms · Lib: ${executeIntent ? '✓' : '✗'}`,
+            `<code>${new Date().toISOString()}</code>`,
+          ].join('\n'),
+        }),
+      }).catch(() => null) // never block boot on Telegram failure
+    } catch { /* swallow — alerts must never block execution */ }
+  })()
+
   while (!stopping) {
     try {
       if (supabase) await tick(supabase)

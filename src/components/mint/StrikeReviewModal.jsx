@@ -131,11 +131,39 @@ export function UiStateBadge({ state }) {
 
 // ─── Main modal ───────────────────────────────────────────────────────────────
 
+// ─── Gas strategy config ──────────────────────────────────────────────────────
+
+const GAS_STRATEGIES = [
+  {
+    key: 'safe',
+    label: 'Safe',
+    detail: 'baseFee×1.5 + 1 gwei tip — cheapest, may miss congested blocks',
+    color: 'border-blue-500/40 text-blue-300 bg-blue-500/8',
+  },
+  {
+    key: 'balanced',
+    label: 'Balanced',
+    detail: 'baseFee×2.0 + 1.5 gwei tip — default balance of cost vs speed',
+    color: 'border-border2 text-text bg-surface2/60',
+  },
+  {
+    key: 'aggressive',
+    label: 'Aggressive',
+    detail: 'baseFee×2.5 + 3 gwei tip — highest chance to land in the first block',
+    color: 'border-amber-500/40 text-amber-300 bg-amber-500/8',
+  },
+]
+
 export default function StrikeReviewModal({ project, vault, onConfirmArm, onClose }) {
   const [simLoading, setSimLoading] = useState(false)
   const [simResult, setSimResult] = useState(null)
   const [arming, setArming] = useState(false)
   const [armError, setArmError] = useState(null)
+
+  // Default aggressive for timed mints (FCFS), balanced for live-detection mints
+  const [gasStrategy, setGasStrategy] = useState(
+    project.mint_date ? 'aggressive' : 'balanced',
+  )
 
   // ── Derived checklist ───────────────────────────────────────────────────────
   const checklist = useMemo(() => {
@@ -233,6 +261,29 @@ export default function StrikeReviewModal({ project, vault, onConfirmArm, onClos
       detail: execDetail,
     })
 
+    // Prewarm / call_data timing warning
+    if (project.mint_date) {
+      const minsUntilMint = (new Date(project.mint_date).getTime() - Date.now()) / 60_000
+      const callDataReady = simResult?.prepared_execution_status === 'captured_ready'
+      if (minsUntilMint > 0 && minsUntilMint < 5 && !callDataReady) {
+        items.push({
+          id: 'prewarm_urgency',
+          ok: false,
+          warn: true,
+          label: 'Prewarm urgency',
+          detail: `Mint opens in ${minsUntilMint < 1 ? '<1' : Math.ceil(minsUntilMint)}m — call data not yet precomputed. Worker prewarm window starts at T-30s; inline detection at T=0 adds ~1-2s.`,
+        })
+      } else if (callDataReady) {
+        items.push({
+          id: 'prewarm_status',
+          ok: true,
+          warn: false,
+          label: 'Call data precomputed',
+          detail: 'Prewarm cache hit — executor will skip function detection at T=0',
+        })
+      }
+    }
+
     return items
   }, [project, vault, simResult])
 
@@ -273,7 +324,7 @@ export default function StrikeReviewModal({ project, vault, onConfirmArm, onClos
     setArming(simulationOnly ? 'sim' : 'live')
     setArmError(null)
     try {
-      await onConfirmArm(project, { simulationOnly })
+      await onConfirmArm(project, { simulationOnly, gasStrategy })
       onClose()
     } catch (err) {
       setArmError(err.message)
@@ -334,11 +385,32 @@ export default function StrikeReviewModal({ project, vault, onConfirmArm, onClos
                 <Row label="Quantity"     value={project.max_mint || '1'}                    />
                 <Row label="Max spend"    value={project.max_total_spend ? `${project.max_total_spend} ETH` : null} dim={!project.max_total_spend} />
                 <Row label="Vault"        value={addrShort(vault?.address || vault?.wallet_address)} dim={!vault} />
-                <Row label="Gas strategy" value="Balanced (EIP-1559)"                       />
+                <div className="flex items-start justify-between gap-3 py-1.5 border-b border-border/40">
+                  <span className="text-xs text-muted shrink-0 w-28 mt-0.5">Gas strategy</span>
+                  <div className="flex gap-1.5 flex-1 justify-end">
+                    {GAS_STRATEGIES.map(s => (
+                      <button
+                        key={s.key}
+                        onClick={() => setGasStrategy(s.key)}
+                        title={s.detail}
+                        className={`text-[10px] px-2 py-0.5 rounded border transition-all ${
+                          gasStrategy === s.key ? s.color : 'border-border/40 text-muted hover:text-text'
+                        }`}
+                      >
+                        {s.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
                 <Row label="RPC mode"     value={chainLabel(project.chain) + ' — auto failover'} />
                 <Row label="Retry policy" value="3× with exponential backoff"               />
                 <Row label="Execution"    value={simResult?.live_execution_enabled ? 'LIVE_EXECUTION_ENABLED=true ✓' : 'LIVE_EXECUTION_ENABLED=false'} />
               </div>
+              {/* Gas strategy hint */}
+              <p className="text-[10px] text-muted/70 mt-1.5 pl-1">
+                {GAS_STRATEGIES.find(s => s.key === gasStrategy)?.detail}
+              </p>
+
               {simResult?.prepared_execution_status && (
                 <div className="mt-2 flex items-center justify-between">
                   <span className="text-[10px] text-muted/60 font-mono uppercase tracking-wider">Capability</span>

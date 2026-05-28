@@ -460,6 +460,7 @@ export default function MintGuardPage() {
             : new Date().toISOString(),
           acknowledgeRisk: true,
           simulationOnly: opts.simulationOnly ?? true,
+          gasStrategy: opts.gasStrategy || 'balanced',
         }),
       })
       data = await res.json().catch(() => ({}))

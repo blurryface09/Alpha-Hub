@@ -1787,12 +1787,14 @@ export async function handleMintAction(req, res, action) {
         }
       }
       const strikeExecuteAt = body.strikeExecuteAt || body.strike_execute_at || body.mintDate || intent.mint_date || nowIso
+      const gasStrategy = body.gasStrategy || body.gas_strategy || null // null → executor auto-selects
       const armed = await updateStrikeIntent(supabase, intentId, user.id, {
         execution_mode: 'strike',
         max_total_spend: maxTotalSpend,
         max_gas_fee: body.maxGasFee || body.max_gas_fee || intent.max_gas_fee || null,
         quantity: Number(body.quantity || intent.quantity || 1),
         vault_wallet_id: vaultWalletId,
+        gas_strategy: gasStrategy,
         strike_enabled: true,
         strike_status: 'armed',
         status: 'armed',
