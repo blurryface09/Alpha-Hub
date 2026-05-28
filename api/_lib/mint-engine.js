@@ -1577,7 +1577,15 @@ export async function handleMintAction(req, res, action) {
       if (!SUPPORTED_EXECUTION_CHAINS.has(chain)) return res.status(400).json(safeError('This chain is discovery-only for now.'))
       const contract = body.contractAddress || body.contract_address
       if (contract && !isAddress(contract)) return res.status(400).json(safeError('This contract address does not look right.'))
-      const optimizationProfile = await loadExecutionProfile(supabase, { chain, contractAddress: contract })
+
+      // ── Speed: parallel pre-flight ───────────────────────────────────────
+      // loadCachedExecution warms the in-memory execCache so prepareMintTransaction
+      // gets an instant cache hit instead of making a second sequential DB call.
+      const [optimizationProfile] = await Promise.all([
+        loadExecutionProfile(supabase, { chain, contractAddress: contract }),
+        contract ? loadCachedExecution(contract, chain, supabase) : Promise.resolve(null),
+      ])
+
       let preparedTransaction
       const prepareStartedAt = Date.now()
       try {
@@ -1597,61 +1605,70 @@ export async function handleMintAction(req, res, action) {
           real_error: rawReason.slice(0, 200),
           user_message: userMessage,
         })
-        await recordExecutionOptimization(supabase, {
+        // Fire-and-forget on error path too — don't block the 400 response
+        recordExecutionOptimization(supabase, {
           chain,
           contractAddress: contract,
           status: 'failed',
           latencyMs: Date.now() - prepareStartedAt,
           errorMessage: userMessage,
-        })
+        }).catch(() => null)
         return res.status(400).json({ ...safeError(userMessage), reason: rawReason.slice(0, 300) })
       }
       const prepareLatencyMs = Date.now() - prepareStartedAt
-      const row = await insertOptional(supabase, 'mint_intents', intentPayload(user, body, 'prepared'))
-      const intentId = row.id || `local-${Date.now()}`
-      // Parallel DB inserts — order not load-bearing for display
-      const eventWrites = [
-        logEvent(supabase, intentId, user.id, 'preparing'),
-        logEvent(supabase, intentId, user.id, 'phase'),
-        logEvent(supabase, intentId, user.id, 'checking'),
-        logEvent(supabase, intentId, user.id, 'prepared'),
-      ]
-      if (preparedTransaction.optimized) {
-        eventWrites.push(logEvent(supabase, intentId, user.id, 'optimized', 'Optimized from previous execution history.', {
-          readinessBoost: preparedTransaction.readinessBoost,
-          gasProfile: preparedTransaction.gasProfile,
-          bestRpc: optimizationProfile?.best_rpc || preparedTransaction.rpcLabel,
-        }))
-      }
-      await Promise.all(eventWrites)
-      await recordExecutionOptimization(supabase, {
-        intent: { ...row, id: intentId, user_id: user.id },
-        chain,
-        contractAddress: contract,
-        status: 'prepared',
-        latencyMs: prepareLatencyMs,
-        gasUsed: preparedTransaction.gas,
-        functionName: preparedTransaction.functionName,
-        functionSource: preparedTransaction.source,
-        rpcLabel: preparedTransaction.rpcLabel,
-      })
-      // Phase 5 — auto-learn: save execution profile fire-and-forget
-      // Skip stub prewarm wallets so we only learn from real mint paths
+
+      // ── Speed: respond immediately, write audit DB records in background ──
+      // The wallet transaction does not depend on any of these writes, so we
+      // return to the client the moment prepare succeeds and let DB catch up.
+      const intentId = `local-${Date.now()}`
       const isRealWallet = body.walletAddress && body.walletAddress !== '0x0000000000000000000000000000000000000001'
-      if (isRealWallet && preparedTransaction?.preparedTransaction?.data && contract) {
-        autoLearnCaptureProfile(supabase, user.id, {
-          chain, contractAddress: contract, userId: user.id,
-          preparedTransaction, functionName: preparedTransaction.functionName,
-        }).catch(() => {})
-      }
+      ;(async () => {
+        try {
+          const row = await insertOptional(supabase, 'mint_intents', intentPayload(user, body, 'prepared'))
+          const rowId = row?.id || intentId
+          const eventWrites = [
+            logEvent(supabase, rowId, user.id, 'preparing'),
+            logEvent(supabase, rowId, user.id, 'phase'),
+            logEvent(supabase, rowId, user.id, 'checking'),
+            logEvent(supabase, rowId, user.id, 'prepared'),
+          ]
+          if (preparedTransaction.optimized) {
+            eventWrites.push(logEvent(supabase, rowId, user.id, 'optimized', 'Optimized from previous execution history.', {
+              readinessBoost: preparedTransaction.readinessBoost,
+              gasProfile: preparedTransaction.gasProfile,
+              bestRpc: optimizationProfile?.best_rpc || preparedTransaction.rpcLabel,
+            }))
+          }
+          await Promise.all(eventWrites)
+          await recordExecutionOptimization(supabase, {
+            intent: { ...row, id: rowId, user_id: user.id },
+            chain,
+            contractAddress: contract,
+            status: 'prepared',
+            latencyMs: prepareLatencyMs,
+            gasUsed: preparedTransaction.gas,
+            functionName: preparedTransaction.functionName,
+            functionSource: preparedTransaction.source,
+            rpcLabel: preparedTransaction.rpcLabel,
+          })
+        } catch {}
+        // Auto-learn capture profile (only for real wallets, not prewarm stubs)
+        if (isRealWallet && preparedTransaction?.preparedTransaction?.data && contract) {
+          autoLearnCaptureProfile(supabase, user.id, {
+            chain, contractAddress: contract, userId: user.id,
+            preparedTransaction, functionName: preparedTransaction.functionName,
+          }).catch(() => {})
+        }
+      })()
+
       return res.status(200).json({
         ok: true,
-        intent: { ...row, id: intentId },
-        mode: body.mode || row.execution_mode || 'safe',
+        intent: { id: intentId },
+        mode: body.mode || 'safe',
         preparedTransaction,
         optimized: preparedTransaction.optimized,
         optimization: optimizationProfile ? optimizationTelemetry(optimizationProfile) : null,
-        message: 'Mint prepared and simulated. Confirm in your wallet when ready.',
+        message: 'Mint prepared. Confirm in your wallet when ready.',
       })
     }
 
