@@ -78,7 +78,7 @@ export function setCachedExecution(contract, chain, result, supabase = null) {
       success_count:    entry.successCount,
       last_latency_ms:  result.latencyMs || null,
       last_success_at:  new Date().toISOString(),
-    }, { onConflict: 'contract_address,chain' }).catch(() => null)
+    }, { onConflict: 'contract_address,chain' }).then(r => r, () => null)
   }
 }
 
