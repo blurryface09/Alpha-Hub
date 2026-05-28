@@ -167,10 +167,10 @@ await test('INTENT_STATES values are unique strings', () => {
 })
 
 // ── transitionIntent: validation (no DB) ─────────────────────────────────────
-await test('transitionIntent throws on invalid transition: armed → executing', async () => {
-  // armed allows: queued, cancelled, expired — not executing directly
+await test('transitionIntent throws on invalid transition: armed → retrying', async () => {
+  // armed allows: queued, executing, executing_sim, cancelled, expired — not retrying directly
   await assert.rejects(
-    () => transitionIntent(null, 'x', INTENT_STATES.ARMED, INTENT_STATES.EXECUTING),
+    () => transitionIntent(null, 'x', INTENT_STATES.ARMED, INTENT_STATES.RETRYING),
     /Invalid intent state transition/,
   )
 })

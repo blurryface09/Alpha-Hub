@@ -11,7 +11,7 @@
     "build": "node --max-old-space-size=1024 ./node_modules/vite/bin/vite.js build",
     "build:railway": "node --max-old-space-size=1024 ./node_modules/vite/bin/vite.js build",
     "preview": "vite preview",
-    "test": "node worker/test/uat-automint-bugs.test.js && node worker/test/preflight.test.js && node worker/test/gas.test.js && node worker/test/rpc.test.js && node worker/test/queue.test.js && node worker/test/strike-engine.test.js"
+    "test": "node worker/test/uat-automint-bugs.test.js && node worker/test/preflight.test.js && node worker/test/gas.test.js && node worker/test/rpc.test.js && node worker/test/queue.test.js && node worker/test/strike-engine.test.js && NODE_ENV=test node worker/test/fcfs-parallel.test.js"
   },
   "dependencies": {
     "@sentry/react": "^10.53.1",

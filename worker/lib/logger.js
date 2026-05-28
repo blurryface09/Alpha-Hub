@@ -36,7 +36,12 @@ export const PHASES = new Set([
  * @param {string|null} userId
  * @param {Record<string,unknown>} fields
  */
+/** When LOG_SILENT=1 or NODE_ENV=test, suppress info/debug output. */
+const SILENT = process.env.LOG_SILENT === '1' || process.env.NODE_ENV === 'test'
+
 function emit(level, phase, message, intentId, userId, fields = {}) {
+  if (SILENT && level !== 'error' && level !== 'warn') return
+
   const entry = {
     timestamp: new Date().toISOString(),
     level,
