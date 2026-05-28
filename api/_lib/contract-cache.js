@@ -62,6 +62,8 @@ export function setCachedExecution(contract, chain, result, supabase = null) {
     gas:           result.gas,
     chainId:       result.chainId,
     source:        result.source,
+    // Persist ETH value so the cache fast path works on paid mints without re-reading on-chain price
+    value:         result.value || null,
     successCount:  (prev?.successCount || 0) + 1,
     lastLatencyMs: result.latencyMs || null,
     at:            Date.now(),

@@ -767,23 +767,27 @@ export async function prepareMintTransaction(body, _clientOverride = null, _supa
     const fastCandidate = fallbackCandidates(quantity, walletAddress).find(c => c.functionName === cachedExec.functionName)
     if (fastCandidate) {
       try {
+        // For paid mints: if user sent value=0 but we cached a non-zero value from a previous
+        // successful paid mint, reuse the cached value to avoid a wasted estimateGas round-trip.
+        const fastValue = (value === 0n && cachedExec.value) ? BigInt(cachedExec.value) : value
         const data = encodeFunctionData({ abi: fastCandidate.abi, functionName: fastCandidate.functionName, args: fastCandidate.args })
         const [gasResult, gasPriceResult] = await Promise.allSettled([
-          client.estimateGas({ account: walletAddress, to: contract, data, value }),
+          client.estimateGas({ account: walletAddress, to: contract, data, value: fastValue }),
           maxSpend ? client.getGasPrice().catch(() => 0n) : Promise.resolve(0n),
         ])
         if (gasResult.status === 'fulfilled') {
           const gas = gasFromProfile(gasResult.value, executionProfile)
           const gasPrice = gasPriceResult.status === 'fulfilled' ? gasPriceResult.value : 0n
-          if (maxSpend && (value + gas * gasPrice) > maxSpend) throw new Error('max_spend_exceeded')
+          if (maxSpend && (fastValue + gas * gasPrice) > maxSpend) throw new Error('max_spend_exceeded')
           const latencyMs = Date.now() - t0
           console.log('[mint-benchmark] cache_hit', {
             duration_ms: latencyMs, chain, contract: contract.slice(0, 10),
             fn: fastCandidate.functionName, successCount: cachedExec.successCount,
+            paid: fastValue > 0n && value === 0n,
           })
           recordLatency(contract, chain, latencyMs)
           const result = {
-            to: contract, data, value: value.toString(), chainId, gas: gas.toString(),
+            to: contract, data, value: fastValue.toString(), chainId, gas: gas.toString(),
             functionName: fastCandidate.functionName,
             argsSummary: fastCandidate.args.map(a => typeof a === 'bigint' ? a.toString() : String(a)),
             source: 'cache',
@@ -901,7 +905,11 @@ export async function prepareMintTransaction(body, _clientOverride = null, _supa
       rpc: activeUrl.replace(/^https?:\/\//, '').slice(0, 30),
     })
 
+    // Payment-gate signals: if estimateGas fails with any of these, the contract needs ETH value.
+    // Short-circuit remaining zero-value candidates immediately (they'll all fail the same way).
+    const PAID_SIGNALS = ['wrong eth', 'incorrect payment', 'wrong value', 'incorrect value', 'msg.value', 'wrong payment', 'insufficient payment', 'price mismatch']
     let rpcHadNetworkError = false
+    let hadPaidSignal = false
     for (const candidate of candidates) {
       attemptCount++
       triedFunctions.push(candidate.functionName)
@@ -922,13 +930,16 @@ export async function prepareMintTransaction(body, _clientOverride = null, _supa
         if (gasResult.status === 'rejected') {
           lastError = gasResult.reason
           if (isRpcFailure(gasResult.reason)) { rpcHadNetworkError = true; break }
+          const errStr = String(gasResult.reason?.shortMessage || gasResult.reason?.message || gasResult.reason || '').toLowerCase()
           console.log('[mint-benchmark] candidate_fail', {
             chain,
             contract: contract.slice(0, 10),
             fn: candidate.functionName,
             source: candidate.source,
-            error: String(gasResult.reason?.message || gasResult.reason || '').slice(0, 80),
+            error: errStr.slice(0, 80),
           })
+          // Payment gate detected — short-circuit remaining zero-value candidates
+          if (value === 0n && PAID_SIGNALS.some(p => errStr.includes(p))) { hadPaidSignal = true; break }
           continue
         }
         const gas = gasFromProfile(gasResult.value, executionProfile)
@@ -982,6 +993,85 @@ export async function prepareMintTransaction(body, _clientOverride = null, _supa
       }
     }
 
+    // ── Paid mint detection ─────────────────────────────────────────────────
+    // All zero-value candidates were short-circuited by a payment-gate revert.
+    // Read the mint price directly on-chain and retry every candidate with it.
+    if (!rpcHadNetworkError && hadPaidSignal) {
+      const PRICE_FN_SIGS = [
+        ['mintPrice', 'function mintPrice() view returns (uint256)'],
+        ['price',     'function price() view returns (uint256)'],
+        ['cost',      'function cost() view returns (uint256)'],
+      ]
+      let onChainPrice = 0n
+      let priceFnName = null
+      for (const [fnName, sig] of PRICE_FN_SIGS) {
+        try {
+          const p = await activeRpc.readContract({ address: contract, abi: parseAbi([sig]), functionName: fnName })
+          if (p > 0n) { onChainPrice = p; priceFnName = fnName; break }
+        } catch { /* function not present on this contract */ }
+      }
+      if (onChainPrice > 0n) {
+        const paidValue = onChainPrice * quantity
+        console.log('[mint-benchmark] paid_mint_price_read', {
+          chain, contract: contract.slice(0, 10), priceFn: priceFnName,
+          priceWei: onChainPrice.toString(), paidValue: paidValue.toString(),
+        })
+        for (const candidate of candidates) {
+          try {
+            const paidData = candidate.data || encodeFunctionData({
+              abi: candidate.abi,
+              functionName: candidate.functionName,
+              args: candidate.args,
+            })
+            const txTo = candidate.toOverride || contract
+            // Protocol candidates may override value; for everything else use the detected price
+            const txValue = candidate.valueOverride !== undefined ? candidate.valueOverride : paidValue
+            const [gasResult, gasPriceResult] = await Promise.allSettled([
+              activeRpc.estimateGas({ account: walletAddress, to: txTo, data: paidData, value: txValue }),
+              maxSpend ? activeRpc.getGasPrice().catch(() => 0n) : Promise.resolve(0n),
+            ])
+            if (gasResult.status === 'rejected') {
+              lastError = gasResult.reason
+              if (isRpcFailure(gasResult.reason)) break
+              continue
+            }
+            const gas = gasFromProfile(gasResult.value, executionProfile)
+            const gasPrice = gasPriceResult.status === 'fulfilled' ? gasPriceResult.value : 0n
+            if (maxSpend && (txValue + gas * gasPrice) > maxSpend) throw new Error('max_spend_exceeded')
+            const latencyMs = Date.now() - t0
+            console.log('[mint-benchmark] paid_success', {
+              duration_ms: latencyMs, chain, contract: contract.slice(0, 10),
+              fn: candidate.functionName, source: candidate.source,
+              gas: gas.toString(), priceFn: priceFnName, paidValue: paidValue.toString(),
+              rpc: activeUrl.replace(/^https?:\/\//, '').slice(0, 30),
+            })
+            recordLatency(contract, chain, latencyMs)
+            const paidResult = {
+              to: txTo, data: paidData, value: txValue.toString(), chainId, gas: gas.toString(),
+              functionName: candidate.functionName,
+              argsSummary: candidate.args.map(arg => typeof arg === 'bigint' ? arg.toString() : String(arg)),
+              source: 'paid_' + (candidate.source || 'fallback'),
+              cacheHit: false,
+              latencyMs,
+              executionState: 'Prepared',
+              optimized: false,
+              readinessBoost: readinessBoostFromProfile(executionProfile),
+              rpcLabel: rpcLabelForUrl(chain, activeUrl),
+              gasProfile: null,
+            }
+            setCachedExecution(contract, chain, paidResult, _supabase)
+            setCachedProbeResult(contract, chain, { execution_status: 'live', function_tried: candidate.functionName })
+            return paidResult
+          } catch (paidErr) {
+            lastError = paidErr
+            if (String(paidErr?.message).includes('max_spend_exceeded')) throw paidErr
+          }
+        }
+        console.log('[mint-benchmark] paid_all_failed', {
+          chain, contract: contract.slice(0, 10), priceFn: priceFnName, paidValue: paidValue.toString(),
+        })
+      }
+    }
     // If this RPC had a network error, try the next fallback; otherwise candidates are exhausted
     if (!rpcHadNetworkError) break
     console.log('[mint-benchmark] rpc_retry', { failedUrl: activeUrl.slice(0, 40), remaining: rpcQueue.length - rpcQueue.indexOf({ activeClient: activeRpc, url: activeUrl }) - 1 })
