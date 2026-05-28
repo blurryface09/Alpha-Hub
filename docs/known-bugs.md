@@ -165,11 +165,64 @@ The error was further masked because all three RPC providers rejected the tx, an
 
 ---
 
+---
+
+## BUG-12 — ExecutionMonitor query: column `mint_contract_address` does not exist
+
+**Status**: Fixed  
+**File**: `api/admin/[action].js` — monitor intent SELECT  
+**Discovered via**: ExecutionMonitorPage showing Supabase error instead of intent list (2026-05-28)
+
+**Problem**: The admin monitor endpoint selected `mint_contract_address` from `mint_intents`, but that column doesn't exist. The correct column is `contract_address`. Additionally, `call_data` was not included in the SELECT, making the prewarm badge on the front-end always show nothing.
+
+**Fix**: Removed `mint_contract_address` from SELECT; added `call_data`.
+
+---
+
+## BUG-13 — Telegram boot alert: `403 Forbidden: the bot can't send messages to the bot`
+
+**Status**: Fixed  
+**File**: `worker/strike-engine.js` — boot alert  
+**Discovered via**: Railway logs showing `private_fallback` after first boot (2026-05-28)
+
+**Problem**: `ADMIN_TELEGRAM_CHAT_ID` was set to the bot's own Telegram user ID (obtained from an early @userinfobot check that returned bot info instead of the admin's personal info). Telegram does not allow a bot to send messages to itself.
+
+**Fix**: Use the admin's **personal** Telegram user ID. Obtained by sending `/start` directly to @userinfobot as the admin user (not via the bot). Admin's personal ID: `7737024288`.
+
+**Note**: `TELEGRAM_BOT_TOKEN` must also be in the Railway worker service env vars (separate from Vercel). It's needed in both places for different purposes.
+
+---
+
+## BUG-14 — queue.test.js stale transition assertion
+
+**Status**: Fixed  
+**File**: `worker/test/queue.test.js`  
+**Discovered via**: Test audit (2026-05-28)
+
+**Problem**: A test asserted that `armed → retrying` is an invalid transition and expected an error. But `armed → executing` is valid (that's exactly what `claimIntent` does — it atomically flips `armed` to `executing`). The test was asserting the wrong transition.
+
+**Fix**: Changed the invalid-transition test to use `armed → retrying` (actually invalid) instead of the originally intended but wrong transition.
+
+---
+
+## BUG-15 — e2e smoke test: Supabase mock `then()` not applying patches
+
+**Status**: Fixed  
+**File**: `worker/test/e2e-smoke.test.js` — `createMockDb()`  
+**Discovered via**: Prewarm test showing call_data not written back (2026-05-28)
+
+**Problem**: `prewarmIntent` uses `.update({...}).eq('id', id).then(r => r, () => null)` — passing two callbacks to `.then()`. The mock's `then()` only returned the stored rows array; it didn't apply the patch from `.update()`. The prewarm writes appeared to succeed (no error) but the in-memory DB never updated.
+
+**Fix**: Mock's `then()` checks `_patch` and `_insert` state first. If a patch is pending (from `.update()`), it applies the diff to matching rows and resolves with `{ data: null, error: null }`. If an insert is pending, it appends to the array. Normal reads fall through to the array.
+
+---
+
 ## Open / Watch List
 
 | Issue | Status | Notes |
 |-------|--------|-------|
-| `loadCachedExecution` never called | Watch | Supabase cache written but never read back |
+| `loadCachedExecution` never called | Watch | Supabase cache written but never read back — cross-instance warmup doesn't work |
 | SeaDrop v2 not supported | Known gap | Only SeaDrop v1 (`0x00005EA...`) |
 | `minterIfNotPayer` hardcoded to zero | Accepted | Valid for standard mints; may need change for some collections |
 | Vercel Hobby 12-function limit | Active constraint | Capture merged into calendar handler |
+| Multi-wallet fan-out | Future | Single vault wallet per intent; bots fan out across many wallets |

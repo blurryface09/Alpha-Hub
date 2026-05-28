@@ -114,9 +114,61 @@ The main poll runs every `STRIKE_WORKER_INTERVAL_MS` (default 15s).
 
 **Each tick:**
 1. **Expiration sweep** — mark stale intents (past `INTENT_EXPIRY_AFTER_MS` = 5min) as `expired`
-2. **Prewarm query** — fetch intents with `strike_execute_at` within the next 30s; log them so gas/wallet can be prepared
-3. **Ready query** — fetch intents where `strike_execute_at IS NULL OR strike_execute_at <= now` (up to `STRIKE_WORKER_BATCH_SIZE`, default 3), ordered by `updated_at ASC`
-4. **Execute** each ready intent sequentially
+2. **Prewarm query** — fetch intents with `strike_execute_at` within the next 30s; run `prewarmIntent` which calls `prepareMintTransaction` and writes `call_data`, `gas_limit`, `function_name` back to `mint_intents` so the executor skips detection at T=0
+3. **FCFS schedule** — for each prewarm intent with a future `strike_execute_at`, register a precision `setTimeout` via `scheduleIntent`; all intents with the same `execute_at` fire via `Promise.allSettled` (parallel, not sequential)
+4. **Ready query** — fetch intents where `strike_execute_at IS NULL OR strike_execute_at <= now` (up to `STRIKE_WORKER_BATCH_SIZE`, default 3), ordered by `updated_at ASC`
+5. **Execute** each ready intent sequentially
+
+---
+
+## FCFS Precision Scheduler
+
+`worker/lib/scheduler.js` implements a per-intent `setTimeout` that fires at exactly `strike_execute_at` milliseconds. Intents sharing the same `execute_at` are registered together and fired via `Promise.allSettled` — true parallel broadcast, not sequential.
+
+**Observed performance** (test suite):
+- Timer drift from target: ≤1ms (single intent)
+- Spread across 10 simultaneous intents: 0–1ms
+- 5-user simulation: all intents fire within 1ms of mint open
+
+Overdue intents (past `execute_at` at registration time) fire immediately via `setImmediate`.
+
+---
+
+## Prewarm Pipeline (write-back)
+
+`worker/lib/prewarmer.js::prewarmIntent` is called at T-30s:
+
+1. Calls `prepareMintTransaction` with the intent's chain/contract/wallet/price params
+2. Receives `{ data, gas, functionName, source, to, value, cacheHit }`
+3. Writes `call_data`, `gas_limit`, `function_name` back to `mint_intents` via Supabase
+
+At T=0, `executor.js` reads `intent.call_data` — if set, it skips all inline detection and goes straight to broadcast (zero RPC round-trips for detection). `gas_limit` is also read, skipping estimateGas for the specific function.
+
+If call_data is still null at T=0 (prewarm window too short), the executor runs 11 inline function candidates (`estimateGas` for each), then falls back to `prepareMintTransaction`. The discovered data/gas is written back for future retries.
+
+---
+
+## Private Mempool Submission
+
+`worker/lib/private-submit.js` — activated by `PRIVATE_SUBMIT_ENABLED=true`.
+
+Only intercepts `eth_sendRawTransaction` for FCFS intents (`intent.strike_execute_at` is set). All other RPC methods pass through to the standard `rpcFetch`.
+
+| Chain | Endpoint | Method | Benefit |
+|-------|----------|--------|---------|
+| Base | `mainnet-sequencer.base.org` (or `BASE_SEQUENCER_URL`) | `eth_sendRawTransaction` | Reaches Coinbase sequencer directly — bypasses public p2p gossip |
+| Ethereum | `rpc.flashbots.net` | `eth_sendPrivateTransaction` | Keeps tx off public mempool; routes to MEV-Share builders |
+| ApeChain / BNB | — | (falls through to public) | No known private endpoints |
+
+**Flashbots auth (optional)**: set `FLASHBOTS_AUTH_KEY` to any Ethereum private key. The worker signs `keccak256(requestBody)` as an EIP-191 personal message and attaches `X-Flashbots-Signature: address:sig`. Without the key, the call still works (no MEV-Share reputation).
+
+**Fallback**: on any error or 5s timeout from the private endpoint, silently retries via `rpcFetch` (standard public RPC). Logs `private_ok` or `private_fallback` at `info`/`warn` level.
+
+**Activation checklist:**
+1. Set `PRIVATE_SUBMIT_ENABLED=true` in Railway worker env
+2. Redeploy worker
+3. Arm intent with future `strike_execute_at`
+4. Watch Railway logs for `private_ok` (sequencer accepted) or `private_fallback` (fell back to public)
 
 ---
 
@@ -181,11 +233,11 @@ Each URL maintains a health record:
 
 ## Gas Strategies
 
-| Strategy    | maxPriorityFee | baseFee Multiplier | Legacy gasPrice Multiplier |
-|-------------|---------------|-------------------|---------------------------|
-| `safe`      | 1.0 gwei      | 1.5×              | 1.1×                      |
-| `balanced`  | 1.5 gwei      | 2.0×              | 1.3×                      |
-| `aggressive`| 3.0 gwei      | 2.5×              | 1.6×                      |
+| Strategy | maxPriorityFee | baseFee Multiplier | Legacy gasPrice Multiplier | Default for |
+|----------|---------------|-------------------|---------------------------|-------------|
+| `safe` | 1.0 gwei | 1.5× | 1.1× | — |
+| `balanced` | 1.5 gwei | 2.0× | 1.3× | Live-detection intents |
+| `aggressive` | 3.0 gwei | 2.5× | 1.6× | FCFS/timed intents |
 
 **Formula (EIP-1559):**
 ```
@@ -194,7 +246,9 @@ maxFeePerGas = ceil(baseFeePerGas × multiplier) + maxPriorityFeePerGas
 
 For chains without `baseFeePerGas` in the block header, falls back to `eth_gasPrice × multiplier`.
 
-Intent field `gas_strategy` overrides the default (`balanced`).
+Intent field `gas_strategy` is set by the user in `StrikeReviewModal` (3-button picker). If not set, executor defaults to `aggressive` for FCFS intents (have `strike_execute_at`) and `balanced` for live-detection intents.
+
+**Base L2 note:** Priority fee is capped at `min(strategyFee, max(baseFee × 2, 0.001 gwei))` to prevent the 200× over-pricing that would occur when using Ethereum-calibrated constants on Base (typical baseFee ~0.007 gwei).
 
 ---
 
@@ -276,22 +330,36 @@ Every log line is a JSON object on stdout (errors to stderr):
 
 ## Feature Flags Reference
 
-| Flag                       | Default | Env Variable                | Description                                        |
-|----------------------------|---------|-----------------------------|---------------------------------------------------|
-| `LIVE_EXECUTION_ENABLED`   | `false` | `LIVE_EXECUTION_ENABLED`    | Master gate — no tx sent unless true              |
-| `RETRY_ENABLED`            | `true`  | `RETRY_ENABLED`             | Enable automatic retry on transient errors        |
-| `MULTI_WALLET_ENABLED`     | `false` | `MULTI_WALLET_ENABLED`      | Load all user wallets; select LRU                 |
-| `GAS_ESCALATION_ENABLED`   | `true`  | `GAS_ESCALATION_ENABLED`    | Multiply gas 1.25× per retry                      |
-| `PREWARM_ENABLED`          | `true`  | `PREWARM_ENABLED`           | Log prewarm events 30s before execute_at          |
-| `RPC_HEALTH_SCORING_ENABLED`| `true` | `RPC_HEALTH_SCORING_ENABLED`| Sort RPC providers by EMA latency                 |
-| `DRY_RUN_LOGGING`          | `true`  | `DRY_RUN_LOGGING`           | Log tx details even when live execution is off    |
+| Flag | Default | Env Variable | Description |
+|------|---------|-------------|-------------|
+| `LIVE_EXECUTION_ENABLED` | `false` | `LIVE_EXECUTION_ENABLED` | Master gate — no tx sent unless true |
+| `RETRY_ENABLED` | `true` | `RETRY_ENABLED` | Enable automatic retry on transient errors |
+| `MULTI_WALLET_ENABLED` | `false` | `MULTI_WALLET_ENABLED` | Load all user wallets; select LRU |
+| `GAS_ESCALATION_ENABLED` | `true` | `GAS_ESCALATION_ENABLED` | Multiply gas 1.25× per retry |
+| `PREWARM_ENABLED` | `true` | `PREWARM_ENABLED` | Run prewarm pipeline 30s before execute_at (writes call_data to DB) |
+| `RPC_HEALTH_SCORING_ENABLED` | `true` | `RPC_HEALTH_SCORING_ENABLED` | Sort RPC providers by EMA latency |
+| `DRY_RUN_LOGGING` | `true` | `DRY_RUN_LOGGING` | Log tx details even when live execution is off |
+| `SIMULATION_MODE` | `false` | `SIMULATION_MODE` | Run full execution path without touching blockchain |
+| `TESTNET_EXECUTION_ENABLED` | `false` | `TESTNET_EXECUTION_ENABLED` | Enable live txs on Sepolia/Base Sepolia only |
+| `PREFLIGHT_ENABLED` | `true` | `PREFLIGHT_ENABLED` | Run contract risk checks before simulation |
+| `PATTERN_CLASSIFICATION_ENABLED` | `true` | `PATTERN_CLASSIFICATION_ENABLED` | Auto-classify mint patterns |
+| `ADAPTIVE_GAS_ENABLED` | `true` | `ADAPTIVE_GAS_ENABLED` | Congestion-adaptive gas escalation multipliers |
+| `EXECUTION_TELEMETRY_ENABLED` | `true` | `EXECUTION_TELEMETRY_ENABLED` | Emit execution profiling telemetry |
+| `DUPLICATE_PREVENTION_ENABLED` | `true` | `DUPLICATE_PREVENTION_ENABLED` | Check for existing tx_hash before broadcast |
+| `CONTRACT_ALLOWLIST_ENABLED` | `false` | `CONTRACT_ALLOWLIST_ENABLED` | Reject non-listed contracts |
+| `PRE_BROADCAST_SIMULATION_ENABLED` | `false` | `PRE_BROADCAST_SIMULATION_ENABLED` | eth_call simulation before every broadcast |
+| `ORPHAN_RECOVERY_ENABLED` | `true` | `ORPHAN_RECOVERY_ENABLED` | Sweep orphaned executing intents |
+| `LEASE_ENABLED` | `false` | `LEASE_ENABLED` | DB heartbeat lease for single-worker coordination |
+| `SPEND_CAP_ENABLED` | `true` | `SPEND_CAP_ENABLED` | Enforce max_total_spend cap per tx |
+| `MONITORING_ENABLED` | `true` | `MONITORING_ENABLED` | Background project revalidation and alert engine |
+| `PRIVATE_SUBMIT_ENABLED` | `false` | `PRIVATE_SUBMIT_ENABLED` | Route FCFS intent broadcasts via Base sequencer / Flashbots |
 
 Legacy safety flags (from original engine, still required):
 
-| Flag                  | Env Variable            | Description                            |
-|-----------------------|-------------------------|----------------------------------------|
-| `AUTO_STRIKE_ENABLED` | `AUTO_STRIKE_ENABLED`   | Enables the poll loop to process intents |
-| `ALPHA_VAULT_ENABLED` | `ALPHA_VAULT_ENABLED`   | Enables vault wallet decryption        |
+| Flag | Env Variable | Description |
+|------|-------------|-------------|
+| `AUTO_STRIKE_ENABLED` | `AUTO_STRIKE_ENABLED` | Enables the poll loop to process intents |
+| `ALPHA_VAULT_ENABLED` | `ALPHA_VAULT_ENABLED` | Enables vault wallet decryption |
 
 ---
 
@@ -304,6 +372,28 @@ After a successful `sendTransaction`:
 3. `mint_execution_events` row inserted with phase `success`, tx hash, and latency
 
 Transaction **confirmation** (waiting for receipt) is out of scope for the current implementation. A future `confirm` phase will poll `eth_getTransactionReceipt` and update `status` accordingly.
+
+---
+
+## Telegram Alerts
+
+Two distinct notification paths:
+
+### Boot alert (worker → admin)
+Fires once at every Railway worker start. Uses `TELEGRAM_BOT_TOKEN` + `ADMIN_TELEGRAM_CHAT_ID` (both must be in Railway worker service env vars).
+
+`ADMIN_TELEGRAM_CHAT_ID` must be the admin's **personal Telegram user ID** (not the bot's own ID). Get it by messaging @userinfobot. The bot cannot send messages to itself — if `chat_id` equals the bot's own ID, Telegram returns `403 Forbidden: the bot can't send messages to the bot`.
+
+Message format:
+```
+⚡ Strike Worker Started
+Mode: 🟢 LIVE
+Prewarm: ✓ · Retry: ✓
+Interval: 2000ms · Lib: ✓
+```
+
+### Mint success alert (worker → user)
+Fires after `waitForReceiptWithRecovery` confirms the tx. Uses `profiles.telegram_chat_id` (per-user, stored in Supabase `profiles` table by the Telegram bot webhook flow).
 
 ---
 

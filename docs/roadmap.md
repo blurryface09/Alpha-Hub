@@ -4,6 +4,14 @@
 
 | Feature | Commit | Notes |
 |---------|--------|-------|
+| **Private mempool submission (Base + Flashbots)** | `fe81955` | `PRIVATE_SUBMIT_ENABLED=true` → Base sequencer / Flashbots relay for FCFS intents; silent fallback |
+| FCFS e2e smoke test (7 tests) | `df3091c` | Real Supabase connectivity, prewarm pipeline, 5-user concurrent FCFS, ≤1ms spread |
+| Telegram boot alert (Railway worker) | `df3091c` | Fires on every worker start; `ADMIN_TELEGRAM_CHAT_ID` = personal user ID not bot ID |
+| ExecutionMonitor: live countdown + prewarm badge | `df3091c` | 250ms tick, amber "prewarming" inside 30s window, Database icon when call_data ready |
+| Gas strategy UI (safe / balanced / aggressive) | `df3091c` | 3-button picker in StrikeReviewModal; saved on arm; read by executor; default aggressive for FCFS |
+| Prewarm urgency warning in review modal | `df3091c` | Checklist item warns if mint <5min away and call_data not precomputed |
+| Admin monitor SELECT fix | `df3091c` | Removed non-existent `mint_contract_address`, added `call_data` column |
+| FCFS parallel scheduler — 8/8 tests | `df3091c` | ≤1ms drift, 0ms spread across 10 concurrent intents, logger silent mode for tests |
 | **🏆 MILESTONE: First production public mint via Strike** | `c7ebe18` | Base mainnet · block 46541462 · 73,061 gas · 113.7 s |
 | Fix: pending treated as terminal in E2E test (BUG-11) | `c7ebe18` | Wait for `success`, not `pending` |
 | Fix: Base gas fee inflation — cap priority fee to 2× baseFee (BUG-10) | `1d94f49` | No-op on Ethereum; fixes L2 over-pricing |
