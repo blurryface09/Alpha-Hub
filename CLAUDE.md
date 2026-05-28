@@ -191,18 +191,41 @@ Current state (2026-05-28):
 
 ---
 
+## Primary Chain: Ethereum Mainnet
+
+This app is primarily used for **ETH mainnet** FCFS mints. All gas tuning and private mempool decisions are ETH-first:
+- Flashbots (`rpc.flashbots.net`) is the primary private submission path — more important than Base sequencer
+- `FLASHBOTS_AUTH_KEY` is **required** for ETH mints (gives MEV-Share reputation, better builder priority)
+- ETH blocks are 12s — missing the first block costs 12s, not 2s (Base). Prewarm is critical.
+- ETH gas tips spike to 20-50+ gwei during mint rushes — dynamic 2× aggressive multiplier handles this
+
 ## FCFS Competitiveness Status (2026-05-28)
 
 | Layer | Status | Notes |
 |-------|--------|-------|
 | Timing | ✅ ≤1ms drift | setTimeout precision scheduler |
 | Prewarm | ✅ T-30s write-back | call_data in DB, 0 detection RPC calls at T=0 |
-| Gas | ✅ Dynamic tip | `eth_maxPriorityFeePerGas` + strategy premium, in parallel with getBlock |
-| Submission | ✅ Private mempool | Base sequencer / Flashbots — set `PRIVATE_SUBMIT_ENABLED=true` |
+| Gas | ✅ Dynamic 2× aggressive | `eth_maxPriorityFeePerGas` × 2.0 for aggressive; fetched in parallel with getBlock |
+| Submission | ✅ Flashbots private | ETH: `eth_sendPrivateTransaction` to rpc.flashbots.net; activate with `PRIVATE_SUBMIT_ENABLED=true` |
 | RPC | ✅ Alchemy auto-wire | `ALCHEMY_API_KEY` → Alchemy ~20ms vs public ~150ms; no config needed |
+| Flashbots auth | ✅ Key generated | `FLASHBOTS_AUTH_KEY` — fresh throwaway key; no funds needed |
 | Wallet | ⚠️ Single wallet | Multi-wallet fan-out is future (`MULTI_WALLET_ENABLED` flag exists) |
 
 Remaining gap vs top MEV bots: multi-wallet fan-out (requires multiple funded wallets + `MULTI_WALLET_ENABLED=true`).
+
+## Flashbots Auth Key
+
+Generate a fresh throwaway key (no funds needed — used only for signing Flashbots auth headers):
+```bash
+node --input-type=module -e "
+import { generatePrivateKey, privateKeyToAccount } from 'viem/accounts';
+const k = generatePrivateKey();
+console.log('FLASHBOTS_AUTH_KEY=' + k);
+console.log('Address:', privateKeyToAccount(k).address);
+"
+```
+
+Add the `FLASHBOTS_AUTH_KEY` value to Railway worker service env vars. The Ethereum address will accumulate MEV-Share reputation over time — don't regenerate it unnecessarily.
 
 ---
 
