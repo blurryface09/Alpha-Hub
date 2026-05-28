@@ -117,13 +117,17 @@ export async function estimateGas(publicClient, strategy = 'balanced', retryAtte
 
     // Dynamic tip: start from the live market rate the node recommends, apply a
     // strategy premium on top so we outbid other txs at the same gas price.
-    // On congested Ethereum mainnet the market tip can be 5+ gwei — a hardcoded 3 gwei
-    // would under-bid. On quiet Base (~0.001 gwei) we fall back to the strategy floor.
+    // On congested Ethereum mainnet the market tip can be 5-50+ gwei during a mint rush —
+    // a hardcoded floor would under-bid. On quiet Base (~0.001 gwei) we fall back to the floor.
     //
-    // Premium multipliers: safe=1.1×, balanced=1.3×, aggressive=1.6×
-    // Floor: strategy minimum (1.0 / 1.5 / 3.0 gwei)
+    // Premium multipliers: safe=1.1×, balanced=1.5×, aggressive=2.0×
+    //   safe:       just above market — lowest cost, risks missing congested blocks
+    //   balanced:   50% above market — good for most live-detection mints
+    //   aggressive: 2× market — targets top of builder priority during ETH mint rushes
+    //
+    // Floor: strategy minimum (1.0 / 1.5 / 3.0 gwei) — active when chain is quiet
     // Cap: 2× baseFee or 0.001 gwei minimum (prevents L2 over-pricing — BUG-10)
-    const DYNAMIC_PREMIUM = { safe: 1.1, balanced: 1.3, aggressive: 1.6 }
+    const DYNAMIC_PREMIUM = { safe: 1.1, balanced: 1.5, aggressive: 2.0 }
     const marketTipGwei = marketTipRaw ? Number(marketTipRaw) / 1e9 : null
     const dynamicTip    = marketTipGwei !== null
       ? marketTipGwei * DYNAMIC_PREMIUM[normalised]
