@@ -7,7 +7,7 @@
  * - value/onChange use UTC ISO strings (what the DB stores)
  */
 import React, { useState, useEffect } from 'react'
-import { Clock } from 'lucide-react'
+import { Clock, X } from 'lucide-react'
 
 function tzLabel() {
   try {
@@ -98,12 +98,18 @@ export default function DateTimePicker({ value, onChange, label = 'Mint Date & T
     if (utc) onChange(utc)
   }
 
+  function handleClear() {
+    setLocalDate('')
+    setLocalTime('')
+    onChange(null)
+  }
+
   return (
     <div>
       <label className="text-xs font-mono text-muted uppercase tracking-wider block mb-1.5">
         {label}
       </label>
-      <div className="flex gap-2">
+      <div className="flex gap-2 items-center">
         <input
           type="date"
           className="input flex-1 min-w-0"
@@ -116,6 +122,16 @@ export default function DateTimePicker({ value, onChange, label = 'Mint Date & T
           value={localTime}
           onChange={handleTime}
         />
+        {(localDate || localTime) && (
+          <button
+            type="button"
+            onClick={handleClear}
+            title="Clear date & time (fire immediately)"
+            className="text-muted hover:text-red-400 transition-colors flex-shrink-0"
+          >
+            <X size={14} />
+          </button>
+        )}
       </div>
       <p className="text-[10px] text-muted mt-1 flex items-center gap-1">
         <Clock size={9} />
