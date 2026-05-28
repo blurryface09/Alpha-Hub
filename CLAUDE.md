@@ -191,6 +191,21 @@ Current state (2026-05-28):
 
 ---
 
+## FCFS Competitiveness Status (2026-05-28)
+
+| Layer | Status | Notes |
+|-------|--------|-------|
+| Timing | ✅ ≤1ms drift | setTimeout precision scheduler |
+| Prewarm | ✅ T-30s write-back | call_data in DB, 0 detection RPC calls at T=0 |
+| Gas | ✅ Dynamic tip | `eth_maxPriorityFeePerGas` + strategy premium, in parallel with getBlock |
+| Submission | ✅ Private mempool | Base sequencer / Flashbots — set `PRIVATE_SUBMIT_ENABLED=true` |
+| RPC | ✅ Alchemy auto-wire | `ALCHEMY_API_KEY` → Alchemy ~20ms vs public ~150ms; no config needed |
+| Wallet | ⚠️ Single wallet | Multi-wallet fan-out is future (`MULTI_WALLET_ENABLED` flag exists) |
+
+Remaining gap vs top MEV bots: multi-wallet fan-out (requires multiple funded wallets + `MULTI_WALLET_ENABLED=true`).
+
+---
+
 ## Recent Changes (2026-05-28 session)
 
 1. **FCFS load test** — 8/8 passing; fixed wall-time threshold (`< WORK_MS*2 + 200`) and removed stray `results` reference
