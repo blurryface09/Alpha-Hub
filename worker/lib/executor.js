@@ -151,17 +151,18 @@ export async function executeIntent(supabase, queuedIntent) {
   }
 
   chainKey = normaliseChain(intent.chain)
-  const rpcUrls = getRpcUrls(chainKey)
-  executionProfile = await loadExecutionProfile(supabase, {
-    chain: chainKey,
-    contractAddress: intent.contract_address || intent.mint_contract_address || intent.to,
-  })
-  rpcLabel = executionProfile?.best_rpc || (rpcUrls[0] ? `${chainKey}_rpc` : null)
   const transport = createViemTransport(chainKey)
   const publicClient = createPublicClient({
     chain: buildChainDescriptor(chainKey),
     transport,
   })
+  // Load execution profile in parallel with client creation (both are independent)
+  executionProfile = await loadExecutionProfile(supabase, {
+    chain: chainKey,
+    contractAddress: intent.contract_address || intent.mint_contract_address || intent.to,
+  })
+  const rpcUrls = getRpcUrls(chainKey)
+  rpcLabel = executionProfile?.best_rpc || (rpcUrls[0] ? `${chainKey}_rpc` : null)
 
   try {
     await insertEvent(supabase, intent, 'preparing', 'Strike worker: preparing execution')
@@ -208,14 +209,17 @@ export async function executeIntent(supabase, queuedIntent) {
       return
     }
 
-    // ── Step 3: Load wallet ─────────────────────────────────────────────────
-    log.info('prepare', 'Loading execution wallet')
-    wallet = await loadExecutionWallet(supabase, intent, FLAGS, transport)
-
-    // ── Step 4: Estimate gas ────────────────────────────────────────────────
-    const gasStrategy = intent.gas_strategy || 'balanced'
-    log.info('gas', 'Estimating gas', { strategy: gasStrategy })
-    gasParams = await estimateGas(publicClient, gasStrategy, 0)
+    // ── Steps 3+4: Load wallet + estimate gas in PARALLEL ──────────────────
+    // These are independent — no need to wait for wallet before fetching gas.
+    // For FCFS intents (have execute_at), force aggressive gas so the tx lands
+    // in the first available block, not the second.
+    const gasStrategy = intent.gas_strategy
+      || (intent.strike_execute_at ? 'aggressive' : 'balanced')
+    log.info('prepare', 'Loading execution wallet + estimating gas', { gas_strategy: gasStrategy })
+    ;[wallet, gasParams] = await Promise.all([
+      loadExecutionWallet(supabase, intent, FLAGS, transport),
+      estimateGas(publicClient, gasStrategy, 0),
+    ])
 
     // ── Step 5: Live execution gate ─────────────────────────────────────────
     if (!flagEnabled('LIVE_EXECUTION_ENABLED')) {

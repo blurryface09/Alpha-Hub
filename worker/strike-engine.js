@@ -87,6 +87,18 @@ try {
   prewarmIntent = prewarmMod.prewarmIntent
 } catch { /* lib not available */ }
 
+let scheduleIntent = null
+let cancelScheduled = null
+let scheduledCount = null
+let getScheduled = null
+try {
+  const schedulerMod = await import('./lib/scheduler.js')
+  scheduleIntent  = schedulerMod.scheduleIntent
+  cancelScheduled = schedulerMod.cancelScheduled
+  scheduledCount  = schedulerMod.scheduledCount
+  getScheduled    = schedulerMod.getScheduled
+} catch { /* lib not available */ }
+
 let reconcileQueue = null
 try {
   const recoveryMod = await import('./lib/recovery.js')
@@ -575,6 +587,9 @@ async function tick(supabase) {
       sim_executor_loaded:     Boolean(simulateArmedIntent),
       testnet_executor_loaded: Boolean(executeTestnetIntent),
       executor_loaded:         Boolean(executeIntent),
+      scheduler_loaded:        Boolean(scheduleIntent),
+      scheduled_intents:       scheduledCount ? scheduledCount() : 0,
+      scheduled_detail:        getScheduled ? getScheduled() : [],
       telemetry:            getSessionTelemetry ? getSessionTelemetry() : null,
       rpc_health:           getRpcHealth ? getRpcHealth().slice(0, 5) : null,
     })
@@ -650,6 +665,7 @@ async function tick(supabase) {
         workerLog('prewarm', 'Intents in prewarm window', {
           count: prewarmIntents.length,
           prewarm_window_ms: PREWARM_WINDOW_MS,
+          scheduled_count: scheduledCount ? scheduledCount() : 0,
         })
         for (const intent of prewarmIntents) {
           const msUntil = new Date(intent.strike_execute_at).getTime() - nowMs
@@ -657,7 +673,18 @@ async function tick(supabase) {
             intent_id: intent.id,
             ms_until_execute: msUntil,
             execute_at: intent.strike_execute_at,
+            has_call_data: Boolean(intent.call_data),
           })
+
+          // ── Precision timer: fire at exact execute_at ms (FCFS critical path) ──
+          // Register a setTimeout so this intent fires the instant execute_at arrives
+          // instead of waiting for the next polling tick (0-2000ms lag).
+          const execFn = executeIntent || ((sb, i) => legacyProcessIntent(sb, i))
+          if (scheduleIntent && liveEnabled) {
+            scheduleIntent(supabase, intent, execFn)
+          }
+
+          // Kick off prewarm in parallel (fire-and-forget — must not block tick)
           if (prewarmIntent) {
             prewarmIntent(supabase, intent).then(result => {
               if (result.ok) {
@@ -725,11 +752,13 @@ async function tick(supabase) {
     sim_mode: simMode,
   })
 
-  // ── Dispatch: simulation or live ────────────────────────────────────────────
-  for (const intent of readyIntents) {
+  // ── Dispatch: simulation or live (PARALLEL — all intents fire simultaneously) ──
+  // Promise.allSettled ensures one intent's error never blocks another's execution.
+  // This is critical for FCFS: 10 users with the same mint time all fire at once.
+  await Promise.allSettled(readyIntents.map(intent => {
     if (simMode && !liveEnabled && simulateArmedIntent) {
       // Simulation path — no blockchain broadcast
-      await simulateArmedIntent(supabase, intent).catch(err =>
+      return simulateArmedIntent(supabase, intent).catch(err =>
         workerError('sim', 'Simulation error', {
           intent_id: intent.id,
           error: String(err?.message || err),
@@ -737,19 +766,29 @@ async function tick(supabase) {
       )
     } else if (liveEnabled && executeIntent) {
       // Live execution path (LIVE_EXECUTION_ENABLED=true, safety switches on)
-      await executeIntent(supabase, intent)
+      return executeIntent(supabase, intent).catch(err =>
+        workerError('execute', 'Execution error', {
+          intent_id: intent.id,
+          error: String(err?.message || err),
+        }),
+      )
     } else if (liveEnabled) {
       // Legacy live fallback (lib not loaded)
-      await legacyProcessIntent(supabase, intent)
+      return legacyProcessIntent(supabase, intent).catch(err =>
+        workerError('execute', 'Legacy execution error', {
+          intent_id: intent.id,
+          error: String(err?.message || err),
+        }),
+      )
     } else {
-      // simMode=false, liveEnabled=false — should not reach here after early-return above
       workerLog('tick', 'Intent skipped: no execution path active', {
         intent_id: intent.id,
         live_enabled: liveEnabled,
         sim_mode: simMode,
       })
+      return Promise.resolve()
     }
-  }
+  }))
 }
 
 // ── Entry point ───────────────────────────────────────────────────────────────
