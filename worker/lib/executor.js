@@ -7,6 +7,7 @@ import { createPublicClient, encodeFunctionData, parseAbi } from 'viem'
 import { FLAGS, flagEnabled } from './flags.js'
 import { createLogger } from './logger.js'
 import { createViemTransport, getRpcUrls } from './rpc.js'
+import { createPrivateViemTransport } from './private-submit.js'
 import { estimateGas, escalateGas } from './gas.js'
 import { isReadyToExecute, isInPrewarmWindow, msUntilExecute } from './timing.js'
 import { loadExecutionWallet } from './wallet.js'
@@ -151,7 +152,11 @@ export async function executeIntent(supabase, queuedIntent) {
   }
 
   chainKey = normaliseChain(intent.chain)
-  const transport = createViemTransport(chainKey)
+  const baseTransport = createViemTransport(chainKey)
+  const isFcfs        = Boolean(intent.strike_execute_at)
+  const transport     = (isFcfs && flagEnabled('PRIVATE_SUBMIT_ENABLED'))
+    ? createPrivateViemTransport(chainKey, baseTransport)
+    : baseTransport
   const publicClient = createPublicClient({
     chain: buildChainDescriptor(chainKey),
     transport,

@@ -69,6 +69,9 @@ export const FLAGS = {
 
   /** Enable background project revalidation and alert engine */
   MONITORING_ENABLED: parseBool('MONITORING_ENABLED', true),
+
+  /** Route FCFS intent broadcasts via Base sequencer / Flashbots instead of public mempool */
+  PRIVATE_SUBMIT_ENABLED: parseBool('PRIVATE_SUBMIT_ENABLED', false),
 }
 
 /**
