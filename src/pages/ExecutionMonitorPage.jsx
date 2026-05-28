@@ -206,7 +206,7 @@ function IntentRow({ intent, token }) {
   const [eventsState, setEventsState] = useState({ loading: false, events: [], attempts: [], loaded: false })
 
   const projectName = intent.wl_projects?.name || null
-  const contractDisplay = shortAddr(intent.mint_contract_address || intent.contract_address)
+  const contractDisplay = shortAddr(intent.contract_address)
   const txUrl = explorerUrl(intent.chain, intent.tx_hash)
   const hasFailed = intent.status === 'failed' || intent.status === 'expired'
   const hasError  = Boolean(intent.strike_error)

@@ -170,8 +170,8 @@ async function handleIntents(req, res, supabase) {
   let query = supabase
     .from('mint_intents')
     .select(`
-      id, user_id, status, chain, contract_address, mint_contract_address,
-      to, value, function_name, last_state, strike_error, simulation_status,
+      id, user_id, status, chain, contract_address,
+      to, value, function_name, call_data, last_state, strike_error, simulation_status,
       tx_hash, strike_execute_at, strike_enabled, wl_project_id, updated_at, created_at
     `)
     .order('updated_at', { ascending: false })
