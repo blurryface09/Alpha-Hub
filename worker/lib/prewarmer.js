@@ -66,9 +66,13 @@ export async function prewarmIntent(supabase, intent, opts = {}) {
     return { ok: false, error: 'no_contract' }
   }
 
-  // Skip if contract execution config already in cache — nothing to do
+  // If contract execution config is already in cache, take the fast path:
+  // run prepareMintTransaction (which hits the in-memory cache in ~200ms, no ABI fetch)
+  // so we can still write call_data to the intent row. Without this, the executor
+  // would fall back to slower inline detection at T=0 even though the cache is warm.
   const existing = getPrewarmStatus(contract, chain)
-  if (existing.ready) {
+  if (existing.ready && intent.call_data) {
+    // call_data already written to this intent — nothing to do at all
     log.info('prewarm', 'Contract already cached — prewarm skipped', {
       intent_id: intent.id,
       fn: existing.functionName,

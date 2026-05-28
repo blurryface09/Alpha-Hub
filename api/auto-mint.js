@@ -665,7 +665,7 @@ export default async function handler(req, res) {
           wallet_address: walletRow?.wallet_address || 'server',
           chain: project.chain || 'eth',
           status: 'failed',
-          error_message: msg.slice(0, 200),
+          error_message: publicMsg.slice(0, 200),
           executed_at: new Date().toISOString(),
         })
       } catch {}
