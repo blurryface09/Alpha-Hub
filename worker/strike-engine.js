@@ -830,23 +830,28 @@ async function main() {
   })
 
   // ── Telegram boot alert ─────────────────────────────────────────────────────
-  // Notifies admin when worker starts so restarts are visible in real-time.
-  // Uses ADMIN_TELEGRAM_CHAT_ID (admin personal chat) + TELEGRAM_BOT_TOKEN.
   ;(async () => {
-    try {
-      const botToken    = process.env.TELEGRAM_BOT_TOKEN
-      const adminChatId = process.env.ADMIN_TELEGRAM_CHAT_ID
-      if (!botToken || !adminChatId) return
+    const botToken    = process.env.TELEGRAM_BOT_TOKEN
+    const adminChatId = process.env.ADMIN_TELEGRAM_CHAT_ID
 
+    if (!botToken || !adminChatId) {
+      workerLog('boot', 'Telegram boot alert skipped — env vars not set', {
+        has_token: Boolean(botToken),
+        has_chat_id: Boolean(adminChatId),
+      })
+      return
+    }
+
+    try {
       const live = FLAGS?.LIVE_EXECUTION_ENABLED
       const sim  = FLAGS?.SIMULATION_MODE
       const mode = live ? '🟢 LIVE' : sim ? '🟡 SIM' : '⚪ IDLE'
 
-      await fetch(`https://api.telegram.org/bot${botToken}/sendMessage`, {
+      const res  = await fetch(`https://api.telegram.org/bot${botToken}/sendMessage`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          chat_id: adminChatId,
+          chat_id: String(adminChatId).trim(),
           parse_mode: 'HTML',
           text: [
             `<b>⚡ Strike Worker Started</b>`,
@@ -856,8 +861,16 @@ async function main() {
             `<code>${new Date().toISOString()}</code>`,
           ].join('\n'),
         }),
-      }).catch(() => null) // never block boot on Telegram failure
-    } catch { /* swallow — alerts must never block execution */ }
+      })
+      const body = await res.json().catch(() => ({}))
+      if (body.ok) {
+        workerLog('boot', 'Telegram boot alert sent')
+      } else {
+        workerWarn('boot', 'Telegram boot alert failed', { error: body.description, error_code: body.error_code })
+      }
+    } catch (err) {
+      workerWarn('boot', 'Telegram boot alert threw', { error: err.message })
+    }
   })()
 
   while (!stopping) {
