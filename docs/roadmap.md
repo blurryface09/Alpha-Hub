@@ -68,7 +68,9 @@ Newer OpenSea collections use proprietary or Seaport-based drop contracts that e
 
 ### Capture Mode iframe blocks
 
-Some mint sites send `X-Frame-Options: DENY` or `Content-Security-Policy: frame-ancestors 'none'` which the proxy cannot strip (browser enforces before the response body is even processed). For these sites, the `ManualCaptureForm` fallback is shown, requiring the user to paste raw calldata.
+The proxy already rewrites `X-Frame-Options` and `Content-Security-Policy` HTTP headers (browser sees the proxy's headers, not the origin site's). The remaining failure case is sites that check `window !== window.top` in JavaScript and redirect.
+
+**Partially mitigated**: `CAPTURE_INJECT` now overrides `window.top`, `window.parent`, and `window.frameElement` to return top-level values before any site script runs. Works for most JS frame-detection patterns. Sites with non-configurable property descriptors or CSP nonces blocking inline scripts still fall back to `ManualCaptureForm`.
 
 ---
 
@@ -86,9 +88,9 @@ After a tx is submitted, receipt polling uses `waitForReceiptWithRecovery`. For 
 
 Required for newer OpenSea collections. The interface is different — uses ERC721SeaDrop with a different router address.
 
-### Auto-learn quality gate
+### ~~Auto-learn quality gate~~ ✅ Shipped
 
-Current auto-learn saves any successful `prepare` result. A quality gate (e.g., `sample_count >= 2` before marking as `captured_ready`) would reduce false positives from one-off ABI guesses.
+Auto-learn profiles now require `sample_count >= 2` before promoting to `captured_ready`. Manually captured profiles are trusted immediately. Profiles with only one sample are logged as `sim_capture_unverified` but do not affect `preparedExecutionStatus`.
 
 ### Vercel Pro upgrade
 

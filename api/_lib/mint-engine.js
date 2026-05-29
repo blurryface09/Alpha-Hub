@@ -1997,11 +1997,31 @@ export async function handleMintAction(req, res, action) {
       let captureProfileSim = null
       if (contract && !blockers.some(b => b.includes('contract address'))) {
         captureProfileSim = await loadCaptureProfile(supabase, { contractAddress: contract, chain })
-        if (captureProfileSim && !['signed_mint_only', 'captcha_required', 'router_required', 'unsupported_contract'].includes(preparedExecutionStatus)) {
+        // Quality gate: auto-learned profiles need ≥2 successful samples before we trust them.
+        // Manually captured profiles (source !== 'auto_learn') are trusted immediately.
+        const profileTrusted = captureProfileSim && (
+          captureProfileSim.source !== 'auto_learn' || (captureProfileSim.sample_count || 0) >= 2
+        )
+        if (profileTrusted && !['signed_mint_only', 'captcha_required', 'router_required', 'unsupported_contract'].includes(preparedExecutionStatus)) {
           preparedExecutionStatus = 'captured_ready'
           contractValid = true
           if (!functionName && captureProfileSim.mint_function) functionName = captureProfileSim.mint_function
-          console.log('[strike-prep]', { stage: 'sim_capture_profile', contract: contract?.slice(0, 10), protocol: captureProfileSim.protocol, fn: captureProfileSim.mint_function })
+          console.log('[strike-prep]', {
+            stage: 'sim_capture_profile',
+            contract: contract?.slice(0, 10),
+            protocol: captureProfileSim.protocol,
+            fn: captureProfileSim.mint_function,
+            samples: captureProfileSim.sample_count,
+            trusted: true,
+          })
+        } else if (captureProfileSim && !profileTrusted) {
+          // Profile exists but hasn't reached the quality threshold — surface as a warning
+          console.log('[strike-prep]', {
+            stage: 'sim_capture_unverified',
+            contract: contract?.slice(0, 10),
+            samples: captureProfileSim.sample_count,
+            trusted: false,
+          })
         }
       }
 
