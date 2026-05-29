@@ -62,6 +62,11 @@ function classifyMintError(message) {
     return { text: 'Nonce conflict — refresh the page and try again.', fault: 'wallet' }
   }
 
+  // Broken/stale WalletConnect session — connector.getChainId is missing on v1 sessions
+  if (msg.includes('getchainid is not a function') || msg.includes('getchainid') || msg.includes('connector') && msg.includes('not a function')) {
+    return { text: 'Wallet session lost. Disconnect and reconnect your wallet, then try again.', fault: 'wallet' }
+  }
+
   // App/infra-side: our connectivity or chain issues
   if (msg.includes('rpc') || msg.includes('connection failed') || msg.includes('timeout') || msg.includes('timed out')) {
     return { text: 'Connection error. Please retry in a moment.', fault: 'app' }
@@ -74,7 +79,7 @@ function classifyMintError(message) {
 }
 
 export function useMint() {
-  const { address, isConnected, chain } = useAccount()
+  const { address, isConnected, chain, status: walletStatus } = useAccount()
   const { sendTransactionAsync } = useSendTransaction()
   const { switchChainAsync } = useSwitchChain()
 
@@ -88,6 +93,11 @@ export function useMint() {
       mode: project.mint_mode,
     })
 
+    if (walletStatus === 'reconnecting') {
+      console.debug('[mint-exec] error', { stage: 'wallet_check', reason: 'reconnecting' })
+      toast.error('Wallet is reconnecting — wait a moment then try again.')
+      return { success: false, error: 'Wallet reconnecting' }
+    }
     if (!isConnected || !address) {
       console.debug('[mint-exec] error', { stage: 'wallet_check', reason: 'not_connected' })
       toast.error('Connect your wallet first')

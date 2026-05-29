@@ -108,7 +108,7 @@ function App() {
 
   return (
     <WalletProvider>
-      <BrowserRouter>
+      <BrowserRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
         <Routes>
           <Route path="/auth" element={<AuthPage />} />
           <Route path="/upgrade" element={<Paywall showBack />} />

@@ -24,8 +24,12 @@ function fmtGwei(wei) {
   if (!wei) return null
   const n = Number(wei)
   if (n === 0) return 'Free'
-  if (n < 1e9) return `${n} wei`
-  return `${(n / 1e18).toFixed(4)} ETH`
+  // Values < 100 are already in ETH (e.g. "0.05" stored as ETH string in DB)
+  if (n < 100) return `${n} ETH`
+  // Values >= 1e9 are in wei → convert to ETH
+  if (n >= 1e9) return `${(n / 1e18).toFixed(4)} ETH`
+  // Small intermediate values — rare, just show as-is
+  return `${n} wei`
 }
 
 function fmtGas(gas) {

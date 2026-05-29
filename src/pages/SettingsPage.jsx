@@ -404,10 +404,10 @@ export default function SettingsPage() {
               <img
                 alt="Vault deposit QR"
                 className="w-36 h-36 rounded-lg bg-white p-2 mb-2"
-                src={`https://api.qrserver.com/v1/create-qr-code/?size=180x180&data=${encodeURIComponent(`ethereum:${depositVault.address}@8453`)}`}
+                src={`https://api.qrserver.com/v1/create-qr-code/?size=180x180&data=${encodeURIComponent(`ethereum:${depositVault.address}`)}`}
               />
               <p className="font-mono text-xs break-all text-green">{depositVault.address}</p>
-              <p className="text-xs text-muted mt-1">Send ETH on Base or Ethereum. Use small amounts only.</p>
+              <p className="text-xs text-muted mt-1">Send ETH on Ethereum or Base. Verify the chain in your wallet before sending. Small amounts only.</p>
             </div>
           )}
         </div>

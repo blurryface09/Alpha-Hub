@@ -6,10 +6,14 @@ import { hasPlanAccess, normalizedPlan, planLimits } from '../lib/access'
 const ADMIN_WALLET = import.meta.env.VITE_ADMIN_WALLET?.toLowerCase()
 
 export function useSubscription() {
-  const { address, isConnected } = useAccount()
+  const { address, isConnected, status: walletStatus } = useAccount()
   const [subscription, setSubscription] = useState(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
+
+  // While wagmi is reconnecting on page load, don't immediately treat as
+  // "no wallet" — wait for the reconnection to settle before checking.
+  const walletReconnecting = walletStatus === 'reconnecting' || walletStatus === 'connecting'
 
   const checkSubscription = useCallback(async () => {
     if (!isConnected || !address) {
@@ -79,7 +83,9 @@ export function useSubscription() {
     hasBasicAccess,
     isExpired,
     daysRemaining,
-    loading,
+    // Treat wallet reconnection (page load) as still-loading so ProtectedRoute
+    // doesn't flash Paywall before wagmi has had a chance to reconnect.
+    loading: loading || walletReconnecting,
     error,
     hasAccess,
     refresh: checkSubscription,

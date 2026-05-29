@@ -1,7 +1,7 @@
 # Alpha Hub — Claude Knowledge Base
 
 This file is the living memory for Claude sessions. Read it before touching any code.  
-Last updated: 2026-05-28
+Last updated: 2026-05-29
 
 ---
 
@@ -229,6 +229,18 @@ Add the `FLASHBOTS_AUTH_KEY` value to Railway worker service env vars. The Ether
 
 ---
 
+## Recent Changes (2026-05-29 session)
+
+13. **WalletConnect `getChainId` bug fix** (fully resolved):
+    - **Root cause (deep)**: During `status === 'reconnecting'`, wagmi's `getAccount()` returns `isConnected: !!address` — `true` if there's a stored address. The connector in the connection Map at that point is a **partial plain object** `{ id, name, type, uid }` (no methods) deserialized from localStorage. Our `isConnected` guard passed, `sendTransactionAsync` fired, and wagmi's `getConnectorClient.js:35` called `connection.connector.getChainId()` on this partial object → TypeError.
+    - **Fix 1** (`src/hooks/useMint.js`): Added `status: walletStatus` from `useAccount()` and a new early-exit guard: `if (walletStatus === 'reconnecting') → toast + return`. This blocks the mint flow entirely during the reconnect window before the proper connector replaces the partial one.
+    - **Fix 2** (`src/hooks/useMint.js`): `classifyMintError` pattern for `getchainid is not a function` → friendly message as a fallback for any edge cases not caught by Fix 1.
+    - **Fix 3** (`src/components/shared/WalletProvider.jsx`): `QueryClient.defaultOptions.mutations.onError` clears `wagmi.v2.store` on this error so the next reload starts clean.
+    - **Fix 4** (`src/lib/wallet.js`): Storage key versioned to `wagmi.v2` to drop pre-v2 sessions.
+    - The error source is `@wagmi/core/dist/esm/actions/getConnectorClient.js:35` — wagmi's own code, not ours. There are **no** `connector.getChainId()` calls in `src/`.
+
+---
+
 ## Recent Changes (2026-05-28 session)
 
 1. **FCFS load test** — 8/8 passing; fixed wall-time threshold (`< WORK_MS*2 + 200`) and removed stray `results` reference
@@ -242,3 +254,7 @@ Add the `FLASHBOTS_AUTH_KEY` value to Railway worker service env vars. The Ether
 9. **Admin monitor SELECT fix** — removed non-existent `mint_contract_address`, added `call_data`
 10. **Telegram boot alert** — fires on Railway worker start; debug: check both env vars in Railway, use personal chat ID not bot ID
 11. **Private mempool submission** — `worker/lib/private-submit.js`; Base sequencer + Flashbots; activate with `PRIVATE_SUBMIT_ENABLED=true`
+12. **UI launch audit fixes** (2026-05-28 session):
+    - `StrikeReviewModal` `fmtGwei`: was showing "0.05 wei" for ETH prices. Fixed to detect ETH-denominated values (< 100 → ETH, ≥ 1e9 → wei).
+    - `SettingsPage` QR code: removed hardcoded `@8453` (Base chainId) from deposit QR URI; now chain-agnostic so ETH mainnet users aren't misled.
+    - `useSubscription` cold-start race: added `walletStatus === 'reconnecting' | 'connecting'` to `loading` return value so ProtectedRoute doesn't flash Paywall while wagmi is reconnecting on page load.
