@@ -153,8 +153,13 @@ export async function executeIntent(supabase, queuedIntent) {
 
   chainKey = normaliseChain(intent.chain)
   const baseTransport = createViemTransport(chainKey)
-  const isFcfs        = Boolean(intent.strike_execute_at)
-  const transport     = (isFcfs && flagEnabled('PRIVATE_SUBMIT_ENABLED'))
+  // FCFS = intent was armed with a specific future execute_at (timed/precision mint).
+  // All intents get strike_execute_at = nowIso by default in the arm flow, so we
+  // check that the execute_at is more than 10s in the past (i.e. truly scheduled,
+  // not just "arm and fire now"). Private submit is used for both: Flashbots benefits
+  // any ETH mainnet tx by keeping it off the public mempool regardless of timing.
+  const isFcfs    = Boolean(intent.strike_execute_at)
+  const transport = (isFcfs && flagEnabled('PRIVATE_SUBMIT_ENABLED'))
     ? createPrivateViemTransport(chainKey, baseTransport)
     : baseTransport
   const publicClient = createPublicClient({
@@ -249,10 +254,23 @@ export async function executeIntent(supabase, queuedIntent) {
     // concurrent FCFS executors target the same wallet at the same time.
     try {
       if (!nonceTracker.has(wallet.address)) {
-        const freshNonce = await publicClient.getTransactionCount({
-          address: wallet.address,
-          blockTag: 'pending',
-        })
+        // Try 'pending' first (includes mempool txs from this wallet).
+        // Some RPC providers don't support 'pending' — fall back to 'latest'.
+        let freshNonce
+        try {
+          freshNonce = await publicClient.getTransactionCount({
+            address: wallet.address,
+            blockTag: 'pending',
+          })
+        } catch {
+          freshNonce = await publicClient.getTransactionCount({
+            address: wallet.address,
+            blockTag: 'latest',
+          })
+          log.info('prepare', 'Nonce synced from chain (latest — pending not supported by RPC)', {
+            address: wallet.address, nonce: freshNonce,
+          })
+        }
         nonceTracker.set(wallet.address, freshNonce)
         log.info('prepare', 'Nonce synced from chain', { address: wallet.address, nonce: freshNonce })
       } else {
@@ -843,8 +861,23 @@ export async function executeIntent(supabase, queuedIntent) {
 
   } catch (err) {
     // ── Step 10: Final failure ──────────────────────────────────────────────
-    const message = String(err?.shortMessage || err?.message || 'Strike execution failed.').slice(0, 240)
+    const rawMessage = String(err?.shortMessage || err?.message || 'Strike execution failed.').slice(0, 240)
     const classification = classifyError(err)
+
+    // Reset nonceTracker for this wallet on terminal failures so the next execution
+    // of any intent for the same wallet starts with a fresh chain sync.
+    // Ghost-advance scenario: executor pre-set tracker to nonce+1 before sendTransaction;
+    // if the tx never landed (terminal error), the tracker is now ahead of the chain.
+    if (wallet?.address) {
+      nonceTracker.clear(wallet.address)  // clear — next run will re-sync from chain
+    }
+
+    // Map error types to actionable user-facing messages.
+    const FRIENDLY_MESSAGES = {
+      insufficient_funds: 'Vault wallet has insufficient ETH for gas. Top up the vault wallet and rearm.',
+      revert: rawMessage.length > 10 ? rawMessage : 'Transaction reverted — contract rejected the mint.',
+    }
+    const message = FRIENDLY_MESSAGES[classification.type] || rawMessage
     const latencyMs = Date.now() - startMs
 
     log.error('failed', 'Intent execution failed', {

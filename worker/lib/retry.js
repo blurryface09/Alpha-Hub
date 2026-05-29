@@ -9,14 +9,15 @@ const log = createLogger(null, null)
 // ─── Error classification ─────────────────────────────────────────────────────
 
 const ERROR_TYPE_CAPS = {
-  revert:       0,
-  nonce_too_low: 2,
-  gas_too_low:  3,
-  timeout:      4,
-  network:      4,
-  rate_limited: 3,
-  dropped:      2,
-  default:      3,
+  revert:            0,
+  nonce_too_low:     2,
+  gas_too_low:       3,
+  timeout:           4,
+  network:           4,
+  rate_limited:      3,
+  dropped:           2,
+  insufficient_funds: 0,  // terminal — retrying won't help until wallet is funded
+  default:           3,
 }
 
 /**
@@ -39,6 +40,17 @@ export function classifyError(error) {
     combined.includes('out of gas') // contract-level OOG is a revert
   ) {
     return { type: 'revert', retryable: false, maxRetries: ERROR_TYPE_CAPS.revert }
+  }
+
+  // "insufficient funds for gas * price + value" — returned by every node when the
+  // sender wallet has no ETH.  Non-retryable: the wallet must be funded first.
+  if (
+    combined.includes('insufficient funds') ||
+    combined.includes('insufficient balance') ||
+    combined.includes('sender balance') ||
+    combined.includes('intrinsic gas cost exceeds gas limit') // alternative phrasing on some nodes
+  ) {
+    return { type: 'insufficient_funds', retryable: false, maxRetries: ERROR_TYPE_CAPS.insufficient_funds }
   }
 
   if (
@@ -195,7 +207,18 @@ export const nonceTracker = {
   },
 
   /**
-   * Remove tracked nonce for address.
+   * Check whether a nonce is tracked for address.
+   * @param {string} address
+   * @returns {boolean}
+   */
+  has(address) {
+    return _nonceStore.has(address.toLowerCase())
+  },
+
+  /**
+   * Remove tracked nonce for address (call after terminal tx failure so next
+   * execution re-syncs the correct nonce from the chain instead of using a
+   * ghost-advanced value).
    * @param {string} address
    */
   clear(address) {
