@@ -409,9 +409,15 @@ async function executeMintServerSide(project, privateKey, chatId) {
 export default async function handler(req, res) {
   const cronSecret = process.env.CRON_SECRET
   if (cronSecret) {
-    const headerOk = req.headers.authorization === `Bearer ${cronSecret}`
-    const queryOk  = req.query?.secret === cronSecret
-    if (!headerOk && !queryOk) return res.status(401).end()
+    // OPS-4: Use timingSafeEqual to prevent timing-based secret enumeration.
+    const safeCmp = (a, b) => {
+      try {
+        return a.length === b.length && crypto.timingSafeEqual(Buffer.from(a), Buffer.from(b))
+      } catch { return false }
+    }
+    const bearer = (req.headers.authorization || '').replace(/^Bearer\s+/i, '')
+    const query  = String(req.query?.secret || '')
+    if (!safeCmp(bearer, cronSecret) && !safeCmp(query, cronSecret)) return res.status(401).end()
   }
 
   if (!AUTOMINT_ENABLED) {
@@ -606,8 +612,9 @@ export default async function handler(req, res) {
         confirmed_at: nowIso(),
       })
 
-      try {
-        await supabase.from('mint_log').insert({
+      // SCALE-4: Parallelise the three independent post-confirmation writes.
+      await Promise.allSettled([
+        supabase.from('mint_log').insert({
           user_id: project.user_id,
           project_id: project.id,
           wallet_address: walletRow.wallet_address,
@@ -615,22 +622,18 @@ export default async function handler(req, res) {
           tx_hash: txHash,
           status: 'success',
           executed_at: new Date().toISOString(),
-        })
-      } catch {}
-
-      try {
-        await supabase.from('notifications').insert({
+        }),
+        supabase.from('notifications').insert({
           user_id: project.user_id,
           type: 'mint_success',
           title: `✅ Auto-Mint Success — ${project.name}`,
           message: `Transaction confirmed on-chain. TX: ${txHash.slice(0, 18)}...`,
           data: { tx_hash: txHash, project_id: project.id },
-        })
-      } catch {}
-
-      await tgNotify(chatId,
-        `✅ <b>Auto-Mint Confirmed: ${project.name}</b>\n\nTX: <code>${txHash.slice(0, 20)}...</code>\nWallet: ${walletRow.wallet_address.slice(0, 10)}...`
-      )
+        }),
+        tgNotify(chatId,
+          `✅ <b>Auto-Mint Confirmed: ${project.name}</b>\n\nTX: <code>${txHash.slice(0, 20)}...</code>\nWallet: ${walletRow.wallet_address.slice(0, 10)}...`
+        ),
+      ])
 
       fired++
 
@@ -658,8 +661,9 @@ export default async function handler(req, res) {
         simulation_error: publicMsg,
       })
 
-      try {
-        await supabase.from('mint_log').insert({
+      // SCALE-4: Parallelise the two independent post-failure writes.
+      await Promise.allSettled([
+        supabase.from('mint_log').insert({
           user_id: project.user_id,
           project_id: project.id,
           wallet_address: walletRow?.wallet_address || 'server',
@@ -667,12 +671,11 @@ export default async function handler(req, res) {
           status: 'failed',
           error_message: publicMsg.slice(0, 200),
           executed_at: new Date().toISOString(),
-        })
-      } catch {}
-
-      await tgNotify(chatMap[project.user_id],
-        `❌ <b>Auto-Mint Failed: ${project.name}</b>\n\n${publicMsg}`
-      )
+        }),
+        tgNotify(chatMap[project.user_id],
+          `❌ <b>Auto-Mint Failed: ${project.name}</b>\n\n${publicMsg}`
+        ),
+      ])
     }
   }
 

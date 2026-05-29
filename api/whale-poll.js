@@ -4,6 +4,7 @@
  * Always returns 200 to prevent Vercel from disabling the cron.
  */
 
+import crypto from 'crypto'
 import { createClient } from '@supabase/supabase-js'
 
 const ETHERSCAN_V2 = 'https://api.etherscan.io/v2/api'
@@ -120,8 +121,14 @@ export default async function handler(req, res) {
   // ALWAYS return 200 — Vercel disables crons after repeated non-200 responses
   try {
     const cronSecret = process.env.CRON_SECRET
-    if (cronSecret && req.headers.authorization !== `Bearer ${cronSecret}`) {
-      return res.status(200).json({ ok: false, error: 'unauthorized' })
+    if (cronSecret) {
+      // OPS-4: Timing-safe comparison prevents secret enumeration.
+      const bearer = (req.headers.authorization || '').replace(/^Bearer\s+/i, '')
+      const safeCmp = (a, b) => {
+        try { return a.length === b.length && crypto.timingSafeEqual(Buffer.from(a), Buffer.from(b)) }
+        catch { return false }
+      }
+      if (!safeCmp(bearer, cronSecret)) return res.status(200).json({ ok: false, error: 'unauthorized' })
     }
 
     const supabase = getSupabase()

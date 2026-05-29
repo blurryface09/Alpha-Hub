@@ -223,14 +223,16 @@ await test('withRetry: respects enabled=false (throws on first failure)', async 
   assert.equal(calls, 1)
 })
 
-await test('withRetry: increments nonceTracker on success', async () => {
+await test('withRetry: does NOT auto-increment nonceTracker on success (executor owns nonce)', async () => {
+  // executor.js pre-sets nonceTracker to nonce+1 *before* sendTransaction.
+  // withRetry must not also increment — that would double-count and cause nonce-too-low. (OPS-5)
   const addr = '0xnoncetest'
   nonceTracker.set(addr, 50)
   await withRetry(
     async () => 'ok',
     { enabled: false, address: addr },
   )
-  assert.equal(nonceTracker.get(addr), 51)
+  assert.equal(nonceTracker.get(addr), 50) // unchanged — executor is responsible
   nonceTracker.clear(addr)
 })
 

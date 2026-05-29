@@ -1,3 +1,4 @@
+import crypto from 'crypto'
 import { createClient } from '@supabase/supabase-js'
 import { detectProjectChanges, detectStealthDelay, shouldCheckThisTick, buildDedupKey, buildAlertTitle, buildAlertMessage, ALERT_TYPES } from '../worker/lib/monitor.js'
 import { createAlert } from '../worker/lib/alerter.js'
@@ -32,13 +33,19 @@ function isAuthorized(req) {
   const secret = process.env.CRON_SECRET
   if (!secret) return true  // no secret configured → open (dev/staging)
 
+  // OPS-4: Use timingSafeEqual to prevent timing-based enumeration of CRON_SECRET.
+  const safeCmp = (a, b) => {
+    try { return a.length === b.length && crypto.timingSafeEqual(Buffer.from(a), Buffer.from(b)) }
+    catch { return false }
+  }
+
   // Header: Authorization: Bearer <secret>
-  const authHeader = req.headers.authorization || ''
-  if (authHeader === `Bearer ${secret}`) return true
+  const bearer = (req.headers.authorization || '').replace(/^Bearer\s+/i, '')
+  if (safeCmp(bearer, secret)) return true
 
   // Query: ?secret=<secret>  (for cron-job.org URL-based auth)
-  const qSecret = req.query?.secret || new URL(req.url, 'http://x').searchParams.get('secret')
-  if (qSecret === secret) return true
+  const qSecret = String(req.query?.secret || new URL(req.url, 'http://x').searchParams.get('secret') || '')
+  if (safeCmp(qSecret, secret)) return true
 
   return false
 }

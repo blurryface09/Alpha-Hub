@@ -1,8 +1,8 @@
 import crypto from 'crypto'
-import { createPublicClient, createWalletClient, encodeFunctionData, formatEther, http, isAddress } from 'viem'
+import { createPublicClient, createWalletClient, encodeFunctionData, formatEther, http, isAddress, parseEther } from 'viem'
 import { privateKeyToAccount, generatePrivateKey } from 'viem/accounts'
 import { createServiceClient, requireUser } from './auth.js'
-import { rateLimit, sendRateLimit } from './redis.js'
+import { rateLimit, sendRateLimit, cacheGet, cacheSet } from './redis.js'
 
 // ABI fragments for on-chain transfers (server-side signing only)
 const ERC721_TRANSFER_ABI = [{
@@ -38,14 +38,24 @@ function safeError(error = 'Alpha Vault is temporarily unavailable.') {
   return { ok: false, error }
 }
 
-function encryptionKey(userId) {
-  const secret = process.env.ALPHA_VAULT_ENCRYPTION_KEY || process.env.WALLET_ENCRYPTION_KEY
-  if (!secret) throw new Error('Vault encryption is not configured')
+// VAULT-1+VAULT-2: Key versioning — supports rotation without losing access to existing vaults.
+// Canonical env var: WALLET_ENCRYPTION_KEY (use this in both Vercel and Railway — same value).
+// ALPHA_VAULT_ENCRYPTION_KEY is accepted as a legacy alias for v1 only.
+// To rotate: add WALLET_ENCRYPTION_KEY_V2 + set VAULT_KEY_VERSION=2, then run a re-encryption
+// migration (re-read each row with v1, re-write with v2, update key_version column).
+const CURRENT_KEY_VERSION = parseInt(process.env.VAULT_KEY_VERSION || '1', 10)
+
+function encryptionKey(userId, version = CURRENT_KEY_VERSION) {
+  const versionedKey = version > 1 ? process.env[`WALLET_ENCRYPTION_KEY_V${version}`] : null
+  const secret = versionedKey
+    || process.env.WALLET_ENCRYPTION_KEY        // canonical — set this in both Vercel + Railway
+    || process.env.ALPHA_VAULT_ENCRYPTION_KEY   // legacy alias (v1 backwards compat only)
+  if (!secret) throw new Error(`Vault encryption key not configured (WALLET_ENCRYPTION_KEY or WALLET_ENCRYPTION_KEY_V${version})`)
   return crypto.pbkdf2Sync(secret, userId, 100_000, 32, 'sha256')
 }
 
-function decryptPrivateKey(encryptedB64, userId) {
-  const key = encryptionKey(userId)
+function decryptPrivateKey(encryptedB64, userId, keyVersion = 1) {
+  const key = encryptionKey(userId, keyVersion)
   const buf = Buffer.from(encryptedB64, 'base64')
   const iv = buf.subarray(0, 12)
   const tag = buf.subarray(12, 28)
@@ -56,12 +66,16 @@ function decryptPrivateKey(encryptedB64, userId) {
 }
 
 function encryptPrivateKey(privateKey, userId) {
-  const key = encryptionKey(userId)
+  const version = CURRENT_KEY_VERSION
+  const key = encryptionKey(userId, version)
   const iv = crypto.randomBytes(12)
   const cipher = crypto.createCipheriv('aes-256-gcm', key, iv)
   const encrypted = Buffer.concat([cipher.update(privateKey, 'utf8'), cipher.final()])
   const tag = cipher.getAuthTag()
-  return Buffer.concat([iv, tag, encrypted]).toString('base64')
+  return {
+    encryptedB64: Buffer.concat([iv, tag, encrypted]).toString('base64'),
+    keyVersion: version,
+  }
 }
 
 function clientFor(chain) {
@@ -112,13 +126,15 @@ async function sanitizeVault(row, includeBalances = false) {
 async function createVault(supabase, user, privateKey, label = 'Alpha Vault') {
   const account = privateKeyToAccount(privateKey)
   if (!isAddress(account.address)) throw new Error('Invalid vault wallet')
+  const { encryptedB64, keyVersion } = encryptPrivateKey(privateKey, user.id)
   const row = {
     user_id: user.id,
     address: account.address.toLowerCase(),
     wallet_address: account.address.toLowerCase(),
     label,
     chain_scope: 'evm',
-    encrypted_private_key: encryptPrivateKey(privateKey, user.id),
+    encrypted_private_key: encryptedB64,
+    key_version: keyVersion,
     status: 'active',
     updated_at: new Date().toISOString(),
   }
@@ -188,11 +204,23 @@ export async function handleVaultAction(req, res, action) {
       const wLimited = await rateLimit(`rl:vault:withdraw:strict:${user.id}`, 5, 300)
       if (!wLimited.allowed) return sendRateLimit(res, wLimited)
 
-      const { vaultWalletId, toAddress, type, contractAddress, tokenId, amount, chain: chainKey = 'eth' } = req.body || {}
+      const { vaultWalletId, toAddress, type, contractAddress, tokenId, amount, chain: chainKey = 'eth', idempotencyKey } = req.body || {}
 
       if (!vaultWalletId) return res.status(400).json(safeError('vaultWalletId is required.'))
       if (!toAddress || !isAddress(toAddress)) return res.status(400).json(safeError('Valid toAddress is required.'))
       if (!['native_eth', 'erc721', 'erc20'].includes(type)) return res.status(400).json(safeError('type must be native_eth, erc721, or erc20.'))
+
+      // VAULT-4: Idempotency / replay protection.
+      // Client sends a unique idempotencyKey (UUID) per withdrawal attempt.
+      // If a tx was already broadcast for this key, return the cached result — no second broadcast.
+      if (idempotencyKey && /^[a-zA-Z0-9_-]{8,128}$/.test(idempotencyKey)) {
+        const idemCacheKey = `vault:withdraw:idem:${user.id}:${idempotencyKey}`
+        const cached = await cacheGet(idemCacheKey)
+        if (cached) {
+          console.log('[vault-withdraw] idempotency cache hit', { userId: user.id, idempotencyKey })
+          return res.status(200).json(typeof cached === 'string' ? JSON.parse(cached) : cached)
+        }
+      }
 
       const rpcUrl = RPCS[chainKey]
       if (!rpcUrl) return res.status(400).json(safeError(`Chain "${chainKey}" is not supported for vault withdrawals.`))
@@ -200,7 +228,7 @@ export async function handleVaultAction(req, res, action) {
       // Ownership verification — row must belong to this user
       const { data: vaultRow, error: vaultErr } = await supabase
         .from('alpha_vault_wallets')
-        .select('id,address,wallet_address,encrypted_private_key,status,label')
+        .select('id,address,wallet_address,encrypted_private_key,key_version,status,label')
         .eq('id', vaultWalletId)
         .eq('user_id', user.id)
         .single()
@@ -225,8 +253,9 @@ export async function handleVaultAction(req, res, action) {
 
       let txHash = null
       try {
-        // Decrypt private key — stays server-side, never returned
-        const privateKey = decryptPrivateKey(vaultRow.encrypted_private_key, user.id)
+        // Decrypt private key — stays server-side, never returned.
+        // VAULT-1: pass key_version so the correct versioned key is used for decryption.
+        const privateKey = decryptPrivateKey(vaultRow.encrypted_private_key, user.id, vaultRow.key_version || 1)
         const account = privateKeyToAccount(privateKey)
 
         const chainId = chainKey === 'base' ? 8453 : 1
@@ -244,7 +273,12 @@ export async function handleVaultAction(req, res, action) {
         })
 
         if (type === 'native_eth') {
-          const valueWei = BigInt(Math.round(parseFloat(amount || '0') * 1e18))
+          // VAULT-3: use parseEther() — IEEE 754 float math (parseFloat * 1e18) loses
+          // precision for amounts like 0.1 ETH. parseEther() handles this correctly.
+          let valueWei
+          try { valueWei = parseEther(String(amount || '0')) } catch {
+            return res.status(400).json(safeError('Invalid ETH amount.'))
+          }
           if (valueWei <= 0n) return res.status(400).json(safeError('Invalid withdrawal amount — must be > 0.'))
           txHash = await walletClient.sendTransaction({ to: toAddress, value: valueWei })
 
@@ -279,42 +313,60 @@ export async function handleVaultAction(req, res, action) {
           txHash: txHash?.slice(0, 14),
         })
 
-        // Log success to mint_log
+        // MON-3: audit log to mint_log — failure is logged to stdout as fallback so
+        // the tx_hash is never silently lost even during a Supabase outage.
+        const auditRow = {
+          user_id: user.id,
+          project_id: null,
+          wallet_address: vaultAddress,
+          chain: chainKey,
+          tx_hash: txHash,
+          status: 'withdrawal_ok',
+          executed_at: new Date().toISOString(),
+        }
         try {
-          await supabase.from('mint_log').insert({
-            user_id: user.id,
-            project_id: null,
-            wallet_address: vaultAddress,
-            chain: chainKey,
-            tx_hash: txHash,
-            status: 'withdrawal_ok',
-            executed_at: new Date().toISOString(),
+          await supabase.from('mint_log').insert(auditRow)
+        } catch (auditErr) {
+          console.error('[vault-withdraw] audit-log-failed — tx went through but mint_log write failed', {
+            txHash, vaultAddress: vaultAddress?.slice(0, 10), chain: chainKey, err: auditErr.message,
           })
-        } catch (_) {}
+        }
+
+        // VAULT-4: Cache idempotency result for 10 minutes so duplicate requests return
+        // the same txHash without triggering a second broadcast.
+        if (idempotencyKey && /^[a-zA-Z0-9_-]{8,128}$/.test(idempotencyKey)) {
+          const idemCacheKey = `vault:withdraw:idem:${user.id}:${idempotencyKey}`
+          await cacheSet(idemCacheKey, JSON.stringify({ ok: true, txHash }), 600)
+        }
 
         return res.status(200).json({ ok: true, txHash })
 
       } catch (err) {
         console.error('[vault-withdraw] tx_error', { userId: user.id, vaultWalletId, error: err.message?.slice(0, 200) })
 
-        // Log failure to mint_log
+        // MON-3: log failure audit — same fallback as success path
+        const failAuditRow = {
+          user_id: user.id,
+          project_id: null,
+          wallet_address: vaultAddress || 'unknown',
+          chain: chainKey,
+          status: 'withdrawal_failed',
+          error_message: (err.shortMessage || err.message || '').slice(0, 200),
+          executed_at: new Date().toISOString(),
+        }
         try {
-          await supabase.from('mint_log').insert({
-            user_id: user.id,
-            project_id: null,
-            wallet_address: vaultAddress || 'unknown',
-            chain: chainKey,
-            status: 'withdrawal_failed',
-            error_message: err.shortMessage || err.message?.slice(0, 200),
-            executed_at: new Date().toISOString(),
-          })
-        } catch (_) {}
+          await supabase.from('mint_log').insert(failAuditRow)
+        } catch (auditErr) {
+          console.error('[vault-withdraw] failure-audit-log-failed', { err: auditErr.message })
+        }
 
         return res.status(200).json(safeError(err.shortMessage || err.message || 'Withdrawal failed. Verify vault ETH balance for gas.'))
       }
     }
   } catch (error) {
+    // MON-4: Return 500 for unhandled exceptions so callers and monitors can
+    // distinguish a server crash from a handled business-logic failure (200+ok:false).
     console.error(`vault ${action} failed:`, error)
-    return res.status(200).json(safeError('Alpha Vault could not complete this action.'))
+    return res.status(500).json(safeError('Alpha Vault could not complete this action.'))
   }
 }

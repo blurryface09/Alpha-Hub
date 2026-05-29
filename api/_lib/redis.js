@@ -21,9 +21,14 @@ export function getClientIp(req) {
 
 export async function rateLimit(key, limit = 20, windowSeconds = 60) {
   const client = getRedis()
+
+  // SEC-4: Fail CLOSED when Redis is unconfigured or unavailable.
+  // Returning allowed:true when Redis is down lets attackers bypass all rate limits
+  // on vault create, vault withdraw, strike-enable, etc. indefinitely.
+  // If Redis is not configured, treat every request as rate-limited until it is.
   if (!client) {
-    console.warn('Rate limit skipped: Upstash Redis env vars are not configured')
-    return { allowed: true, remaining: limit, resetSeconds: windowSeconds }
+    console.warn('[rate-limit] Redis not configured — failing closed (all requests denied). Set UPSTASH_REDIS_REST_URL + UPSTASH_REDIS_REST_TOKEN.')
+    return { allowed: false, remaining: 0, resetSeconds: windowSeconds, reason: 'redis_not_configured' }
   }
 
   let count
@@ -31,8 +36,8 @@ export async function rateLimit(key, limit = 20, windowSeconds = 60) {
     count = await client.incr(key)
     if (count === 1) await client.expire(key, windowSeconds)
   } catch (error) {
-    console.error('Rate limit skipped: Redis unavailable:', error.message)
-    return { allowed: true, remaining: limit, resetSeconds: windowSeconds }
+    console.error('[rate-limit] Redis unavailable — failing closed:', error.message)
+    return { allowed: false, remaining: 0, resetSeconds: windowSeconds, reason: 'redis_unavailable' }
   }
 
   return {

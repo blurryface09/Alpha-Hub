@@ -152,6 +152,15 @@ export function congestionAwareBackoffMs(attempt, errorType = 'default', congest
 // ─── Nonce tracker ────────────────────────────────────────────────────────────
 
 /** In-memory nonce tracking keyed by lowercase address */
+// SCALE-1: nonceTracker is in-memory — it resets on every worker restart.
+// After a restart, executor.js re-syncs the nonce from the chain on first use
+// (see Step 6b in executor.js: `if (!nonceTracker.has(addr)) sync from chain`).
+// This means the first tx after a restart always does one extra RPC call, which
+// is acceptable. It does NOT cause nonce collisions because the chain is the
+// source of truth for the initial value.
+//
+// Do NOT persist nonceTracker to DB/Redis — a stale persisted nonce is harder
+// to recover from than a fresh chain sync on restart.
 const _nonceStore = new Map()
 
 export const nonceTracker = {
@@ -228,8 +237,10 @@ export async function withRetry(fn, options = {}) {
   while (true) {
     try {
       const result = await fn(attempt)
-      // Success — bump tracked nonce if we know the address
-      if (address) nonceTracker.increment(address)
+      // NOTE: nonce is NOT incremented here. executor.js pre-sets nonceTracker to
+      // nonce+1 *before* sendTransaction so concurrent executors see the correct next
+      // slot immediately. Adding an increment here would double-count and cause
+      // nonce-too-low on the very next tx from the same wallet. (OPS-5)
       return result
     } catch (err) {
       lastError = err

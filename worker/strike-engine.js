@@ -847,6 +847,15 @@ async function main() {
       const sim  = FLAGS?.SIMULATION_MODE
       const mode = live ? '🟢 LIVE' : sim ? '🟡 SIM' : '⚪ IDLE'
 
+      // MON-5: Warn in alert if live execution is on but safety switches are off.
+      const safetySwitchMismatch = live && (!AUTO_STRIKE_ENABLED || !ALPHA_VAULT_ENABLED)
+      if (safetySwitchMismatch) {
+        workerWarn('boot', 'MON-5: LIVE_EXECUTION_ENABLED=true but safety switches are off', {
+          auto_strike: AUTO_STRIKE_ENABLED,
+          alpha_vault: ALPHA_VAULT_ENABLED,
+        })
+      }
+
       const res  = await fetch(`https://api.telegram.org/bot${botToken}/sendMessage`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -856,10 +865,11 @@ async function main() {
           text: [
             `<b>⚡ Strike Worker Started</b>`,
             `Mode: ${mode}`,
+            safetySwitchMismatch ? `⚠️ Safety switch mismatch! AUTO_STRIKE=${AUTO_STRIKE_ENABLED} VAULT=${ALPHA_VAULT_ENABLED}` : null,
             `Prewarm: ${FLAGS?.PREWARM_ENABLED ? '✓' : '✗'} · Retry: ${FLAGS?.RETRY_ENABLED ? '✓' : '✗'}`,
             `Interval: ${LOOP_MS}ms · Lib: ${executeIntent ? '✓' : '✗'}`,
             `<code>${new Date().toISOString()}</code>`,
-          ].join('\n'),
+          ].filter(Boolean).join('\n'),
         }),
       })
       const body = await res.json().catch(() => ({}))
@@ -889,7 +899,40 @@ async function main() {
 process.on('SIGTERM', () => { stopping = true })
 process.on('SIGINT', () => { stopping = true })
 
-main().catch(error => {
+// MON-1: Alert on unhandled crash — fires a Telegram message so ops knows the worker died.
+// Railway will restart the process; this gives a paper trail before the restart.
+async function sendCrashAlert(label, err) {
+  const botToken    = process.env.TELEGRAM_BOT_TOKEN
+  const adminChatId = process.env.ADMIN_TELEGRAM_CHAT_ID
+  if (!botToken || !adminChatId) return
+  try {
+    await fetch(`https://api.telegram.org/bot${botToken}/sendMessage`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        chat_id: String(adminChatId).trim(),
+        parse_mode: 'HTML',
+        text: `<b>💥 Strike Worker Crashed (${label})</b>\n<code>${String(err?.message || err).slice(0, 300)}</code>\n<code>${new Date().toISOString()}</code>`,
+      }),
+    })
+  } catch { /* crash alert must never throw */ }
+}
+
+process.on('uncaughtException', async (err) => {
+  workerError('crash', 'Uncaught exception — worker will exit', { error: String(err?.message || err) })
+  await sendCrashAlert('uncaughtException', err)
+  process.exitCode = 1
+  process.exit(1)
+})
+
+process.on('unhandledRejection', async (reason) => {
+  workerError('crash', 'Unhandled promise rejection', { error: String(reason?.message || reason) })
+  await sendCrashAlert('unhandledRejection', reason)
+})
+
+main().catch(async error => {
+  workerError('crash', 'main() threw — worker is exiting', { error: String(error?.message || error) })
+  await sendCrashAlert('main', error)
   console.error(error)
   process.exitCode = 1
 })

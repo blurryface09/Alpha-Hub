@@ -54,15 +54,30 @@ function buildChainDescriptor(chainKey) {
 
 /**
  * Decrypt an AES-256-GCM encrypted private key.
- * Matches the encryption format used by the vault-engine.
+ * Matches the encryption format used by vault-engine.js.
+ *
+ * VAULT-1+VAULT-2: Supports key versioning — pass keyVersion (from alpha_vault_wallets.key_version)
+ * so the correct versioned secret is used after a key rotation.
  *
  * @param {string} encrypted  — base64 encoded (iv[12] + tag[16] + ciphertext)
  * @param {string} userId     — used as PBKDF2 salt
+ * @param {number} [keyVersion=1] — encryption key version stored on the vault row
  * @returns {string}          — hex private key (with or without 0x prefix)
  */
-export function decryptPrivateKey(encrypted, userId) {
-  const secret = process.env.ALPHA_VAULT_ENCRYPTION_KEY || process.env.WALLET_ENCRYPTION_KEY
-  if (!secret) throw new Error('ALPHA_VAULT_ENCRYPTION_KEY is not configured')
+export function decryptPrivateKey(encrypted, userId, keyVersion = 1) {
+  // OPS-1: Prefer the canonical WALLET_ENCRYPTION_KEY. If only the legacy alias is
+  // set, warn once so ops knows to migrate the env var name.
+  let secret
+  if (keyVersion > 1) {
+    secret = process.env[`WALLET_ENCRYPTION_KEY_V${keyVersion}`]
+    if (!secret) throw new Error(`Vault key version ${keyVersion} not configured (WALLET_ENCRYPTION_KEY_V${keyVersion})`)
+  } else {
+    secret = process.env.WALLET_ENCRYPTION_KEY || process.env.ALPHA_VAULT_ENCRYPTION_KEY
+    if (!secret) throw new Error('Vault encryption key not configured (WALLET_ENCRYPTION_KEY)')
+    if (!process.env.WALLET_ENCRYPTION_KEY && process.env.ALPHA_VAULT_ENCRYPTION_KEY) {
+      console.warn('[wallet] ALPHA_VAULT_ENCRYPTION_KEY is deprecated — rename to WALLET_ENCRYPTION_KEY in Railway env')
+    }
+  }
   const key = crypto.pbkdf2Sync(secret, userId, 100_000, 32, 'sha256')
   const packed = Buffer.from(encrypted, 'base64')
   const iv = packed.subarray(0, 12)
@@ -104,20 +119,29 @@ export function buildWalletClient(account, chainKey, transport) {
  */
 async function loadVaultRow(supabase, intent) {
   if (intent.vault_wallet_id) {
+    // VAULT-5: When a specific vault wallet is requested, fail hard if it's not
+    // found or inactive. Never silently fall back to a different wallet — that
+    // would spend from the wrong vault without the user's knowledge.
     const { data, error } = await supabase
       .from('alpha_vault_wallets')
-      .select('id,address,wallet_address,encrypted_private_key,status')
+      .select('id,address,wallet_address,encrypted_private_key,key_version,status')
       .eq('id', intent.vault_wallet_id)
       .eq('user_id', intent.user_id)
       .eq('status', 'active')
       .maybeSingle()
-    if (!error && data) return data
+    if (error) throw error
+    if (!data) {
+      throw new Error(
+        `Vault wallet ${intent.vault_wallet_id} not found or inactive for user ${intent.user_id} — aborting intent ${intent.id}`
+      )
+    }
+    return data
   }
 
-  // Fallback: most-recently-created active wallet for user
+  // No specific wallet requested — use most-recently-created active wallet for user.
   const { data, error } = await supabase
     .from('alpha_vault_wallets')
-    .select('id,address,wallet_address,encrypted_private_key,status')
+    .select('id,address,wallet_address,encrypted_private_key,key_version,status')
     .eq('user_id', intent.user_id)
     .eq('status', 'active')
     .order('created_at', { ascending: false })
@@ -137,7 +161,7 @@ async function loadVaultRow(supabase, intent) {
 async function loadLeastRecentlyUsedWallet(supabase, userId) {
   const { data, error } = await supabase
     .from('alpha_vault_wallets')
-    .select('id,address,wallet_address,encrypted_private_key,status,last_used_at')
+    .select('id,address,wallet_address,encrypted_private_key,key_version,status,last_used_at')
     .eq('user_id', userId)
     .eq('status', 'active')
     .order('last_used_at', { ascending: true, nullsFirst: true })
@@ -182,7 +206,7 @@ export async function loadExecutionWallet(supabase, intent, flags, transport) {
   }
 
   intentLog.debug('prepare', 'Decrypting vault wallet', { wallet_id: vaultRow.id })
-  const privateKeyRaw = decryptPrivateKey(vaultRow.encrypted_private_key, intent.user_id)
+  const privateKeyRaw = decryptPrivateKey(vaultRow.encrypted_private_key, intent.user_id, vaultRow.key_version || 1)
   const privateKey = privateKeyRaw.startsWith('0x')
     ? privateKeyRaw
     : `0x${privateKeyRaw}`

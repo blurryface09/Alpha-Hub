@@ -61,8 +61,11 @@ export const FLAGS = {
   /** Periodically sweep and recover orphaned executing intents */
   ORPHAN_RECOVERY_ENABLED: parseBool('ORPHAN_RECOVERY_ENABLED', true),
 
+  // OPS-2: Default true — without leases a second Railway replica will poll and
+  // execute the same intents concurrently, causing nonce collisions and duplicate
+  // broadcasts. Operators must explicitly disable if they know they're single-replica.
   /** Advisory single-worker coordination via DB heartbeat leases */
-  LEASE_ENABLED: parseBool('LEASE_ENABLED', false),
+  LEASE_ENABLED: parseBool('LEASE_ENABLED', true),
 
   /** Enforce max_total_spend cap on each transaction value */
   SPEND_CAP_ENABLED: parseBool('SPEND_CAP_ENABLED', true),

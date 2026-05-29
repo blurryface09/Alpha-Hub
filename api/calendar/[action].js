@@ -1,3 +1,4 @@
+import crypto from 'crypto'
 import etherscanHandler from '../etherscan.js'
 import { createServiceClient, getBearerToken, isAdminUser, createAnonClient, requireUser } from '../_lib/auth.js'
 import { rateLimit, sendRateLimit } from '../_lib/redis.js'
@@ -535,8 +536,13 @@ async function getOptionalUser(req) {
 
 async function canRunSync(req, res) {
   const cronSecret = process.env.CRON_SECRET
-  const headerSecret = req.headers['x-cron-secret'] || req.headers.authorization?.replace(/^Bearer\s+/i, '')
-  if (cronSecret && headerSecret === cronSecret) return true
+  const headerSecret = String(req.headers['x-cron-secret'] || req.headers.authorization?.replace(/^Bearer\s+/i, '') || '')
+  // OPS-4: Timing-safe comparison — prevent timing-based CRON_SECRET enumeration.
+  const safeCmp = (a, b) => {
+    try { return a.length === b.length && crypto.timingSafeEqual(Buffer.from(a), Buffer.from(b)) }
+    catch { return false }
+  }
+  if (cronSecret && safeCmp(headerSecret, cronSecret)) return true
 
   const user = await getOptionalUser(req)
   if (user && isAdminUser(user)) return true
@@ -1041,7 +1047,35 @@ export default async function handler(req, res) {
 // ── Mint Capture Mode ─────────────────────────────────────────────────────────
 
 const CAPTURE_TABLE = 'mint_capture_profiles'
-const CAPTURE_BLOCKED_HOSTS = new Set(['localhost', '127.0.0.1', '0.0.0.0', '::1'])
+const CAPTURE_BLOCKED_HOSTS = new Set(['localhost', '127.0.0.1', '0.0.0.0', '::1', '::ffff:127.0.0.1'])
+
+// SEC-3: Block all private/link-local IP ranges to prevent SSRF.
+// Also blocks the cloud metadata service IP used by AWS, GCP, and Azure.
+const SSRF_BLOCKED_PREFIXES = [
+  '10.',          // RFC-1918 class A
+  '172.16.', '172.17.', '172.18.', '172.19.',
+  '172.20.', '172.21.', '172.22.', '172.23.',
+  '172.24.', '172.25.', '172.26.', '172.27.',
+  '172.28.', '172.29.', '172.30.', '172.31.', // RFC-1918 class B
+  '192.168.',     // RFC-1918 class C
+  '169.254.',     // link-local / cloud metadata (AWS: 169.254.169.254, GCP: 169.254.169.254)
+  '100.64.',      // CGNAT (RFC 6598)
+  'fd', 'fc',     // IPv6 ULA
+  '::1',          // IPv6 loopback
+  'fe80',         // IPv6 link-local
+]
+
+function isSSRFBlocked(hostname) {
+  const h = hostname.toLowerCase()
+  if (CAPTURE_BLOCKED_HOSTS.has(h)) return true
+  if (h.endsWith('.internal') || h.endsWith('.local') || h.endsWith('.localhost')) return true
+  for (const prefix of SSRF_BLOCKED_PREFIXES) {
+    if (h.startsWith(prefix)) return true
+  }
+  // Block bare numeric IPs that resolve to metadata addresses
+  if (h === '169.254.169.254' || h === '100.100.100.200') return true
+  return false
+}
 
 function captureSchemaError(err) {
   const m = String(err?.message || '').toLowerCase()
@@ -1079,7 +1113,7 @@ async function handleCaptureAction(req, res, subAction) {
     let parsed
     try { parsed = new URL(rawUrl) } catch { return res.status(400).end('Invalid URL') }
     if (!['http:', 'https:'].includes(parsed.protocol)) return res.status(400).end('Only HTTP/S allowed')
-    if (CAPTURE_BLOCKED_HOSTS.has(parsed.hostname) || parsed.hostname.endsWith('.internal')) return res.status(400).end('URL not allowed')
+    if (isSSRFBlocked(parsed.hostname)) return res.status(400).end('URL not allowed')
     let fetchRes
     try {
       const controller = new AbortController()
@@ -1101,9 +1135,16 @@ async function handleCaptureAction(req, res, subAction) {
     const injection = CAPTURE_INJECT + baseTag
     if (/<head[^>]*>/i.test(html)) html = html.replace(/<head([^>]*)>/i, m => `${m}${injection}`)
     else html = injection + html
+    // OPS-6: Security headers for the proxied page.
+    // - frame-ancestors 'self': only our own origin may embed this proxy page.
+    // - nosniff: prevent MIME-type sniffing of the proxy response.
+    // - no-referrer: stop requests from the proxied page leaking the proxy URL to the target's own analytics/CDN.
+    // - Cache-Control no-store: never cache a proxied page — it contains injected capture JS.
     res.setHeader('Content-Type', 'text/html; charset=utf-8')
     res.setHeader('X-Frame-Options', 'SAMEORIGIN')
     res.setHeader('Content-Security-Policy', "default-src * blob: data: 'unsafe-inline' 'unsafe-eval'; frame-ancestors 'self'")
+    res.setHeader('X-Content-Type-Options', 'nosniff')
+    res.setHeader('Referrer-Policy', 'no-referrer')
     res.setHeader('Cache-Control', 'no-store')
     return res.status(200).send(html)
   }
@@ -1173,7 +1214,9 @@ async function handleCaptureAction(req, res, subAction) {
     const contractAddress = normCaptureAddr(req.query.contractAddress || req.query.contract_address)
     if (!contractAddress) return res.status(400).json({ error: 'contractAddress required' })
     try {
-      const { data, error } = await supabase.from(CAPTURE_TABLE).select('id,protocol,mint_function,selector,gas_avg,sample_count,verified,proof_required,source').eq('contract_address', contractAddress).order('sample_count', { ascending: false }).limit(5)
+      // SEC-6: Filter to requesting user only — prevents any authenticated user from
+      // reading another user's capture profiles by supplying an arbitrary contractAddress.
+      const { data, error } = await supabase.from(CAPTURE_TABLE).select('id,protocol,mint_function,selector,gas_avg,sample_count,verified,proof_required,source').eq('contract_address', contractAddress).eq('user_id', user.id).order('sample_count', { ascending: false }).limit(5)
       if (error) throw error
       const profiles = data || []
       const top = profiles[0] || null

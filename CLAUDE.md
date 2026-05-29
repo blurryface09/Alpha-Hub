@@ -66,7 +66,7 @@ Two kinds:
 1. **Boot alert** — `worker/strike-engine.js` — fires on every worker start. Uses `TELEGRAM_BOT_TOKEN` + `ADMIN_TELEGRAM_CHAT_ID` (personal user chat ID, NOT bot ID). Both must be in Railway worker env vars.
 2. **Mint success** — `executor.js` — fires after tx confirmed. Uses `profiles.telegram_chat_id` (per-user, stored in Supabase).
 
-**Critical**: `ADMIN_TELEGRAM_CHAT_ID` is the USER's personal Telegram ID, not the bot's ID. Get it from @userinfobot. The user's ID is `7737024288` (username: @poseidros).
+**Critical**: `ADMIN_TELEGRAM_CHAT_ID` is the USER's personal Telegram ID, not the bot's ID. Get it from @userinfobot.
 
 ---
 
@@ -158,6 +158,9 @@ git add 'api/admin/[action].js'   # quotes required — brackets are shell globs
 
 ### `flagEnabled()` unknown flag returns false + warns
 Any new feature flag MUST be added to `FLAGS` in `worker/lib/flags.js` or `flagEnabled('MY_FLAG')` silently returns `false`.
+
+### Feature flags require a worker restart to take effect (MON-2)
+`worker/lib/flags.js` reads all env vars at module load time — `parseBool('FLAG', default)` is called once on startup. Changing a Railway env var does NOT hot-reload. You must redeploy or restart the worker service for flag changes to take effect. There is no dynamic flag polling.
 
 ### Execution Monitor SELECT must not include `mint_contract_address`
 That column doesn't exist on `mint_intents`. The correct column is `contract_address`. The SELECT in `api/admin/[action].js` was fixed to exclude it and add `call_data`.

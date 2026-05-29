@@ -114,6 +114,8 @@ export async function prewarmIntent(supabase, intent, opts = {}) {
     // Persist call_data + gas_limit + to + value so executor has everything at T=0 without
     // re-running prepareMintTransaction. 'to' may differ from contract_address for SeaDrop
     // (router address). 'value' is the exact wei amount required (computed from getPublicDrop).
+    // DATALOSS-3: Log write-back failures — a silent failure means the executor won't see
+    // prewarmed call_data and will fall back to inline detection at T=0 (slower, not fatal).
     await supabase.from('mint_intents').update({
       call_data:     prepared.data,
       gas_limit:     prepared.gas,
@@ -122,7 +124,7 @@ export async function prewarmIntent(supabase, intent, opts = {}) {
       function_name: prepared.functionName,
       last_state:    `Prewarmed: ${prepared.functionName} (${latencyMs}ms, ${prewarmStatus.confidence}% confidence)`,
       updated_at:    new Date().toISOString(),
-    }).eq('id', intent.id).then(r => r, () => null)
+    }).eq('id', intent.id).then(r => r, e => log.warn('prewarm', 'Prewarm write-back failed — executor will use inline detection at T=0', { intent_id: intent.id, error: e?.message }))
 
     await supabase.from('mint_execution_events').insert({
       intent_id: intent.id,
@@ -138,7 +140,7 @@ export async function prewarmIntent(supabase, intent, opts = {}) {
         confidence:  prewarmStatus.confidence,
         wallet:      walletAddress.slice(0, 10),
       },
-    }).then(r => r, () => null)
+    }).then(r => r, e => log.warn('prewarm', 'Prewarm event insert failed', { intent_id: intent.id, error: e?.message }))
 
     return { ok: true, cacheHit: prepared.cacheHit, functionName: prepared.functionName, latencyMs, confidence: prewarmStatus.confidence }
 

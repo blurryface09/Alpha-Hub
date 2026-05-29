@@ -80,12 +80,18 @@ export function userOwnsWallet(user, walletAddress) {
 }
 
 export function isAdminUser(user) {
+  // SEC-1 / SEC-2: Admin check MUST be keyed on ADMIN_USER_ID (Supabase user UUID) only.
+  //
+  // The old wallet-match path read from user_metadata, which any authenticated user can
+  // write via supabase.auth.updateUser(). An attacker who knows the admin wallet address
+  // (previously leaked via VITE_ADMIN_WALLET in the client bundle) could set their own
+  // user_metadata.wallet_address to that value and gain admin access.
+  //
+  // VITE_ADMIN_WALLET is intentionally NOT consulted here. Set ADMIN_USER_ID in your
+  // server-only env (Vercel / Railway) to the Supabase UUID of the admin account.
   const adminUserId = process.env.ADMIN_USER_ID
-  if (adminUserId && user?.id === adminUserId) return true
-
-  const adminWallet = (process.env.ADMIN_WALLET || process.env.VITE_ADMIN_WALLET || '').toLowerCase()
-  if (!adminWallet) return false
-  return userWallets(user).includes(adminWallet)
+  if (!adminUserId) return false // no admin configured → no admin access
+  return user?.id === adminUserId
 }
 
 export async function requireAdmin(req, res) {

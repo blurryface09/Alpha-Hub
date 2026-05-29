@@ -140,6 +140,9 @@ export async function transitionIntent(supabase, intentId, fromState, toState, p
     )
   }
 
+  // DATALOSS-1: include fromState in the WHERE clause so the SQL UPDATE is atomic.
+  // If two concurrent workers both pass the JS validation above, only one will find
+  // a row matching (id AND status=fromState) — the other gets 0 rows back and throws.
   const { data, error } = await supabase
     .from('mint_intents')
     .update({
@@ -148,10 +151,19 @@ export async function transitionIntent(supabase, intentId, fromState, toState, p
       ...patch,
     })
     .eq('id', intentId)
+    .eq('status', fromState)
     .select()
     .single()
 
   if (error) throw error
+
+  // If the row no longer has fromState (another worker already transitioned it),
+  // Supabase returns null data with no error when using .single() on 0 rows.
+  if (!data) {
+    throw new Error(
+      `Stale transition: intent ${intentId} was no longer in state '${fromState}' — another worker may have already transitioned it`,
+    )
+  }
 
   intentLog.info('tick', `Intent transitioned: ${fromState} → ${toState}`, {
     from_state: fromState,
@@ -201,11 +213,22 @@ export async function markExpired(supabase, intent) {
  * @param {number} nowMs
  * @returns {Promise<object[]>}
  */
+// SCALE-3: Explicit column list avoids shipping unused columns over the wire
+// on every 2-second poll tick. Update this list if executor/prewarmer read new fields.
+const INTENT_COLUMNS = [
+  'id', 'user_id', 'status', 'updated_at', 'strike_enabled',
+  'chain', 'contract_address', 'mint_contract_address', 'wallet_address', 'vault_wallet_id',
+  'call_data', 'gas_limit', 'gas_strategy', 'strike_execute_at',
+  'function_name', 'function_source',
+  'quantity', 'mint_price', 'max_mint_price', 'max_total_spend',
+  'project_name',
+].join(',')
+
 export async function fetchReadyIntents(supabase, batchSize, nowMs) {
   const nowIso = new Date(nowMs).toISOString()
   const { data, error } = await supabase
     .from('mint_intents')
-    .select('*')
+    .select(INTENT_COLUMNS)
     .eq('strike_enabled', true)
     .in('status', CLAIMABLE_STATES)
     .or(`strike_execute_at.is.null,strike_execute_at.lte.${nowIso}`)
@@ -231,7 +254,7 @@ export async function fetchPrewarmIntents(supabase, prewarmWindowMs, nowMs) {
 
   const { data, error } = await supabase
     .from('mint_intents')
-    .select('*')
+    .select(INTENT_COLUMNS)
     .eq('strike_enabled', true)
     .in('status', CLAIMABLE_STATES)
     .gt('strike_execute_at', nowIso)
@@ -288,7 +311,7 @@ export async function claimForSimulation(supabase, intentId) {
 export async function fetchSimFailedIntents(supabase, batchSize = 5) {
   const { data, error } = await supabase
     .from('mint_intents')
-    .select('*')
+    .select(INTENT_COLUMNS)
     .eq('strike_enabled', true)
     .eq('status', INTENT_STATES.SIM_FAILED)
     .order('updated_at', { ascending: true })
@@ -364,7 +387,7 @@ export async function claimForTestnet(supabase, intentId) {
 export async function fetchTestnetReadyIntents(supabase, batchSize = 3) {
   const { data, error } = await supabase
     .from('mint_intents')
-    .select('*')
+    .select(INTENT_COLUMNS)
     .eq('strike_enabled', true)
     .eq('status', INTENT_STATES.SIM_SUCCESS)
     .order('updated_at', { ascending: true })
@@ -384,7 +407,7 @@ export async function fetchTestnetReadyIntents(supabase, batchSize = 3) {
 export async function fetchTestnetFailedIntents(supabase, batchSize = 5) {
   const { data, error } = await supabase
     .from('mint_intents')
-    .select('*')
+    .select(INTENT_COLUMNS)
     .eq('strike_enabled', true)
     .eq('status', INTENT_STATES.TESTNET_FAILED)
     .order('updated_at', { ascending: true })

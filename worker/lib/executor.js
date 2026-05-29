@@ -178,7 +178,7 @@ export async function executeIntent(supabase, queuedIntent) {
           contractAddress: intent.contract_address || intent.mint_contract_address || intent.to,
           bestRpc: rpcLabel,
         }),
-      }).catch(() => null)
+      }).catch(e => console.warn('[executor] fire-and-forget write failed:', e?.message))
     }
 
     // ── Step 2: Timing check (before loading wallet/gas to avoid wasted RPC calls) ──
@@ -289,7 +289,7 @@ export async function executeIntent(supabase, queuedIntent) {
       log.warn('prepare', 'call_data missing — detecting mint function inline')
       await insertEvent(supabase, intent, 'prewarm', 'call_data missing — detecting mint function inline.', {
         reason: 'execute_at_too_soon',
-      }).catch(() => null)
+      }).catch(e => console.warn('[executor] fire-and-forget write failed:', e?.message))
       // Surface progress so the project card doesn't show "preparing execution" for 30s+
       await supabase.from('mint_intents').update({
         last_state: 'Strike worker: detecting mint function...',
@@ -347,7 +347,7 @@ export async function executeIntent(supabase, queuedIntent) {
           insertEvent(supabase, intent, 'prewarm',
             `Inline detection (direct): ${candidate.fn} (${gasEstimate} gas)`, {
               fn: candidate.fn, gas: gasEstimate.toString(), source: 'inline_direct',
-            }).catch(() => null)
+            }).catch(e => console.warn('[executor] fire-and-forget write failed:', e?.message))
           // Persist so future retries skip detection
           supabase.from('mint_intents').update({
             call_data:     data,
@@ -403,7 +403,7 @@ export async function executeIntent(supabase, queuedIntent) {
         await insertEvent(supabase, intent, 'prewarm',
           '⏳ Mint start-time gate — waiting for next block before retrying...', {
             reason: 'not_started_block_timing_retry', wait_ms: BLOCK_WAIT_MS, ms_since_exec: msSinceExec,
-          }).catch(() => null)
+          }).catch(e => console.warn('[executor] fire-and-forget write failed:', e?.message))
         // Surface progress update so the project card reflects the wait
         await supabase.from('mint_intents').update({
           last_state: '⏳ Strike: waiting for mint start gate (next block)...',
@@ -427,7 +427,7 @@ export async function executeIntent(supabase, queuedIntent) {
             insertEvent(supabase, intent, 'prewarm',
               `Inline detection (block-retry): ${candidate.fn} (${gasEstimate} gas)`, {
                 fn: candidate.fn, gas: gasEstimate.toString(), source: 'inline_block_retry',
-              }).catch(() => null)
+              }).catch(e => console.warn('[executor] fire-and-forget write failed:', e?.message))
             supabase.from('mint_intents').update({
               call_data:     data,
               gas_limit:     gasEstimate.toString(),
@@ -476,7 +476,7 @@ export async function executeIntent(supabase, queuedIntent) {
                   `Inline detection (paid): ${candidate.fn} (${gasEstimate} gas, price=${onChainPrice})`, {
                     fn: candidate.fn, gas: gasEstimate.toString(),
                     mint_price: onChainPrice.toString(), source: 'inline_paid',
-                  }).catch(() => null)
+                  }).catch(e => console.warn('[executor] fire-and-forget write failed:', e?.message))
                 supabase.from('mint_intents').update({
                   call_data:     data,
                   gas_limit:     gasEstimate.toString(),
@@ -529,7 +529,7 @@ export async function executeIntent(supabase, queuedIntent) {
           await insertEvent(supabase, intent, 'prewarm',
             `Inline detection (fallback): ${prepared.functionName} (${prepared.gas} gas, source=${prepared.source})`, {
               fn: prepared.functionName, gas: prepared.gas, source: prepared.source,
-            }).catch(() => null)
+            }).catch(e => console.warn('[executor] fire-and-forget write failed:', e?.message))
           supabase.from('mint_intents').update({
             call_data:     data,
             gas_limit:     prepared.gas,
@@ -549,7 +549,7 @@ export async function executeIntent(supabase, queuedIntent) {
               error:           detectionMsg,
               raw_reason:      rawReason,
               direct_failures: failedFns,
-            }).catch(() => null)
+            }).catch(e => console.warn('[executor] fire-and-forget write failed:', e?.message))
           throw new Error(`Mint function detection failed: ${detectionMsg}`)
         }
       }
@@ -587,7 +587,7 @@ export async function executeIntent(supabase, queuedIntent) {
       gas: tracedGas,
       strategy: gasParams.strategy,
       base_fee_gwei: gasParams.baseFeeGwei,
-    }).catch(() => null)
+    }).catch(e => console.warn('[executor] fire-and-forget write failed:', e?.message))
 
     // ── Step 8: withRetry → sendTransaction ────────────────────────────────
     let currentGasParams = { ...gasParams }
@@ -670,7 +670,7 @@ export async function executeIntent(supabase, queuedIntent) {
           await recordAttempt(supabase, intent, 'failed', {
             error_message: errMsg,
             tx_hash: pendingTxHash,
-          }).catch(() => null)
+          }).catch(e => console.warn('[executor] fire-and-forget write failed:', e?.message))
           await recordTxState(supabase, intent, txReason === 'nonce_sync' ? 'recovering' : 'accelerating', {
             txHash: pendingTxHash,
             chain: chainKey,
@@ -688,14 +688,14 @@ export async function executeIntent(supabase, queuedIntent) {
             attempt,
             error_type: classification.type,
             error: errMsg,
-          }).catch(() => null)
+          }).catch(e => console.warn('[executor] fire-and-forget write failed:', e?.message))
 
           // Mark as retrying via state machine (first retry: EXECUTING → RETRYING;
           // subsequent retries: already in RETRYING, just update last_state)
           if (attempt === 0) {
             await transitionIntent(supabase, intent.id, INTENT_STATES.EXECUTING, INTENT_STATES.RETRYING, {
               last_state: `Retry ${attempt + 1}: ${classification.type}`,
-            }).catch(() => null)
+            }).catch(e => console.warn('[executor] fire-and-forget write failed:', e?.message))
             currentState = INTENT_STATES.RETRYING
           } else {
             await supabase.from('mint_intents').update({
@@ -766,11 +766,11 @@ export async function executeIntent(supabase, queuedIntent) {
         gas_used: receipt?.gasUsed?.toString?.(),
         confirmation_ms: confirmationMs,
         rpc_label: rpcLabel,
-      }).catch(() => null)
+      }).catch(e => console.warn('[executor] fire-and-forget write failed:', e?.message))
       await insertEvent(supabase, intent, 'confirmed', 'Strike transaction confirmed.', {
         tx_hash: txHash,
         confirmation_ms: confirmationMs,
-      }).catch(() => null)
+      }).catch(e => console.warn('[executor] fire-and-forget write failed:', e?.message))
       await recordExecutionOptimization(supabase, {
         intent,
         chain: chainKey,
@@ -787,7 +787,7 @@ export async function executeIntent(supabase, queuedIntent) {
         tx_hash: txHash,
         strike_enabled: false,
         last_state: 'Strike transaction confirmed',
-      }).catch(() => null)
+      }).catch(e => console.warn('[executor] fire-and-forget write failed:', e?.message))
 
       // ── Telegram notification ──────────────────────────────────────────────
       // Fire-and-forget — never let a notification failure kill the success path
@@ -838,7 +838,7 @@ export async function executeIntent(supabase, queuedIntent) {
         tx_hash: txHash,
         strike_enabled: false,
         last_state: recovery.status === 'dropped' ? 'Transaction dropped from mempool' : 'Transaction reverted on-chain',
-      }).catch(() => null)
+      }).catch(e => console.warn('[executor] fire-and-forget write failed:', e?.message))
     }
 
   } catch (err) {
@@ -870,15 +870,15 @@ export async function executeIntent(supabase, queuedIntent) {
       error: message,
       reason: classifyTxError(err),
       message: 'Transaction recovery recorded after execution failure.',
-    }).catch(() => null)
-    await recordAttempt(supabase, intent, 'failed', { error_message: message }).catch(() => null)
+    }).catch(e => console.warn('[executor] fire-and-forget write failed:', e?.message))
+    await recordAttempt(supabase, intent, 'failed', { error_message: message }).catch(e => console.warn('[executor] fire-and-forget write failed:', e?.message))
     await transitionIntent(supabase, intent.id, currentState, INTENT_STATES.FAILED, {
       strike_enabled: false,
       strike_error: message,
       simulation_status: 'failed',
       simulation_error: message,
       last_state: `Strike failed: ${message.slice(0, 120)}`,
-    }).catch(() => null)
+    }).catch(e => console.warn('[executor] fire-and-forget write failed:', e?.message))
     await insertEvent(
       supabase,
       intent,
@@ -897,6 +897,6 @@ export async function executeIntent(supabase, queuedIntent) {
         rpc: rpcLabel,
         latency_ms: latencyMs,
       },
-    ).catch(() => null)
+    ).catch(e => console.warn('[executor] fire-and-forget write failed:', e?.message))
   }
 }
