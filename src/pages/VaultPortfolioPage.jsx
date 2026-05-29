@@ -279,13 +279,14 @@ export default function VaultPortfolioPage() {
         }),
       })
       const d = await r.json()
-      if (!d.ok) throw new Error(d.error || 'Withdrawal failed')
+      console.log('[vault-withdraw] server response', { status: r.status, body: d })
+      if (!d.ok) throw new Error(d.error || d.message || `Server error ${r.status}`)
       toast.success(`NFT withdrawal submitted! TX: ${d.txHash?.slice(0, 14)}…`, { duration: 8000 })
       setWithdrawing(null)
       // Re-check after 8s (allow block time)
       setTimeout(refresh, 8000)
     } catch (err) {
-      console.debug('[vault-withdraw] error', err.message)
+      console.error('[vault-withdraw] FAILED', err.message)
       toast.error(err.message || 'Withdrawal failed. Check vault ETH balance for gas.')
     } finally {
       setWithdrawLoading(false)
