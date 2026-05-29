@@ -4,6 +4,10 @@
 
 | Feature | Commit | Notes |
 |---------|--------|-------|
+| Fix: concurrent nonce collision for FCFS multi-intent (BUG-12) | `—` | `nonceTracker.set(addr, nonce+1)` before await sendTransaction; only seed from chain when tracker has no entry; prevents concurrent executors sharing same vault wallet from broadcasting identical txs |
+| **✅ Scenario C: Timing gate validated** | `—` | Strike fires T+0.7s after contract `startTime` opens; `armed→executing→success` in 4s; block 46631152 |
+| **✅ Scenario B: Paid mint validated** | `—` | `value=0.00001 ETH` inline detection; `private_ok`; TX `0xe9e894...` |
+| **Vault & Portfolio module** | `—` | `/portfolio` page: NFT grid (Alchemy), vault balances, Strike history; server-side ERC721/ERC20/ETH withdrawals via vault key decrypt; `[vault-portfolio]` + `[vault-withdraw]` telemetry |
 | **Private mempool submission (Base + Flashbots)** | `fe81955` | `PRIVATE_SUBMIT_ENABLED=true` → Base sequencer / Flashbots relay for FCFS intents; silent fallback |
 | FCFS e2e smoke test (7 tests) | `df3091c` | Real Supabase connectivity, prewarm pipeline, 5-user concurrent FCFS, ≤1ms spread |
 | Telegram boot alert (Railway worker) | `df3091c` | Fires on every worker start; `ADMIN_TELEGRAM_CHAT_ID` = personal user ID not bot ID |
@@ -36,9 +40,11 @@
 
 Real-user flow validation on mainnet. No direct DB insertion unless required for diagnosis.
 
-| ID | Validation | Goal | Pass criteria |
-|----|-----------|------|---------------|
-| P2-1 | **Paid public mint** | `value > 0` path through Strike | Receipt confirmed, NFT minted, correct ETH deducted |
+| ID | Validation | Goal | Status |
+|----|-----------|------|--------|
+| P2-1 | **Paid public mint** | `value > 0` path through Strike | ✅ PASS — TX `0xe9e894...`, `private_ok` |
+| Sc-C | **Timing gate** | Strike fires at exact `startTime` open | ✅ PASS — T+0.7s drift, block 46631152 |
+| Sc-D | **Supply cap race** | N+1 intents, last fails supply exhausted | ⚠️ BUG-12 found & fixed — re-run after Railway deploy |
 | P2-2 | **SeaDrop public mint** | SeaDrop router path end-to-end | Tx `to` = SeaDrop router, NFT minted to vault |
 | P2-3 | **UI-driven Strike** | Full user flow without DB manipulation | UI arms → worker executes → receipt + ownership confirmed |
 
@@ -74,6 +80,10 @@ Some mint sites send `X-Frame-Options: DENY` or `Content-Security-Policy: frame-
 ---
 
 ## Future Considerations
+
+### Vault: ETH withdrawal amount UI
+
+The Portfolio page currently supports full-balance ETH withdrawal by specifying an amount. A future UX improvement: prefill the max withdrawable amount from the vault balance shown in the wallet card.
 
 ### Multi-wallet Strike
 

@@ -22,6 +22,7 @@ const AlphaPage = React.lazy(() => import('./pages/AlphaPage'))
 const SettingsPage = React.lazy(() => import('./pages/SettingsPage'))
 const AdminPage = React.lazy(() => import('./pages/AdminPage'))
 const ExecutionMonitorPage = React.lazy(() => import('./pages/ExecutionMonitorPage'))
+const VaultPortfolioPage = React.lazy(() => import('./pages/VaultPortfolioPage'))
 
 function PageLoader() {
   return (
@@ -117,6 +118,7 @@ function App() {
             <Route path="calendar" element={<PremiumRoute requiredPlan="free" featureName="Alpha Radar"><Suspense fallback={<PageLoader />}><CalendarPage /></Suspense></PremiumRoute>} />
             <Route path="calendar/:shareCode" element={<PremiumRoute requiredPlan="free" featureName="Alpha Radar"><Suspense fallback={<PageLoader />}><CalendarPage /></Suspense></PremiumRoute>} />
             <Route path="mintguard" element={<PremiumRoute requiredPlan="free" featureName="My Mints"><Suspense fallback={<PageLoader />}><MintGuardPage /></Suspense></PremiumRoute>} />
+            <Route path="portfolio" element={<PremiumRoute requiredPlan="free" featureName="Portfolio"><Suspense fallback={<PageLoader />}><VaultPortfolioPage /></Suspense></PremiumRoute>} />
             <Route path="whaleradar" element={<PremiumRoute requiredPlan="free" featureName="WhaleRadar"><Suspense fallback={<PageLoader />}><WhaleRadarPage /></Suspense></PremiumRoute>} />
             <Route path="alpha" element={<PremiumRoute requiredPlan="pro" featureName="Wallet forensics"><Suspense fallback={<PageLoader />}><AlphaPage /></Suspense></PremiumRoute>} />
             <Route path="settings" element={<Suspense fallback={<PageLoader />}><SettingsPage /></Suspense>} />

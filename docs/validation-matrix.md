@@ -2,6 +2,20 @@
 
 ---
 
+## AlphaHubValidationNFT Scenario Results
+
+Contract: `0x1ee151e31999bd8441f6c1ab221f66cd2c8bbde7` (Base mainnet)  
+Owner/deployer wallet: `0x3e0101138e8c6c77371a0258a43949b99c4cc521`
+
+| Scenario | Goal | Result | TX |
+|----------|------|--------|----|
+| A — Free mint | Basic Strike pipeline, free mint | ✅ PASS | `0x43cd7e2d...` block 46541462 |
+| B — Paid mint | `value > 0`, inline price detection | ✅ PASS | `0xe9e89441...` block ~46631xxx |
+| C — Timing gate | `startTime` gate, ≤1s execution drift | ✅ PASS | `0x0dc05aba...` block 46631152, T+0.7s |
+| D — Supply cap | Supply exhausted after N mints | ⚠️ BUG-12 found (nonce collision — fixed, re-run needed) | — |
+
+---
+
 ## Phase 1 Milestone — First Production Public Mint ✅
 
 **Date**: 2026-05-27  
@@ -38,18 +52,38 @@
 
 ---
 
+## Vault & Portfolio — Validation Checklist
+
+| Check | Method | Status |
+|-------|--------|--------|
+| Portfolio page loads at `/portfolio` | Navigate in browser | — |
+| Vault wallets appear with ETH/Base balances | `/api/vault/list` → wallet cards | — |
+| Connected wallet NFTs visible (ETH + Base) | Alchemy `getNFTsForOwner` | — |
+| Alpha Vault NFTs visible with VAULT badge | Alchemy fetch for vault address | — |
+| "Withdraw" button appears on vault NFTs only | `canWithdraw = walletType === 'vault'` | — |
+| Withdraw modal shows correct from/to addresses | UI check | — |
+| ERC721 withdrawal: tx submitted, NFT moves | POST `/api/vault/withdraw` (type=erc721) | — |
+| Ownership check enforced server-side | Try with wrong `vaultWalletId` → 403 | — |
+| Private key never returned in response | Inspect network tab — only `txHash` returned | — |
+| Withdrawal logged to `mint_log` | Query `mint_log WHERE status LIKE 'withdrawal%'` | — |
+| History feed shows mints + withdrawals | `/portfolio` history section | — |
+| "Withdraw" in Settings links to Portfolio | Settings page → Withdraw button | — |
+
+---
+
 ## Phase 2 Validation Plan
 
-### P2-1 — Paid public mint
+### P2-1 — Paid public mint ✅
+
+**Result**: PASSED (2026-05-29)  
+TX: `0xe9e89441b3cf554d7e354ebe97c4b28d73c0c11813d1bbb488353e0d3f3ea1c5`  
+Chain: Base · Gas: ~3s end-to-end · `private_ok` (Flashbots active)
+
+**What worked**: Worker detected `value=0.00001 ETH` inline (`Paid mint detected — retrying with on-chain price`), included correct ETH value in tx, contract confirmed, NFT minted to vault.
 
 **Goal**: Confirm the Strike pipeline handles `value > 0` mints correctly — gas + value doesn't exceed balance, the payment reaches the contract, and the NFT is minted to the vault wallet.
 
-**Approach**:
-1. Use UI to find a live paid public mint (or arm directly against a known paid-mint contract).
-2. Arm via Strike UI (not DB insert) if the UI is wired; direct DB insert only for diagnosis.
-3. Verify: `receipt.status = success`, `balanceOf(vault) > 0`.
-
-**Pass criteria**: NFT minted, tx confirmed, correct ETH deducted from vault wallet.
+**Pass criteria**: NFT minted, tx confirmed, correct ETH deducted from vault wallet. ✓
 
 ---
 
@@ -79,6 +113,25 @@
 5. Verify tx on-chain and NFT ownership.
 
 **Pass criteria**: Full UI flow completes without touching Supabase directly, receipt + ownership confirmed.
+
+---
+
+### Scenario D — FCFS Supply Cap Race
+
+**Goal**: Arm N+1 Strike intents against a contract with maxSupply=N, verify N succeed and the last one fails with supply exhausted.
+
+**What happened (2026-05-29)**:
+- Contract set to `maxSupply=24` (minted=22, 2 slots left)
+- 3 intents armed simultaneously with same `strike_execute_at`
+- All 3 transitioned to `executing` at T+1s ✓
+- On-chain: only 2 txs mined, `minted→24/24` ✓ (supply cap enforced)
+- **BUG-12**: Slot 3 reported as `success` with Slot 1's tx hash instead of `failed`
+
+**Root cause (BUG-12)**: Concurrent executors sharing a wallet all read the same nonce from `nonceTracker`. Slot 3 got nonce N (same as Slot 1), broadcast the same raw tx (identical sender+nonce+data = identical hash), got H1 back from the RPC, and `waitForReceiptWithRecovery` found H1 confirmed → intent marked `success`.
+
+**Fix**: In `worker/lib/executor.js` Step 8, advance the tracker *before* `await sendTransaction` (`nonceTracker.set(addr, nonce + 1)`) and only seed from chain in Step 6b if the tracker has no entry for this wallet (prevents concurrent syncs from overwriting each other's claimed slots).
+
+**Status**: Fix committed. Re-run Scenario D required after Railway deploy.
 
 ---
 

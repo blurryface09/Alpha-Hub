@@ -1,11 +1,13 @@
 import React, { useState, useEffect } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { motion } from 'framer-motion'
-import { Settings, Key, Wallet, Save, Eye, EyeOff, Check, ExternalLink, Send, Link2, RefreshCw, CheckCircle, Zap, AlertTriangle, Trash2, Copy, QrCode } from 'lucide-react'
+import { Settings, Key, Wallet, Save, Eye, EyeOff, Check, ExternalLink, Send, Link2, RefreshCw, CheckCircle, Zap, AlertTriangle, Trash2, Copy, QrCode, ArrowUpRight } from 'lucide-react'
 import toast from 'react-hot-toast'
 import { useAuthStore, useSettingsStore } from '../store'
 import { supabase, getAuthToken } from '../lib/supabase'
 
 export default function SettingsPage() {
+  const navigate = useNavigate()
   const { user, profile, fetchProfile } = useAuthStore()
   const { etherscanKey, groqKey, alchemyKey, walletConnectId, setKeys } = useSettingsStore()
 
@@ -387,10 +389,10 @@ export default function SettingsPage() {
                   <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
                     <button onClick={() => setDepositVault(wallet)} className="btn-ghost text-xs"><QrCode size={12} /> Deposit</button>
                     <button onClick={() => refreshVaults()} className="btn-ghost text-xs"><RefreshCw size={12} /> Balance</button>
-                    <button disabled className="btn-ghost text-xs opacity-50"><Send size={12} /> Withdraw</button>
-                    <button disabled className="btn-ghost text-xs opacity-50">History</button>
+                    <button onClick={() => navigate('/portfolio')} className="btn-ghost text-xs"><ArrowUpRight size={12} /> Withdraw</button>
+                    <button onClick={() => navigate('/portfolio')} className="btn-ghost text-xs">History</button>
                   </div>
-                  <p className="text-[11px] text-muted">Withdrawals stay disabled until Strike Mode exits private beta. This prevents accidental fund movement while launch testing.</p>
+                  <p className="text-[11px] text-muted">Withdrawals and mint history are available in the <button onClick={() => navigate('/portfolio')} className="text-accent hover:underline">Portfolio</button> page.</p>
                 </div>
               ))}
             </div>

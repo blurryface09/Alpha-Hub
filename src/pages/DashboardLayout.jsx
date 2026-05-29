@@ -3,7 +3,7 @@ import { Outlet, NavLink, useNavigate } from 'react-router-dom'
 import { motion, AnimatePresence } from 'framer-motion'
 import {
   Home, Shield, Radar, Search,
-  User, Bell, LogOut, Menu, X, Zap, Compass, Activity
+  User, Bell, LogOut, Menu, X, Zap, Compass, Activity, Wallet
 } from 'lucide-react'
 import { useAccount } from 'wagmi'
 import { useAuthStore, useNotificationStore, useMonitorStore, useWalletIntelStore } from '../store'
@@ -15,12 +15,13 @@ import AlertCenter from '../components/alerts/AlertCenter'
 const ADMIN_WALLET = import.meta.env.VITE_ADMIN_WALLET?.toLowerCase()
 
 const NAV_ITEMS = [
-  { path: '/',           label: 'Home',        icon: Home, exact: true },
-  { path: '/calendar',   label: 'Alpha Radar', icon: Compass, badge: 'LIVE' },
-  { path: '/mintguard',  label: 'My Mints',    icon: Shield },
-  { path: '/whaleradar', label: 'Watchlist',   icon: Radar },
-  { path: '/alpha',      label: 'Tools',       icon: Search },
-  { path: '/settings',   label: 'Profile',     icon: User },
+  { path: '/',            label: 'Home',        icon: Home, exact: true },
+  { path: '/calendar',    label: 'Alpha Radar', icon: Compass, badge: 'LIVE' },
+  { path: '/mintguard',   label: 'My Mints',    icon: Shield },
+  { path: '/portfolio',   label: 'Portfolio',   icon: Wallet },
+  { path: '/whaleradar',  label: 'Watchlist',   icon: Radar },
+  { path: '/alpha',       label: 'Tools',       icon: Search },
+  { path: '/settings',    label: 'Profile',     icon: User },
 ]
 
 export default function DashboardLayout() {

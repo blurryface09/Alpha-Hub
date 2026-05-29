@@ -31,7 +31,7 @@
 │  mint-engine.js          ← prepareMintTransaction + Strike │
 │  execution-optimizer.js  ← gas profiles + RPC ordering     │
 │  contract-cache.js       ← in-memory ABI + exec cache      │
-│  vault-engine.js         ← wallet create/decrypt           │
+│  vault-engine.js         ← wallet create/decrypt/withdraw  │
 │  rpc.js                  ← multi-RPC fallback transport    │
 │  auth.js                 ← Supabase JWT validation         │
 │  project-intelligence.js ← chain/phase normalization       │
@@ -52,6 +52,7 @@
 │  mint_capture_profiles   ← learned execution profiles      │
 │  profiles                ← user accounts                   │
 │  minting_wallets         ← legacy wallet table             │
+│  mint_log                ← wallet mints + vault withdrawals│
 └────��────────────────────────────────────────────────────────┘
 
 ┌─────────────────────────────────────────────────────────────┐

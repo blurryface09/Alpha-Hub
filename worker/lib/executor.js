@@ -243,16 +243,24 @@ export async function executeIntent(supabase, queuedIntent) {
     }
 
     // ── Step 6b: Resync on-chain nonce before building tx ──────────────────
-    // Always fetch the pending nonce from chain at intent-start so a stale
-    // in-process cache (e.g. wallet used outside the worker) never causes
-    // "nonce too low" on the first broadcast attempt.
+    // Sync from chain only when the tracker has no value for this wallet.
+    // This prevents a stale cache from causing "nonce too low" on first use,
+    // while also avoiding overwriting an already-claimed slot when multiple
+    // concurrent FCFS executors target the same wallet at the same time.
     try {
-      const freshNonce = await publicClient.getTransactionCount({
-        address: wallet.address,
-        blockTag: 'pending',
-      })
-      nonceTracker.set(wallet.address, freshNonce)
-      log.info('prepare', 'Nonce synced from chain', { address: wallet.address, nonce: freshNonce })
+      if (!nonceTracker.has(wallet.address)) {
+        const freshNonce = await publicClient.getTransactionCount({
+          address: wallet.address,
+          blockTag: 'pending',
+        })
+        nonceTracker.set(wallet.address, freshNonce)
+        log.info('prepare', 'Nonce synced from chain', { address: wallet.address, nonce: freshNonce })
+      } else {
+        log.info('prepare', 'Nonce already tracked — skipping chain sync', {
+          address: wallet.address,
+          tracked: nonceTracker.get(wallet.address),
+        })
+      }
     } catch (nonceErr) {
       log.warn('prepare', 'Failed to pre-sync nonce — will fetch inside withRetry', {
         error: nonceErr.message,
@@ -614,13 +622,17 @@ export async function executeIntent(supabase, queuedIntent) {
             }
           : { gasPrice: currentGasParams.gasPrice }
 
-        // Use tracked nonce if available
+        // Use tracked nonce if available.
+        // IMPORTANT: claim the nonce slot atomically before awaiting sendTransaction.
+        // nonceTracker stores the NEXT available nonce (i.e. last_used + 1) so that
+        // concurrent executors targeting the same wallet don't all grab the same value.
         const trackedNonce = nonceTracker.get(wallet.address)
         const nonce = trackedNonce !== undefined
           ? trackedNonce
           : await publicClient.getTransactionCount({ address: wallet.address, blockTag: 'pending' })
 
-        nonceTracker.set(wallet.address, nonce)
+        // Advance the tracker immediately so the next concurrent executor sees nonce+1.
+        nonceTracker.set(wallet.address, nonce + 1)
         currentNonce = nonce
 
         const hash = await wallet.walletClient.sendTransaction({

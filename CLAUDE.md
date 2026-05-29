@@ -1,7 +1,7 @@
 # Alpha Hub — Claude Knowledge Base
 
 This file is the living memory for Claude sessions. Read it before touching any code.  
-Last updated: 2026-05-29
+Last updated: 2026-05-29 (scenario-c-d-nonce-fix)
 
 ---
 
@@ -124,6 +124,9 @@ ETH_RPC_URL, ETH_RPC_URL_FALLBACK_1
 | `src/pages/ExecutionMonitorPage.jsx` | Live intent dashboard with countdown + prewarm badge |
 | `src/components/mint/StrikeReviewModal.jsx` | Arm confirmation modal (gas picker, checklist) |
 | `src/pages/MintGuardPage.jsx` | Main guard/arm page |
+| `src/pages/VaultPortfolioPage.jsx` | Portfolio: connected wallet + vault NFTs, balances, history, withdraw UI |
+| `src/hooks/useVaultPortfolio.js` | Data hook: Alchemy NFT fetch + vault list + mint_log history |
+| `api/_lib/vault-engine.js` | Vault CRUD + **withdraw** (server-side key decrypt → viem broadcast) |
 
 ---
 
@@ -230,6 +233,23 @@ Add the `FLASHBOTS_AUTH_KEY` value to Railway worker service env vars. The Ether
 ---
 
 ## Recent Changes (2026-05-29 session)
+
+15. **BUG-12: Concurrent nonce collision (fix: `nonceTracker.set(addr, nonce+1)`):**
+    - **`worker/lib/executor.js`** — Two fixes:
+      1. **Step 8 (sendTransaction)**: Changed `nonceTracker.set(addr, nonce)` → `nonceTracker.set(addr, nonce + 1)` **before** `await sendTransaction`. This claims the nonce slot atomically, preventing concurrent FCFS executors from all grabbing the same nonce and broadcasting identical raw txs.
+      2. **Step 6b (startup sync)**: Changed from "always sync from chain" → "only sync from chain if `!nonceTracker.has(addr)`". This prevents a late-starting executor from overwriting a nonce slot already claimed by a concurrent executor that already advanced the tracker.
+    - **Effect of bug**: With `maxSupply=24` and 3 concurrent intents (minted=22), all 3 got nonce N, broadcast identical raw txs (same hash H1), all three were marked `success` even though only 2 mints happened on-chain.
+    - **After fix**: Each concurrent executor claims nonce N, N+1, N+2 respectively. Third tx will revert on-chain (supply exhausted) → intent correctly marked `failed`.
+
+14. **Vault & Portfolio module** (Phase 1 + 2, both complete):
+    - **`src/pages/VaultPortfolioPage.jsx`** — new page at `/portfolio`: wallet cards (main + vault) with NFT counts and balances; NFT grid with All/Main/Vault tabs; NFT images + OpenSea/explorer links; Withdraw button per vault NFT; Strike & withdrawal history feed.
+    - **`src/hooks/useVaultPortfolio.js`** — data hook: Alchemy `getNFTsForOwner` for ETH+Base (uses `VITE_ALCHEMY_API_KEY`); vault list from `/api/vault/list`; `mint_log` history from Supabase. Telemetry: `[vault-portfolio]`.
+    - **`api/_lib/vault-engine.js`** — added `decryptPrivateKey` (AES-256-GCM inverse of `encryptPrivateKey`), ERC721/ERC20 ABI fragments, and `withdraw` action. Server-side: ownership check → decrypt key → viem `walletClient.sendTransaction` → log to `mint_log`. Never returns private key. Telemetry: `[vault-withdraw]`. Strict rate limit: 5/300s.
+    - **`vercel.json`** — added `/api/vault/withdraw` → `/api/calendar/vault-withdraw` rewrite.
+    - **`src/main.jsx`** — added `/portfolio` route under `PremiumRoute requiredPlan="free"`.
+    - **`src/pages/DashboardLayout.jsx`** — added "Portfolio" nav item (Wallet icon) between My Mints and Watchlist.
+    - **`src/pages/SettingsPage.jsx`** — Withdraw + History buttons now navigate to `/portfolio` (removed "private beta" disabled note).
+    - **Security**: `toAddress` must be a valid EVM address; ownership verified server-side via `eq('user_id', user.id)` on the vault row; key is decrypted in Vercel function memory only — never returned; every attempt (success + failure) logged to `mint_log` with `status: 'withdrawal_ok'/'withdrawal_failed'`.
 
 13. **WalletConnect `getChainId` bug fix** (fully resolved):
     - **Root cause (deep)**: During `status === 'reconnecting'`, wagmi's `getAccount()` returns `isConnected: !!address` — `true` if there's a stored address. The connector in the connection Map at that point is a **partial plain object** `{ id, name, type, uid }` (no methods) deserialized from localStorage. Our `isConnected` guard passed, `sendTransactionAsync` fired, and wagmi's `getConnectorClient.js:35` called `connection.connector.getChainId()` on this partial object → TypeError.

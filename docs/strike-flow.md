@@ -195,3 +195,37 @@ Defined in `src/components/mint/CapabilityBadge.jsx` and `src/lib/mintRestrictio
 | `allowlist_only` | Official Mint (red) | No |
 | `unsupported_contract` | — | No |
 | `wallet_not_eligible` | — | No |
+
+---
+
+## Post-Mint: Vault Portfolio & Withdrawals
+
+After a successful Strike mint, NFTs land in the Alpha Vault wallet. The **Portfolio page** (`/portfolio`) surfaces them:
+
+- Fetches vault NFTs via Alchemy `getNFTsForOwner` (ETH + Base)
+- Shows vault ETH/Base balances from `/api/vault/list`
+- Lists all `mint_log` entries (mints + withdrawals) as history
+
+### Vault Withdrawal (`POST /api/vault/withdraw`)
+
+Moves an NFT or token from the vault to the user's connected wallet. Fully server-side — private key is never returned to the browser.
+
+```
+Request:
+  vaultWalletId  string   ID from alpha_vault_wallets
+  toAddress      string   Destination (must be valid EVM address)
+  type           string   'native_eth' | 'erc721' | 'erc20'
+  contractAddress string  Required for erc721/erc20
+  tokenId        string   Required for erc721
+  amount         string   Required for native_eth/erc20
+  chain          string   'eth' | 'base' (default 'eth')
+
+Security:
+  - Ownership check: SELECT WHERE id=vaultWalletId AND user_id=authUser.id
+  - decryptPrivateKey() → AES-256-GCM decrypt using user-derived key
+  - Key lives in Vercel function memory only; never leaves server
+  - Every attempt logged to mint_log (status: withdrawal_ok / withdrawal_failed)
+  - Rate limit: 5 withdrawals per 5 minutes per user
+```
+
+Telemetry keys: `[vault-withdraw] attempt`, `[vault-withdraw] success`, `[vault-withdraw] tx_error`
