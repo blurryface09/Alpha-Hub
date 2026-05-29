@@ -54,17 +54,17 @@ See `docs/validation-matrix.md` → Phase 2 for full test plans.
 
 ## Known Gaps
 
-### SeaDrop v2
+### Post-SeaDrop OpenSea collections
 
-OpenSea introduced a second SeaDrop contract. Alpha Hub only supports SeaDrop v1 (`0x00005EA00Ac477B1030CE78506496e8C2dE24bf5`). Collections using SeaDrop v2 will fall through to generic fallback candidates and likely fail.
+OpenSea's Drops product (post-2023) moved away from the SeaDrop router entirely. **There is no SeaDrop v2 router** — the SeaDrop protocol has exactly one address (`0x00005EA00Ac477B1030CE78506496e8C2dE24bf5`) deployed identically on every chain, and no second version exists publicly.
 
-**Detection**: Check on-chain if the contract implements a different SeaDrop interface.  
-**Fix path**: Add `SEADROP_ADDRESS_V2` + corresponding ABI entries.
+Newer OpenSea collections use proprietary or Seaport-based drop contracts that expose no standard `mint` ABI. These collections will probe as `unsupported_execution` and require **Capture Mode** to snapshot a working calldata profile.
+
+**No code fix is possible without a concrete new contract address.** Capture Mode is the correct path for these.
 
 ### GitHub Actions billing
 
-All 18 workflow runs failed due to GitHub account billing lock. The workflow code is correct — execution will work once billing is resolved.  
-**Action**: Resolve at github.com/settings/billing, then trigger via Actions → Auto-Mint Cron → Run workflow.
+~~All 18 workflow runs failed due to GitHub account billing lock.~~ **Resolved** — billing fixed. Cron fires every minute automatically. Trigger manually via Actions → Auto-Mint Cron → Run workflow if needed.
 
 ### Capture Mode iframe blocks
 

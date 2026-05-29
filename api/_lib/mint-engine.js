@@ -367,6 +367,26 @@ function isSeaDropContract(abi) {
   return Array.isArray(abi) && abi.some(fn => fn?.type === 'function' && fn.name === 'mintSeaDrop')
 }
 
+// Secondary SeaDrop detection: probe the NFT contract itself for getMintStats(), which is
+// part of the ERC721SeaDrop interface but absent from unverified / proxy contracts' ABIs.
+// Used only when the verified ABI check and the v1 router blind probe both return nothing.
+const GET_MINT_STATS_ABI = parseAbi([
+  'function getMintStats(address minter) view returns (uint256 minterNumMinted, uint256 currentTotalSupply, uint256 maxSupply)',
+])
+async function isUnverifiedSeaDropContract(contract, client) {
+  try {
+    await client.readContract({
+      address: contract,
+      abi: GET_MINT_STATS_ABI,
+      functionName: 'getMintStats',
+      args: ['0x0000000000000000000000000000000000000001'],
+    })
+    return true // call succeeded → contract implements ERC721SeaDrop interface
+  } catch {
+    return false
+  }
+}
+
 // Normalise an API-returned MintParams object into viem-compatible BigInt fields.
 function parseMintParams(raw) {
   return {
@@ -877,6 +897,16 @@ export async function prepareMintTransaction(body, _clientOverride = null, _supa
         if (blindCandidates.length > 0) {
           protocolCandidates = blindCandidates
           console.log('[mint-benchmark] seadrop_blind_detected', { contract: contract.slice(0, 10), chain })
+        } else {
+          // Router blind-probe returned nothing (contract not registered with SeaDrop v1).
+          // Secondary check: probe the NFT contract itself for getMintStats(), which is
+          // part of the ERC721SeaDrop interface. If present, treat as confirmed SeaDrop
+          // and surface a better error rather than trying useless generic candidates.
+          const likelySeaDrop = await isUnverifiedSeaDropContract(contract, activeRpc)
+          if (likelySeaDrop) {
+            console.log('[mint-benchmark] seadrop_unregistered_detected', { contract: contract.slice(0, 10), chain })
+            seaDropError = new Error('SeaDrop contract detected but not registered with the SeaDrop router — use Capture Mode to snapshot the calldata')
+          }
         }
       } catch {
         console.log('[mint-benchmark] seadrop_blind_miss', { contract: contract.slice(0, 10), chain })
@@ -1189,7 +1219,16 @@ async function probeCapability(contract, chain, quantity, walletAddress, clientO
         if (isConfirmedSeaDrop) {
           return { prepared_execution_status: 'unsupported_contract', details: 'SeaDrop public drop has ended' }
         }
-        // Unverified: blind probe returned no useful state, fall through to standard detection
+        // Unverified: blind probe returned no useful state.
+        // Secondary check: probe the NFT contract for getMintStats() — part of the
+        // ERC721SeaDrop interface. If it responds, this is a SeaDrop contract not yet
+        // registered with the v1 router (e.g. pre-launch or non-standard allowedSeaDrop list).
+        const likelySeaDrop = await isUnverifiedSeaDropContract(contract, client)
+        if (likelySeaDrop) {
+          console.log('[capability-check] seadrop_unregistered', { contract: contract.slice(0, 10), chain })
+          return { prepared_execution_status: 'unsupported_execution', details: 'SeaDrop contract detected but not registered with SeaDrop router — use Capture Mode' }
+        }
+        // Fall through to standard detection
       }
     } catch (e) {
       console.log('[capability-check] seadrop_probe_error', { contract: contract.slice(0, 10), err: String(e.message || '').slice(0, 80) })
