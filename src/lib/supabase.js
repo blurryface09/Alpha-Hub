@@ -15,6 +15,12 @@ export const supabase = createClient(supabaseUrl, supabaseKey, {
 })
 
 export async function getAuthToken() {
+  // Prefer the live Supabase session (auto-refreshes expired tokens)
+  try {
+    const { data } = await supabase.auth.getSession()
+    if (data?.session?.access_token) return data.session.access_token
+  } catch {}
+  // Fallback: read from localStorage directly (works on first paint before client hydrates)
   try {
     for (const key of Object.keys(localStorage)) {
       if (key.startsWith('sb-') && key.endsWith('-auth-token')) {
