@@ -147,6 +147,85 @@ function MintHistoryRow({ entry }) {
   )
 }
 
+function EthWithdrawModal({ vaultWallet, chain, amount, onAmountChange, toAddress, loading, onConfirm, onClose }) {
+  const balance = chain === 'base' ? vaultWallet.balances?.base : vaultWallet.balances?.eth
+  const maxSend = Math.max(0, (balance || 0) - 0.00005) // keep ~0.00005 ETH for gas
+  const addr = vaultWallet.address || vaultWallet.wallet_address
+  const parsedAmt = parseFloat(amount)
+  const isValid = !isNaN(parsedAmt) && parsedAmt > 0 && parsedAmt <= (balance || 0)
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4">
+      <motion.div
+        initial={{ opacity: 0, scale: 0.95 }}
+        animate={{ opacity: 1, scale: 1 }}
+        className="bg-surface border border-border rounded-2xl w-full max-w-sm p-5 shadow-2xl"
+      >
+        <h2 className="text-base font-bold mb-1">Withdraw ETH from Vault</h2>
+        <p className="text-xs text-muted mb-4">Transfer {chain === 'base' ? 'Base' : 'Ethereum'} ETH to your connected wallet.</p>
+
+        {/* Balance & addresses */}
+        <div className="rounded-xl bg-surface2 border border-border p-3 mb-4 space-y-1.5 text-xs">
+          <div className="flex items-center justify-between">
+            <span className="text-muted">Available ({chain === 'base' ? 'Base' : 'ETH'})</span>
+            <span className="font-mono font-bold">{balance != null ? Number(balance).toFixed(6) : '—'} ETH</span>
+          </div>
+          <div className="flex items-center justify-between">
+            <span className="text-muted">From (Alpha Vault)</span>
+            <span className="font-mono">{shortAddr(addr)}</span>
+          </div>
+          <div className="flex items-center justify-between">
+            <span className="text-muted">To (your wallet)</span>
+            <span className="font-mono text-green">{shortAddr(toAddress)}</span>
+          </div>
+        </div>
+
+        {/* Amount input */}
+        <div className="rounded-lg border border-border bg-surface2 p-3 mb-4">
+          <div className="flex items-center justify-between mb-1.5">
+            <span className="text-xs text-muted">Amount (ETH)</span>
+            <button
+              onClick={() => onAmountChange(maxSend > 0 ? maxSend.toFixed(6) : '0')}
+              className="text-[10px] text-accent hover:underline"
+            >
+              Max
+            </button>
+          </div>
+          <input
+            type="number"
+            value={amount}
+            onChange={e => onAmountChange(e.target.value)}
+            placeholder="0.000000"
+            step="0.000001"
+            min="0"
+            className="w-full bg-transparent text-sm font-mono outline-none"
+          />
+        </div>
+
+        {/* Gas warning */}
+        <div className="flex items-start gap-2 bg-amber-500/8 border border-amber-500/20 rounded-lg p-3 mb-4">
+          <AlertTriangle size={12} className="text-amber-400 flex-shrink-0 mt-0.5" />
+          <p className="text-[11px] text-amber-400 leading-relaxed">
+            Leave a small amount for gas. Max pre-fills with 0.00005 ETH gas reserve.
+          </p>
+        </div>
+
+        <div className="flex gap-2">
+          <button onClick={onClose} disabled={loading} className="btn-ghost flex-1">Cancel</button>
+          <button
+            onClick={onConfirm}
+            disabled={loading || !isValid}
+            className="btn-primary flex-1 flex items-center justify-center gap-2"
+          >
+            {loading ? <div className="spinner w-3.5 h-3.5" /> : <Send size={14} />}
+            {loading ? 'Withdrawing…' : 'Confirm'}
+          </button>
+        </div>
+      </motion.div>
+    </div>
+  )
+}
+
 function WithdrawModal({ nft, toAddress, loading, onConfirm, onClose }) {
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4">
@@ -228,8 +307,11 @@ export default function VaultPortfolioPage() {
   } = useVaultPortfolio()
 
   const [tab, setTab] = useState('All Assets')
-  const [withdrawing, setWithdrawing] = useState(null) // { nft, vaultWallet }
+  const [withdrawing, setWithdrawing] = useState(null)       // { nft, vaultWallet }
   const [withdrawLoading, setWithdrawLoading] = useState(false)
+  const [ethWithdrawing, setEthWithdrawing] = useState(null) // { vaultWallet, chain }
+  const [ethWithdrawAmount, setEthWithdrawAmount] = useState('')
+  const [ethWithdrawLoading, setEthWithdrawLoading] = useState(false)
 
   // Filter NFTs by tab
   const filteredNFTs = nfts.filter(nft => {
@@ -279,17 +361,56 @@ export default function VaultPortfolioPage() {
         }),
       })
       const d = await r.json()
-      console.log('[vault-withdraw] server response', { status: r.status, body: d })
       if (!d.ok) throw new Error(d.error || d.message || `Server error ${r.status}`)
       toast.success(`NFT withdrawal submitted! TX: ${d.txHash?.slice(0, 14)}…`, { duration: 8000 })
       setWithdrawing(null)
       // Re-check after 8s (allow block time)
       setTimeout(refresh, 8000)
     } catch (err) {
-      console.error('[vault-withdraw] FAILED', err.message)
+      console.debug('[vault-withdraw] error', err.message)
       toast.error(err.message || 'Withdrawal failed. Check vault ETH balance for gas.')
     } finally {
       setWithdrawLoading(false)
+    }
+  }
+
+  const handleEthWithdrawClick = (vault, chain) => {
+    const bal = chain === 'base' ? (vault.balances?.base ?? 0) : (vault.balances?.eth ?? 0)
+    const maxSend = Math.max(0, bal - 0.00005)
+    setEthWithdrawAmount(maxSend > 0 ? maxSend.toFixed(6) : '')
+    setEthWithdrawing({ vaultWallet: vault, chain })
+  }
+
+  const confirmEthWithdraw = async () => {
+    if (!ethWithdrawing || !connectedAddress) return
+    const { vaultWallet, chain } = ethWithdrawing
+    const amount = parseFloat(ethWithdrawAmount)
+    if (!amount || amount <= 0) { toast.error('Enter a valid amount'); return }
+    setEthWithdrawLoading(true)
+    try {
+      const token = await getAuthToken()
+      if (!token) throw new Error('Not authenticated — sign in again')
+      const r = await fetch('/api/vault/withdraw', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({
+          vaultWalletId: vaultWallet.id,
+          toAddress: connectedAddress,
+          type: 'native_eth',
+          amount: ethWithdrawAmount,
+          chain,
+        }),
+      })
+      const d = await r.json()
+      if (!d.ok) throw new Error(d.error || d.message || `Server error ${r.status}`)
+      toast.success(`ETH withdrawal submitted! TX: ${d.txHash?.slice(0, 14)}…`, { duration: 8000 })
+      setEthWithdrawing(null)
+      setTimeout(refresh, 8000)
+    } catch (err) {
+      console.debug('[eth-withdraw] error', err.message)
+      toast.error(err.message || 'Withdrawal failed. Check vault ETH balance.')
+    } finally {
+      setEthWithdrawLoading(false)
     }
   }
 
@@ -400,6 +521,28 @@ export default function VaultPortfolioPage() {
                   <b>{vault.balances?.base != null ? Number(vault.balances.base).toFixed(5) : '—'}</b>
                 </div>
               </div>
+              {/* ETH withdrawal shortcuts */}
+              {isConnected && (vault.balances?.eth > 0 || vault.balances?.base > 0) && (
+                <div className="flex items-center gap-2 mt-2 pt-2 border-t border-border/50">
+                  <span className="text-[10px] text-muted flex-1">Withdraw ETH:</span>
+                  {vault.balances?.eth > 0 && (
+                    <button
+                      onClick={() => handleEthWithdrawClick(vault, 'eth')}
+                      className="text-[10px] text-accent2 hover:underline flex items-center gap-0.5"
+                    >
+                      <ArrowUpRight size={9} /> ETH mainnet
+                    </button>
+                  )}
+                  {vault.balances?.base > 0 && (
+                    <button
+                      onClick={() => handleEthWithdrawClick(vault, 'base')}
+                      className="text-[10px] text-accent2 hover:underline flex items-center gap-0.5"
+                    >
+                      <ArrowUpRight size={9} /> Base
+                    </button>
+                  )}
+                </div>
+              )}
             </div>
           )
         })}
@@ -494,7 +637,7 @@ export default function VaultPortfolioPage() {
         )}
       </div>
 
-      {/* Withdraw Modal */}
+      {/* NFT Withdraw Modal */}
       {withdrawing && (
         <WithdrawModal
           nft={withdrawing.nft}
@@ -502,6 +645,20 @@ export default function VaultPortfolioPage() {
           loading={withdrawLoading}
           onConfirm={confirmWithdraw}
           onClose={() => setWithdrawing(null)}
+        />
+      )}
+
+      {/* ETH Withdraw Modal */}
+      {ethWithdrawing && (
+        <EthWithdrawModal
+          vaultWallet={ethWithdrawing.vaultWallet}
+          chain={ethWithdrawing.chain}
+          amount={ethWithdrawAmount}
+          onAmountChange={setEthWithdrawAmount}
+          toAddress={connectedAddress}
+          loading={ethWithdrawLoading}
+          onConfirm={confirmEthWithdraw}
+          onClose={() => setEthWithdrawing(null)}
         />
       )}
     </div>

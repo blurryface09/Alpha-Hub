@@ -61,13 +61,6 @@ OpenSea introduced a second SeaDrop contract. Alpha Hub only supports SeaDrop v1
 **Detection**: Check on-chain if the contract implements a different SeaDrop interface.  
 **Fix path**: Add `SEADROP_ADDRESS_V2` + corresponding ABI entries.
 
-### `loadCachedExecution` never called
-
-`contract-cache.js` exports `loadCachedExecution` which reads the Supabase `mint_contract_cache` table into the in-memory cache. It is imported but never called. The Supabase cache is written on every success but never read back.
-
-**Effect**: Cross-instance warm-up doesn't work. Each cold-start re-runs the full candidate iteration.  
-**Fix**: Call `await loadCachedExecution(contract, chain, supabase)` at the top of `prepareMintTransaction` before `getCachedExecution`.
-
 ### GitHub Actions billing
 
 All 18 workflow runs failed due to GitHub account billing lock. The workflow code is correct — execution will work once billing is resolved.  
@@ -80,10 +73,6 @@ Some mint sites send `X-Frame-Options: DENY` or `Content-Security-Policy: frame-
 ---
 
 ## Future Considerations
-
-### Vault: ETH withdrawal amount UI
-
-The Portfolio page currently supports full-balance ETH withdrawal by specifying an amount. A future UX improvement: prefill the max withdrawable amount from the vault balance shown in the wallet card.
 
 ### Multi-wallet Strike
 
