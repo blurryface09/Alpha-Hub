@@ -752,16 +752,29 @@ export async function fetchOpenSeaProjects({ limit = 12 } = {}) {
   const projects = []
   const errors = []
   try {
-    for (const type of ['featured', 'upcoming', 'recently_minted']) {
+    // Only fetch upcoming/featured — recently_minted are by definition past drops
+    // and would fill the calendar with stale entries
+    for (const type of ['upcoming', 'featured']) {
       try {
         const json = await openSeaJson('/drops', { searchParams: { type, limit: Math.min(limit, 30) } })
         const rows = json.drops || json.results || json.collections || []
+        const now = Date.now()
         for (const row of rows) {
           const normalized = normalizeOpenSeaDrop(row)
+          // Skip drops with a confirmed past mint date — they won't appear in any tab
+          if (normalized.mint_date) {
+            const mintMs = new Date(normalized.mint_date).getTime()
+            // Allow up to 2h past (still "live" window), skip anything older
+            if (mintMs < now - 2 * 60 * 60 * 1000) {
+              errors.push(`drops:${type}:${normalized.name}: skipped (mint_date in past)`)
+              continue
+            }
+          }
           projects.push(normalized)
           console.log('Alpha Radar source', {
             source: 'opensea_drops',
             name: normalized.name,
+            mint_date: normalized.mint_date,
             confidence: normalized.source_confidence,
             missingFields: normalized.source_metadata?.missing_fields || [],
           })
