@@ -93,7 +93,18 @@ export function classifyError(error) {
   if (
     combined.includes('rate limit') ||
     combined.includes('too many requests') ||
-    combined.includes('429')
+    combined.includes('429') ||
+    // Provider-specific rate-limit / capacity phrases
+    combined.includes('cannot fulfill request') ||  // Infura / Tenderly overload
+    combined.includes('limit exceeded') ||
+    combined.includes('over limit') ||
+    combined.includes('over rate limit') ||
+    combined.includes('capacity exceeded') ||
+    combined.includes('request limit') ||
+    combined.includes('daily limit') ||
+    combined.includes('compute units') ||             // Alchemy CU exhausted
+    combined.includes('exceeded the quota') ||
+    combined.includes('your app has exceeded')
   ) {
     return { type: 'rate_limited', retryable: true, maxRetries: ERROR_TYPE_CAPS.rate_limited }
   }
@@ -104,6 +115,23 @@ export function classifyError(error) {
     combined.includes('mempool')
   ) {
     return { type: 'dropped', retryable: true, maxRetries: ERROR_TYPE_CAPS.dropped }
+  }
+
+  if (
+    // Generic node / provider errors that are transient
+    combined.includes('internal server error') ||
+    combined.includes('server error') ||
+    combined.includes('service unavailable') ||
+    combined.includes('bad gateway') ||
+    combined.includes('gateway timeout') ||
+    combined.includes('upstream') ||
+    combined.includes('request failed') ||
+    combined.includes('server is busy') ||
+    combined.includes('try again') ||
+    combined.includes('temporarily unavailable') ||
+    combined.includes('execution error')            // catch-all for node execution faults
+  ) {
+    return { type: 'network', retryable: true, maxRetries: ERROR_TYPE_CAPS.network }
   }
 
   return { type: 'default', retryable: true, maxRetries: ERROR_TYPE_CAPS.default }

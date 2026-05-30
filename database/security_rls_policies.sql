@@ -21,3 +21,10 @@ ALTER TABLE IF EXISTS public.alpha_vault_wallets
 CREATE INDEX IF NOT EXISTS mint_intents_worker_poll_idx
   ON public.mint_intents (strike_enabled, status, updated_at ASC)
   WHERE strike_enabled = true;
+
+-- ─── SCALE-3: function_source column ─────────────────────────────────────────
+-- Required by worker/lib/queue.js INTENT_COLUMNS. Without this the worker
+-- falls back to SELECT * on every poll tick (400 from Supabase REST API).
+
+ALTER TABLE IF EXISTS public.mint_intents
+  ADD COLUMN IF NOT EXISTS function_source text;

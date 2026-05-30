@@ -219,7 +219,9 @@ const INTENT_COLUMNS = [
   'id', 'user_id', 'status', 'updated_at', 'strike_enabled',
   'chain', 'contract_address', 'mint_contract_address', 'wallet_address', 'vault_wallet_id',
   'call_data', 'gas_limit', 'gas_strategy', 'strike_execute_at',
-  'function_name', 'function_source',
+  'function_name',
+  // NOTE: function_source omitted — column does not exist in DB schema yet.
+  // Add via: ALTER TABLE public.mint_intents ADD COLUMN IF NOT EXISTS function_source text;
   'quantity', 'mint_price', 'max_mint_price', 'max_total_spend',
   'project_name',
 ].join(',')
