@@ -84,8 +84,8 @@ function classifyTx(tx, addr) {
   // Use method ID lookup for accurate mint detection — not value heuristic
   const methodId = tx.input?.slice(0, 10)
   if (methodId && MINT_METHOD_IDS.has(methodId)) return 'mint'
-  // Fallback: named function contains "mint"
-  if (/\bmint\b/i.test(tx.functionName || '')) return 'mint'
+  // Fallback: named function contains "mint" anywhere (covers publicMint, allowlistMint, mintPublic etc.)
+  if (/mint/i.test(tx.functionName || '')) return 'mint'
   return 'other'
 }
 
