@@ -108,9 +108,11 @@ export default function MintGuardPage() {
         updates.push({ id: p.id, status: newStatus })
       }
     }
-    // Apply updates
-    for (const u of updates) {
-      await supabase.from('wl_projects').update({ status: u.status }).eq('id', u.id)
+    // Apply updates in parallel — sequential awaits waterfall was adding ~200ms per project
+    if (updates.length > 0) {
+      await Promise.allSettled(
+        updates.map(u => supabase.from('wl_projects').update({ status: u.status }).eq('id', u.id))
+      )
     }
     if (updates.length > 0) {
       return projects.map(p => {

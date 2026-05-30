@@ -1,4 +1,5 @@
 import React, { useState } from 'react'
+import { parseEther, formatEther } from 'viem'
 import { motion } from 'framer-motion'
 import {
   Wallet, RefreshCw, ExternalLink, Database, ArrowUpRight,
@@ -149,10 +150,21 @@ function MintHistoryRow({ entry }) {
 
 function EthWithdrawModal({ vaultWallet, chain, amount, onAmountChange, toAddress, loading, onConfirm, onClose }) {
   const balance = chain === 'base' ? vaultWallet.balances?.base : vaultWallet.balances?.eth
-  const maxSend = Math.max(0, (balance || 0) - 0.00005) // keep ~0.00005 ETH for gas
+  // Use BigInt arithmetic to avoid float precision errors on ETH amounts
+  // balance is already in ETH (e.g. 0.123456789012345678) — convert via parseEther
+  const GAS_RESERVE_WEI = 50_000_000_000_000n // 0.00005 ETH in wei
+  const balanceWei = balance != null ? (() => { try { return parseEther(String(balance)) } catch { return 0n } })() : 0n
+  const maxSendWei = balanceWei > GAS_RESERVE_WEI ? balanceWei - GAS_RESERVE_WEI : 0n
+  const maxSendEth = maxSendWei > 0n ? formatEther(maxSendWei) : '0'
   const addr = vaultWallet.address || vaultWallet.wallet_address
-  const parsedAmt = parseFloat(amount)
-  const isValid = !isNaN(parsedAmt) && parsedAmt > 0 && parsedAmt <= (balance || 0)
+  // Validate amount using BigInt comparison to avoid float precision issues
+  const isValid = (() => {
+    if (!amount || amount === '0') return false
+    try {
+      const amtWei = parseEther(String(amount))
+      return amtWei > 0n && amtWei <= balanceWei
+    } catch { return false }
+  })()
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4">
@@ -185,7 +197,7 @@ function EthWithdrawModal({ vaultWallet, chain, amount, onAmountChange, toAddres
           <div className="flex items-center justify-between mb-1.5">
             <span className="text-xs text-muted">Amount (ETH)</span>
             <button
-              onClick={() => onAmountChange(maxSend > 0 ? maxSend.toFixed(6) : '0')}
+              onClick={() => onAmountChange(maxSendWei > 0n ? maxSendEth : '0')}
               className="text-[10px] text-accent hover:underline"
             >
               Max
@@ -376,16 +388,22 @@ export default function VaultPortfolioPage() {
 
   const handleEthWithdrawClick = (vault, chain) => {
     const bal = chain === 'base' ? (vault.balances?.base ?? 0) : (vault.balances?.eth ?? 0)
-    const maxSend = Math.max(0, bal - 0.00005)
-    setEthWithdrawAmount(maxSend > 0 ? maxSend.toFixed(6) : '')
+    // Use BigInt arithmetic — float subtraction on ETH amounts causes precision errors
+    const GAS_RESERVE_WEI = 50_000_000_000_000n // 0.00005 ETH
+    let balWei = 0n
+    try { balWei = parseEther(String(bal)) } catch {}
+    const maxSendWei = balWei > GAS_RESERVE_WEI ? balWei - GAS_RESERVE_WEI : 0n
+    setEthWithdrawAmount(maxSendWei > 0n ? formatEther(maxSendWei) : '')
     setEthWithdrawing({ vaultWallet: vault, chain })
   }
 
   const confirmEthWithdraw = async () => {
     if (!ethWithdrawing || !connectedAddress) return
     const { vaultWallet, chain } = ethWithdrawing
-    const amount = parseFloat(ethWithdrawAmount)
-    if (!amount || amount <= 0) { toast.error('Enter a valid amount'); return }
+    // Validate with BigInt — parseFloat loses precision on large ETH values
+    let amountWei = 0n
+    try { amountWei = parseEther(String(ethWithdrawAmount || '0')) } catch {}
+    if (amountWei <= 0n) { toast.error('Enter a valid amount'); return }
     setEthWithdrawLoading(true)
     try {
       const token = await getAuthToken()

@@ -72,6 +72,33 @@ async function fetchContractMetadata(chain, key, contract) {
   return response.json()
 }
 
+/**
+ * Fetch the timestamp of the first mint (Transfer from 0x0) for a contract.
+ * Returns an ISO string or null if unavailable.
+ */
+async function fetchFirstMintTimestamp(chain, key, contract) {
+  try {
+    const url = rpcUrl(chain, key)
+    // Get earliest mint log for this contract
+    const logs = await rpc(url, 'eth_getLogs', [{
+      fromBlock: '0x0',
+      toBlock: 'latest',
+      address: contract,
+      topics: [TRANSFER_TOPIC, ZERO_TOPIC],
+    }])
+    if (!logs?.length) return null
+    // Logs sorted oldest-first by default — take the first one
+    const firstLog = logs[0]
+    if (!firstLog?.blockNumber) return null
+    const block = await rpc(url, 'eth_getBlockByNumber', [firstLog.blockNumber, false])
+    if (!block?.timestamp) return null
+    const ts = parseInt(block.timestamp, 16) * 1000
+    return Number.isFinite(ts) ? new Date(ts).toISOString() : null
+  } catch {
+    return null
+  }
+}
+
 function pickMetadata(json) {
   const meta = json?.contractMetadata || json || {}
   const openSea = meta.openSeaMetadata || meta.openSea || {}
@@ -123,6 +150,17 @@ export async function fetchAlchemyProjects({ limit = 12 } = {}) {
             continue
           }
 
+          // Derive mint_date from on-chain first-mint block timestamp
+          // This makes Alchemy results visible in the calendar (previously always null)
+          const firstMintAt = await fetchFirstMintTimestamp(chain, key, contract)
+          const now = Date.now()
+          const firstMintMs = firstMintAt ? new Date(firstMintAt).getTime() : null
+          // If first mint was within the last 72h, treat as currently live/active
+          // Otherwise it's a historical discovery — still show with its real mint_date
+          const mintStatus = firstMintMs && (now - firstMintMs) < 72 * 60 * 60 * 1000
+            ? 'live_now'
+            : 'ended'
+
           projects.push(normalizeProject({
             name: meta.name,
             image_url: meta.image,
@@ -134,12 +172,12 @@ export async function fetchAlchemyProjects({ limit = 12 } = {}) {
             x_url: meta.twitter,
             discord_url: meta.discord,
             source_url: meta.externalUrl,
-            mint_date: null,
-            mint_date_source: 'alchemy.recent_mint_activity',
-            mint_date_confidence: 'low',
+            mint_date: firstMintAt,
+            mint_date_source: 'alchemy.first_mint_block',
+            mint_date_confidence: firstMintAt ? 'high' : 'low',
             mint_type: meta.tokenType || 'detected',
             status: 'pending_review',
-            mint_status: 'needs_review',
+            mint_status: mintStatus,
             source_confidence: meta.verified ? 'high' : 'medium',
             mint_count: mintCount,
             holder_count: safeInteger(json?.contractMetadata?.totalSupply || json?.totalSupply),
