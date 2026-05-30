@@ -83,7 +83,7 @@ export default function OverviewPage() {
       ] = await Promise.all([
         supabase
           .from('wl_projects')
-          .select('id, name, status, mint_date, mint_mode, auto_mint_fired, contract_address, chain, strike_enabled')
+          .select('id, name, status, mint_date, mint_mode, auto_mint_fired, contract_address, chain')
           .eq('user_id', user.id)
           .order('mint_date', { ascending: true, nullsFirst: false })
           .limit(12),
@@ -132,9 +132,10 @@ export default function OverviewPage() {
       setWatchlist(watchlistData)
       setStats({
         activeAutomints: userProjects.filter((p) =>
-          // Count any project that has Strike Mode armed (upcoming or live, not yet fired)
+          // Count upcoming/live auto-mint projects not yet fired
           ['upcoming', 'live'].includes(p.status) &&
-          (p.strike_enabled === true || (p.mint_mode === 'auto' && !p.auto_mint_fired)) &&
+          p.mint_mode === 'auto' &&
+          !p.auto_mint_fired &&
           p.contract_address
         ).length,
         activeAlerts: activeAlertResult.count || 0,
