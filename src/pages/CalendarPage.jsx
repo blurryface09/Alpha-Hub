@@ -181,20 +181,28 @@ function tabFilter(project, tab) {
   const explicitLive = project.mint_status === 'live_now' || project.status === 'live'
   const windowLive = mintStart != null && mintStart <= now && (mintEnd == null || mintEnd >= now)
   const live = explicitLive || windowLive
-  if (tab === 'live') return live
+
+  if (tab === 'live') {
+    // Live Now requires a deployed contract — can't mint without one
+    if (!project.contract_address) return false
+    return live
+  }
   if (tab === 'soon') {
     if (live) return false
+    // Minting Soon requires a deployed contract — actionable only
     if (!project.mint_date || !project.contract_address) return false
     const diff = mintStart - now
     return Number.isFinite(diff) && diff > 0 && diff <= 7 * 24 * 60 * 60 * 1000
   }
-  // upcoming: must have a future mint_date + contract_address + chain, not ended
-  if (!project.contract_address || !project.chain) return false
-  if (!project.mint_date) return false
+  // Upcoming: shows pre-deployment drops too (no contract yet) — badged as "Contract pending"
+  // Only filter out truly ended or past-stale projects
+  if (!project.chain) return false
   if (project.status === 'ended' || project.mint_status === 'ended') return false
   if (mintEnd != null && mintEnd < now) return false
-  if (mintStart != null && mintStart <= now && !live) return false
-  return true
+  // Must have either a future date or an explicit upcoming/live status signal
+  const hasSignal = (mintStart != null && mintStart > now - 72 * 3600 * 1000) ||
+    ['live_now', 'upcoming'].includes(project.mint_status)
+  return hasSignal
 }
 
 function signalBadges(project, tab) {
@@ -204,6 +212,8 @@ function signalBadges(project, tab) {
   const ready = readinessSignal(project)
   const fresh = freshnessSignal(project)
   const proximity = proximitySignal(project)
+  // Pre-deployment: contract not yet deployed — clearly label so users know
+  if (!project.contract_address) badges.push({ label: 'Contract pending', tone: 'badge-yellow' })
   if (whale > 0) badges.push({ label: 'Whale signal', tone: 'badge-purple' })
   if (watch > 0) badges.push({ label: `${watch} watching`, tone: 'badge-cyan' })
   if (ready >= 70) badges.push({ label: 'MintGuard ready', tone: 'badge-green' })

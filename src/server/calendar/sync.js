@@ -72,12 +72,12 @@ const TRUSTED_SYNC_SOURCES = new Set(['opensea_drops', 'opensea', 'alchemy', 'zo
 
 function resolveInsertStatus(scored) {
   if (scored.status === 'live' || scored.status === 'ended') return scored.status
-  if (scored.status === 'pending_review' &&
-      TRUSTED_SYNC_SOURCES.has(scored.source) &&
-      scored.quality_score >= 50 &&
-      scored.contract_address &&
-      (scored.mint_date || scored.mint_status === 'live_now' || scored.mint_status === 'upcoming')) {
-    return 'approved'
+  if (scored.status === 'pending_review' && TRUSTED_SYNC_SOURCES.has(scored.source) && scored.quality_score >= 50) {
+    const mintMs = scored.mint_date ? new Date(scored.mint_date).getTime() : null
+    // Accept anything in the past 72h (may still be running), or explicitly upcoming/live
+    const hasTimeSignal = (mintMs && mintMs > Date.now() - 72 * 3600 * 1000) ||
+      ['live_now', 'upcoming'].includes(scored.mint_status)
+    if (hasTimeSignal) return 'approved'
   }
   return scored.status
 }

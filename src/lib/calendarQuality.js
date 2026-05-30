@@ -60,14 +60,14 @@ export function isLaunchReadyCalendarProject(project) {
   if (!project) return false
   if (['hidden', 'rejected', 'pending_review'].includes(project.status)) return false
   if (!hasUsefulProjectName(project)) return false
-  // Admin/community projects are manually verified — show them if they have a name + contract
-  if (['admin', 'community'].includes(project.source) && project.contract_address) return true
-  // Raw onchain discoveries and projects with no metadata links are not ready for the feed
+  // Admin/community projects are manually verified
+  if (['admin', 'community'].includes(project.source)) return true
+  // Raw onchain discoveries and projects with no metadata links are not ready
   if (isRawCalendarDiscovery(project)) return false
-  if (!project.contract_address) return false
-  // Quality score is the gate — source_confidence is used for display purposes only.
-  // Unverified OpenSea/Alchemy/Zora drops still have good quality signals (image, source_url, etc.)
+  // Quality score is the gate
   if (calendarQualityScore(project) < 50) return false
+  // Contract is required for live/soon tabs — tabFilter enforces this per-tab.
+  // Pre-deployment drops (no contract yet) are valid for the Upcoming tab.
   return true
 }
 
