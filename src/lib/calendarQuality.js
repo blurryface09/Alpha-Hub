@@ -165,9 +165,15 @@ export function isStaleCalendarProject(project) {
   if (project.status === 'ended') return true
   // Admin/sync explicitly set status=live → never stale regardless of mint_date
   if (project.status === 'live') return false
+  // Explicitly still live according to source
+  if (project.mint_status === 'live_now') return false
   if (!project.mint_date) return false
-  const mintPassed = Date.now() - new Date(project.mint_date).getTime() > 24 * 60 * 60 * 1000
-  if (!mintPassed) return false
-  // Past mint_date: only keep if explicitly marked live_now in mint_status
-  return (project.mint_status || '') !== 'live_now'
+  // If there's a future end date the drop is still running — not stale
+  if (project.mint_end_date) {
+    const endMs = new Date(project.mint_end_date).getTime()
+    if (endMs > Date.now()) return false
+  }
+  // Many NFT drops run for 3–7 days — use 72h stale window instead of 24h
+  const mintPassed = Date.now() - new Date(project.mint_date).getTime() > 72 * 60 * 60 * 1000
+  return mintPassed
 }
