@@ -861,7 +861,17 @@ export async function executeIntent(supabase, queuedIntent) {
 
   } catch (err) {
     // ── Step 10: Final failure ──────────────────────────────────────────────
-    const rawMessage = String(err?.shortMessage || err?.message || 'Strike execution failed.').slice(0, 240)
+    // Prefer viem's shortMessage, but skip it when it's the generic
+    // "An unknown RPC error occurred." — in that case the real error text
+    // lives in err.details (the underlying JSON-RPC error message).
+    const short   = String(err?.shortMessage || '').trim()
+    const details = String(err?.details || err?.data || '').trim()
+    const rawMessage = (
+      short && !short.toLowerCase().startsWith('an unknown rpc error')
+        ? short
+        : details || String(err?.message || 'Strike execution failed.').trim()
+    ).slice(0, 240)
+
     const classification = classifyError(err)
 
     // Reset nonceTracker for this wallet on terminal failures so the next execution
@@ -872,10 +882,18 @@ export async function executeIntent(supabase, queuedIntent) {
       nonceTracker.clear(wallet.address)  // clear — next run will re-sync from chain
     }
 
-    // Map error types to actionable user-facing messages.
+    // Map every classified error type to an actionable user-facing message.
     const FRIENDLY_MESSAGES = {
       insufficient_funds: 'Vault wallet has insufficient ETH for gas. Top up the vault wallet and rearm.',
-      revert: rawMessage.length > 10 ? rawMessage : 'Transaction reverted — contract rejected the mint.',
+      revert:       rawMessage.length > 10 ? rawMessage : 'Transaction reverted — contract rejected the mint.',
+      dropped:      'Transaction dropped from mempool (gas too low). Rearm to try again with higher gas.',
+      timeout:      'Transaction confirmation timed out. Check the explorer — if not found, rearm.',
+      network:      'RPC/network connection error. Check your RPC configuration and rearm.',
+      rate_limited: 'RPC rate limit hit. Wait a moment then rearm.',
+      nonce_too_low: 'Nonce conflict — the worker could not refresh the nonce in time. Rearm.',
+      gas_too_low:  rawMessage.length > 10
+        ? `Gas too low: ${rawMessage}`
+        : 'Gas too low for current network conditions. Rearm.',
     }
     const message = FRIENDLY_MESSAGES[classification.type] || rawMessage
     const latencyMs = Date.now() - startMs
