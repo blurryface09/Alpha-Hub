@@ -27,7 +27,7 @@ function renderAiText(text) {
 }
 
 export default function AlphaPage() {
-  const { plan } = useSubscription()
+  const { plan, hasAccess } = useSubscription()
   const [activeTab, setActiveTab] = useState('wallet')
   const [chain, setChain] = useState('eth')
   const [address, setAddress] = useState('')
@@ -41,6 +41,10 @@ export default function AlphaPage() {
   const [lastType, setLastType] = useState(null)
 
   const handleAnalyze = async () => {
+    if (!hasAccess('pro')) {
+      toast.error('Wallet & contract analysis requires Pro.')
+      return
+    }
     if (!address || !address.startsWith('0x')) {
       toast.error('This address does not look right.')
       return

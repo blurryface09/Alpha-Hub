@@ -74,7 +74,15 @@ export default function MintGuardPage() {
   // passed to AddProjectModal so it opens pre-filled (or with failure banner)
   const [pendingImportData, setPendingImportData] = useState(null)
   const autoFired = React.useRef(new Set())
-  const tgNotified = React.useRef(new Set()) // prevent duplicate Telegram notifications
+  // Persist notified set to sessionStorage so re-navigation doesn't re-send Telegram alerts
+  const tgNotified = React.useRef((() => {
+    try {
+      const stored = sessionStorage.getItem('alphahub:tgNotified')
+      return new Set(stored ? JSON.parse(stored) : [])
+    } catch { return new Set() }
+  })())
+  // Always-current ref so the realtime subscription callback never has a stale closure
+  const executeMintRef = React.useRef(null)
 
   // Auto-update project status based on mint date
   const autoUpdateStatus = async (projects) => {
@@ -241,6 +249,7 @@ export default function MintGuardPage() {
     projects.forEach(p => {
       if (p.status === 'live' && !tgNotified.current.has(p.id)) {
         tgNotified.current.add(p.id)
+        try { sessionStorage.setItem('alphahub:tgNotified', JSON.stringify([...tgNotified.current])) } catch {}
         notifyTelegram({ ...p, _telegram_chat_id: telegramChatId }, 'live', userToken)
       }
     })
@@ -267,7 +276,8 @@ export default function MintGuardPage() {
             return
           }
           // Confirm-mode: skip the confirm modal, user already said yes in Telegram
-          executeMint({ ...updated })
+          // Use ref so we always call the latest executeMint without stale closure
+          executeMintRef.current?.({ ...updated })
         }
       })
       .subscribe()
@@ -569,6 +579,9 @@ export default function MintGuardPage() {
       setConfirmMint(null)
     }
   }
+
+  // Keep ref current so the realtime subscription callback always calls the latest executeMint
+  React.useEffect(() => { executeMintRef.current = executeMint })
 
   const liveCount = projects.filter(p => p.status === 'live').length
   const upcomingCount = projects.filter(p => p.status === 'upcoming').length

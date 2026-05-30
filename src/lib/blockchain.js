@@ -49,16 +49,18 @@ async function etherscanFetch(chainKey, params) {
 
 // --- Wallet Analysis ---------------------------------------------
 export async function getWalletData(address, chainKey = 'eth') {
-  const [balData, txData, tokenData, internalData] = await Promise.all([
+  const [balData, txData, nftData, internalData] = await Promise.all([
     etherscanFetch(chainKey, { module: 'account', action: 'balance', address, tag: 'latest' }),
     etherscanFetch(chainKey, { module: 'account', action: 'txlist', address, startblock: 0, endblock: 99999999, page: 1, offset: 50, sort: 'desc' }),
-    etherscanFetch(chainKey, { module: 'account', action: 'tokentx', address, startblock: 0, endblock: 99999999, page: 1, offset: 20, sort: 'desc' }),
+    // tokennfttx = ERC-721 transfers — correct basis for NFT jeet score (not ERC-20 tokentx)
+    etherscanFetch(chainKey, { module: 'account', action: 'tokennfttx', address, startblock: 0, endblock: 99999999, page: 1, offset: 50, sort: 'desc' }),
     etherscanFetch(chainKey, { module: 'account', action: 'txlistinternal', address, startblock: 0, endblock: 99999999, page: 1, offset: 20, sort: 'desc' }),
   ])
 
   const bal = (balData?.status === '1' && balData.result) ? (parseInt(balData.result) / 1e18).toFixed(4) : '0'
   const txs = (txData?.status === '1' && Array.isArray(txData.result)) ? txData.result : []
-  const tokens = (tokenData?.status === '1' && Array.isArray(tokenData.result)) ? tokenData.result : []
+  const nftTxs = (nftData?.status === '1' && Array.isArray(nftData.result)) ? nftData.result : []
+  const tokens = nftTxs // keep alias for backward compat with callers expecting `tokens`
   const internals = (internalData?.status === '1' && Array.isArray(internalData.result)) ? internalData.result : []
   
   // Check if we got any data at all
@@ -75,19 +77,42 @@ export async function getWalletData(address, chainKey = 'eth') {
   const volume = txs.reduce((s, t) => s + parseInt(t.value) / 1e18, 0).toFixed(3)
   const gasSpent = txs.reduce((s, t) => s + (parseInt(t.gasUsed || 0) * parseInt(t.gasPrice || 0)) / 1e18, 0).toFixed(5)
 
-  // Jeet score
+  // Jeet score — based on NFT ERC-721 transfers (mint then sell within 48h)
+  // Incoming NFT transfers from address 0x0 = mint; outgoing to non-zero = sell
+  const WINDOW_48H_S = 48 * 3600
+  const addr = address.toLowerCase()
+  // Map: contractAddress+tokenId → mint timestamp (when received from 0x0)
+  const mintedAt = {}
   const tokenBuys = {}, tokenSells = {}
-  tokens.forEach(t => {
-    const sym = t.tokenSymbol || 'UNKNOWN'
-    const isOut = t.from.toLowerCase() === address.toLowerCase()
-    if (isOut) tokenSells[sym] = (tokenSells[sym] || 0) + 1
-    else tokenBuys[sym] = (tokenBuys[sym] || 0) + 1
+  nftTxs.forEach(t => {
+    const contract = t.contractAddress?.toLowerCase() || ''
+    const tokenId = t.tokenID || ''
+    const key = `${contract}:${tokenId}`
+    const isReceived = t.to?.toLowerCase() === addr
+    const isMintTransfer = isReceived && t.from === '0x0000000000000000000000000000000000000000'
+    const isSent = t.from?.toLowerCase() === addr
+    const sym = t.tokenSymbol || contract.slice(0, 6) || 'NFT'
+
+    if (isMintTransfer) {
+      mintedAt[key] = parseInt(t.timeStamp)
+      tokenBuys[sym] = (tokenBuys[sym] || 0) + 1
+    } else if (isSent) {
+      tokenSells[sym] = (tokenSells[sym] || 0) + 1
+    }
   })
-  const totalBought = Object.keys(tokenBuys).length
-  const quickFlips = Object.keys(tokenSells).filter(s => tokenBuys[s]).length
+  // Count flips: minted NFT sold within 48h
+  let quickFlips = 0
+  nftTxs.filter(t => t.from?.toLowerCase() === addr).forEach(t => {
+    const key = `${t.contractAddress?.toLowerCase()}:${t.tokenID}`
+    if (mintedAt[key]) {
+      const holdTime = parseInt(t.timeStamp) - mintedAt[key]
+      if (holdTime >= 0 && holdTime <= WINDOW_48H_S) quickFlips++
+    }
+  })
+  const totalBought = Object.values(tokenBuys).reduce((a, b) => a + b, 0)
   const jeetScore = totalBought > 0 ? Math.min(100, Math.round((quickFlips / totalBought) * 100)) : 0
 
-  return { bal, txs, tokens, internals, sent, received, failed, volume, gasSpent, jeetScore, tokenBuys, tokenSells, totalBought, quickFlips }
+  return { bal, txs, tokens: nftTxs, internals, sent, received, failed, volume, gasSpent, jeetScore, tokenBuys, tokenSells, totalBought, quickFlips }
 }
 
 // --- Contract Analysis -------------------------------------------

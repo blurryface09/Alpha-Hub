@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react'
 import { Activity, Clock, ExternalLink } from 'lucide-react'
+import { getAuthToken } from '../../lib/supabase'
 
 const CHAIN_IDS = { eth: 1, base: 8453, bnb: 56 }
 const EXPLORER  = { eth: 'etherscan.io', base: 'basescan.org', bnb: 'bscscan.com' }
@@ -27,12 +28,25 @@ function convictionFromFlipRatio(flipRatio, mintCount) {
 }
 
 async function fetchWalletData(address, chain) {
-  const apiKey  = import.meta.env.VITE_ETHERSCAN_API_KEY || ''
+  // Route through server proxy — keeps Etherscan key off the client bundle
   const chainId = CHAIN_IDS[chain] || 1
-  const url = `https://api.etherscan.io/v2/api?chainid=${chainId}&module=account&action=txlist&address=${address}&startblock=0&endblock=99999999&sort=desc&offset=200&page=1&apikey=${apiKey}`
-  const res  = await fetch(url)
-  const json = await res.json()
-  if (json.status !== '1' || !Array.isArray(json.result)) return null
+  const token   = await getAuthToken()
+  const url = new URL('/api/etherscan', window.location.origin)
+  url.searchParams.set('chainid', chainId)
+  url.searchParams.set('module', 'account')
+  url.searchParams.set('action', 'txlist')
+  url.searchParams.set('address', address)
+  url.searchParams.set('startblock', '0')
+  url.searchParams.set('endblock', '99999999')
+  url.searchParams.set('sort', 'desc')
+  url.searchParams.set('offset', '200')
+  url.searchParams.set('page', '1')
+  const res  = await fetch(url, {
+    headers: token ? { Authorization: `Bearer ${token}` } : {},
+    signal: AbortSignal.timeout(15000),
+  })
+  const json = await res.json().catch(() => null)
+  if (!json || json.status !== '1' || !Array.isArray(json.result)) return null
   return json.result
 }
 
@@ -46,10 +60,32 @@ function timeAgo(timestamp) {
   return `${Math.floor(hours / 24)}d ago`
 }
 
+// Known mint method IDs — same set used by blockchain.js isMintTransaction
+const MINT_METHOD_IDS = new Set([
+  '0x40993b26', // mint()
+  '0x1249c58b', // mint()
+  '0x6a627842', // mint(address)
+  '0xa0712d68', // mint(uint256)
+  '0x84bb1e42', // mint(address,uint256)
+  '0xd85d3d27', // publicMint()
+  '0x2db11544', // publicMint(uint256)
+  '0xefef39a1', // purchase(uint256)
+  '0x570d8e1d', // presaleMint()
+  '0x8ecfffd8', // allowlistMint()
+  '0x161ac21f', // mintPublic(address,uint64,uint256,MintParams,bytes)
+  '0x36e0de26', // mintPublic(uint256)
+  '0xa7d8d9ef', // mintEdition(uint256)
+])
+
 function classifyTx(tx, addr) {
   if (tx.input === '0x') return 'transfer'
-  if (/sell|transfer|safeTransfer/i.test(tx.functionName || '')) return 'sale'
-  if (parseFloat(tx.value) > 0 && tx.to?.toLowerCase() !== addr) return 'mint'
+  // Use known function name patterns for sales
+  if (/sell|safeTransferFrom|transferFrom/i.test(tx.functionName || '')) return 'sale'
+  // Use method ID lookup for accurate mint detection — not value heuristic
+  const methodId = tx.input?.slice(0, 10)
+  if (methodId && MINT_METHOD_IDS.has(methodId)) return 'mint'
+  // Fallback: named function contains "mint"
+  if (/\bmint\b/i.test(tx.functionName || '')) return 'mint'
   return 'other'
 }
 

@@ -354,6 +354,8 @@ function loadProjectsCache() {
 }
 
 function saveProjectsCache(data) {
+  // Don't cache empty arrays — a failed sync would lock the UI empty for 5 minutes
+  if (!data || data.length === 0) return
   try {
     sessionStorage.setItem(PROJECTS_CACHE_KEY, JSON.stringify({ data, ts: Date.now() }))
   } catch {}

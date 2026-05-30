@@ -83,7 +83,7 @@ export default function OverviewPage() {
       ] = await Promise.all([
         supabase
           .from('wl_projects')
-          .select('id, name, status, mint_date, mint_mode, auto_mint_fired, contract_address, chain')
+          .select('id, name, status, mint_date, mint_mode, auto_mint_fired, contract_address, chain, strike_enabled')
           .eq('user_id', user.id)
           .order('mint_date', { ascending: true, nullsFirst: false })
           .limit(12),
@@ -132,10 +132,10 @@ export default function OverviewPage() {
       setWatchlist(watchlistData)
       setStats({
         activeAutomints: userProjects.filter((p) =>
-          p.status === 'live' &&
-          p.mint_mode === 'auto' &&
-          p.contract_address &&
-          !p.auto_mint_fired
+          // Count any project that has Strike Mode armed (upcoming or live, not yet fired)
+          ['upcoming', 'live'].includes(p.status) &&
+          (p.strike_enabled === true || (p.mint_mode === 'auto' && !p.auto_mint_fired)) &&
+          p.contract_address
         ).length,
         activeAlerts: activeAlertResult.count || 0,
         activeProjects: userProjects.filter((p) => ['upcoming', 'live'].includes(p.status)).length,
@@ -143,7 +143,7 @@ export default function OverviewPage() {
         walletsTracked: watchlistData.length || 0,
         minted: mintedResult.count || 0,
         telegramConnected: Boolean(profileResult.data?.telegram_chat_id),
-        lastSync: latestWalletSync || new Date().toISOString(),
+        lastSync: latestWalletSync || null,
       })
     } finally {
       setLoading(false)
