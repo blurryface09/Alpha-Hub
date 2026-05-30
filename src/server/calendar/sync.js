@@ -65,6 +65,23 @@ function stripExtendedFields(project) {
   return clean
 }
 
+// Sources trusted enough for auto-approval when quality score is sufficient.
+// purgeStaleProjects() will demote them back to pending_review if they later
+// lose required fields (contract_address, mint_date), so this is safe.
+const TRUSTED_SYNC_SOURCES = new Set(['opensea_drops', 'opensea', 'alchemy', 'zora'])
+
+function resolveInsertStatus(scored) {
+  if (scored.status === 'live' || scored.status === 'ended') return scored.status
+  if (scored.status === 'pending_review' &&
+      TRUSTED_SYNC_SOURCES.has(scored.source) &&
+      scored.quality_score >= 50 &&
+      scored.contract_address &&
+      (scored.mint_date || scored.mint_status === 'live_now' || scored.mint_status === 'upcoming')) {
+    return 'approved'
+  }
+  return scored.status
+}
+
 async function upsertProject(supabase, project) {
   const scored = scoreProject(project)
   let existing = null
@@ -91,11 +108,12 @@ async function upsertProject(supabase, project) {
   if (existing?.id) {
     // Protect admin locks and live status — never let a weaker sync payload downgrade them.
     // 'live' can only move to 'ended'; everything else is held unless the new score upgrades it.
+    const resolvedStatus = resolveInsertStatus(scored)
     const nextStatus = ['hidden', 'rejected'].includes(existing.status)
       ? existing.status
-      : existing.status === 'live' && scored.status !== 'ended'
+      : existing.status === 'live' && resolvedStatus !== 'ended'
         ? 'live'
-        : scored.status
+        : resolvedStatus
     let { error } = await supabase
       .from('calendar_projects')
       .update({
@@ -120,9 +138,10 @@ async function upsertProject(supabase, project) {
     return 'updated'
   }
 
-  let { error } = await supabase.from('calendar_projects').insert(scored)
+  const insertPayload = { ...scored, status: resolveInsertStatus(scored) }
+  let { error } = await supabase.from('calendar_projects').insert(insertPayload)
   if (error && isColumnShapeError(error)) {
-    const retry = await supabase.from('calendar_projects').insert(stripExtendedFields(scored))
+    const retry = await supabase.from('calendar_projects').insert(stripExtendedFields(insertPayload))
     error = retry.error
   }
   if (error) throw error
